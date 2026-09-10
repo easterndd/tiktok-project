@@ -1,0 +1,156 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AlbumStatus { DRAFT REVIEWING ONLINE OFFLINE REJECTED }
+enum EpisodeStatus { DRAFT UPLOADING READY REVIEWING ONLINE OFFLINE ERROR }
+enum UnlockType { FREE REWARDED_AD ADMIN_GRANT }
+enum UploadStatus { PENDING PROCESSING SUCCEEDED FAILED }
+enum AdType { REWARDED INTERSTITIAL }
+enum AdEventType { REQUESTED SHOWN CLOSED_COMPLETED CLOSED_INCOMPLETE FAILED }
+
+model User {
+  id              String          @id @default(cuid())
+  tiktokOpenId    String          @unique
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  watchProgresses WatchProgress[]
+  episodeUnlocks  EpisodeUnlock[]
+  adEvents        AdEvent[]
+}
+
+model Album {
+  id            String      @id @default(cuid())
+  tiktokAlbumId String?     @unique
+  tiktokVersion Int?
+  onlineVersion Int?
+  reviewStatus  String?
+  publishStatus String?
+  title         String
+  description   String      @db.Text
+  coverUrl      String
+  language      String      @default("en")
+  regions       Json?
+  status        AlbumStatus @default(DRAFT)
+  episodes      Episode[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([status, updatedAt])
+}
+
+model Episode {
+  id               String        @id @default(cuid())
+  albumId          String
+  tiktokEpisodeId  String?       @unique
+  byteplusVid      String?       @unique
+  tiktokCoverPicId String?
+  byteplusCoverUrl String?
+  episodeNo        Int
+  title            String
+  description      String?       @db.Text
+  coverUrl         String?
+  durationMs       Int?
+  isFree           Boolean       @default(false)
+  sortOrder        Int
+  status           EpisodeStatus @default(DRAFT)
+  album            Album         @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  uploadJobs       UploadJob[]
+  watchProgresses  WatchProgress[]
+  unlocks          EpisodeUnlock[]
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@unique([albumId, episodeNo])
+  @@index([albumId, status, sortOrder])
+}
+
+model WatchProgress {
+  id         String   @id @default(cuid())
+  userId     String
+  episodeId  String
+  positionMs Int      @default(0)
+  durationMs Int?
+  completed  Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode    Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, episodeId])
+  @@index([userId, updatedAt])
+}
+
+model EpisodeUnlock {
+  id          String     @id @default(cuid())
+  userId      String
+  episodeId   String
+  unlockType  UnlockType
+  placementId String?
+  unlockedAt  DateTime   @default(now())
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode     Episode    @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, episodeId])
+  @@index([episodeId, unlockedAt])
+}
+
+model AdEvent {
+  id          String      @id @default(cuid())
+  userId      String
+  adType      AdType
+  eventType   AdEventType
+  placementId String
+  episodeId   String?
+  sessionId   String?
+  errorCode   String?
+  createdAt   DateTime    @default(now())
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, adType, createdAt])
+  @@index([placementId, eventType, createdAt])
+}
+
+model UploadJob {
+  id              String       @id @default(cuid())
+  episodeId       String
+  providerJobId   String?      @unique
+  sourceUrl       String
+  sourceExpiresAt DateTime?
+  status          UploadStatus @default(PENDING)
+  errorMessage    String?
+  retryCount      Int          @default(0)
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  episode         Episode      @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+}
+
+model AdminUser {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  role         String     @default("EDITOR")
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  auditLogs    AuditLog[]
+}
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  adminUserId String
+  action      String
+  resource    String
+  resourceId  String?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@index([resource, resourceId, createdAt])
+}

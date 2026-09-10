@@ -1,0 +1,6 @@
+.page { display: grid; gap: 22px; }
+.hero { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 16px; align-items: start; }
+.hero img { width: 116px; aspect-ratio: 3 / 4; border-radius: 6px; object-fit: cover; background: var(--muted); }
+.hero h1 { margin: 4px 0 8px; font-size: 26px; line-height: 1.2; }
+.hero p:not(.eyebrow) { margin: 0; color: var(--text-muted); font-size: 14px; line-height: 1.55; }
+.page h2 { margin: 0 0 10px; font-size: 18px; }

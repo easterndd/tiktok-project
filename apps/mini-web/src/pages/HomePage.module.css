@@ -1,0 +1,7 @@
+.page { display: grid; gap: 20px; }
+.header { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 12px; }
+.header p, .header h1 { grid-column: 1; }
+.header p { margin: 0; }
+.header h1 { margin: 0; font-size: 28px; line-height: 1.2; letter-spacing: 0; }
+.header button { grid-column: 2; grid-row: 1 / span 2; }
+.grid { display: grid; gap: 12px; }
