@@ -7,6 +7,9 @@ export type EpisodeSummary = {
   durationMs: number | null;
   isFree: boolean;
   access: EpisodeAccess;
+  progress?: number;
+  resumePositionMs?: number;
+  completed?: boolean;
 };
 
 export type PlayInfo = {

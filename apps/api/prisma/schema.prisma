@@ -7,12 +7,58 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum AlbumStatus { DRAFT REVIEWING ONLINE OFFLINE REJECTED }
-enum EpisodeStatus { DRAFT UPLOADING READY REVIEWING ONLINE OFFLINE ERROR }
-enum UnlockType { FREE REWARDED_AD ADMIN_GRANT }
-enum UploadStatus { PENDING PROCESSING SUCCEEDED FAILED }
-enum AdType { REWARDED INTERSTITIAL }
-enum AdEventType { REQUESTED SHOWN CLOSED_COMPLETED CLOSED_INCOMPLETE FAILED }
+enum AlbumStatus {
+  DRAFT
+  REVIEWING
+  ONLINE
+  OFFLINE
+  REJECTED
+}
+
+enum EpisodeStatus {
+  DRAFT
+  UPLOADING
+  READY
+  REVIEWING
+  ONLINE
+  OFFLINE
+  ERROR
+}
+
+enum UnlockType {
+  FREE
+  REWARDED_AD
+  ADMIN_GRANT
+}
+
+enum UploadStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+enum AdType {
+  REWARDED
+  INTERSTITIAL
+}
+
+enum AdEventType {
+  REQUESTED
+  SHOWN
+  CLOSED_COMPLETED
+  CLOSED_INCOMPLETE
+  FAILED
+}
+
+enum HomeBlockType {
+  CONTINUE_WATCHING
+  CAROUSEL
+  GENRE
+  HOT
+  NEW_RELEASES
+  FEED
+}
 
 model User {
   id              String          @id @default(cuid())
@@ -22,6 +68,12 @@ model User {
   watchProgresses WatchProgress[]
   episodeUnlocks  EpisodeUnlock[]
   adEvents        AdEvent[]
+  albumLikes      AlbumLike[]
+  albumFavorites  AlbumFavorite[]
+  shareEvents     ShareEvent[]
+  searchEvents    SearchEvent[]
+  qualityEvents   PlaybackQualityEvent[]
+  preference      UserPreference?
 }
 
 model Album {
@@ -36,12 +88,30 @@ model Album {
   coverUrl      String
   language      String      @default("en")
   regions       Json?
+  accessConfig  Json?
   status        AlbumStatus @default(DRAFT)
   episodes      Episode[]
+  translations  AlbumTranslation[]
+  genres        AlbumGenre[]
+  homeItems     HomeBlockItem[]
+  likes         AlbumLike[]
+  favorites     AlbumFavorite[]
+  shareEvents   ShareEvent[]
+  adRevenues    AdRevenue[]
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
   @@index([status, updatedAt])
+}
+
+model UiComponent {
+  key       String   @id
+  page      String
+  enabled   Boolean  @default(true)
+  config    Json?
+  updatedAt DateTime @updatedAt
+
+  @@index([page, enabled])
 }
 
 model Episode {
@@ -60,9 +130,13 @@ model Episode {
   sortOrder        Int
   status           EpisodeStatus @default(DRAFT)
   album            Album         @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  translations     EpisodeTranslation[]
   uploadJobs       UploadJob[]
   watchProgresses  WatchProgress[]
   unlocks          EpisodeUnlock[]
+  homeTargetItems  HomeBlockItem[] @relation("HomeTargetEpisode")
+  qualityEvents    PlaybackQualityEvent[]
+  adRevenues       AdRevenue[]
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
@@ -100,8 +174,9 @@ model EpisodeUnlock {
 }
 
 model AdEvent {
-  id          String      @id @default(cuid())
-  userId      String
+  id            String      @id @default(cuid())
+  userId        String
+  clientEventId String?
   adType      AdType
   eventType   AdEventType
   placementId String
@@ -109,10 +184,195 @@ model AdEvent {
   sessionId   String?
   errorCode   String?
   createdAt   DateTime    @default(now())
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, adType, createdAt])
   @@index([placementId, eventType, createdAt])
+  @@unique([userId, clientEventId])
+}
+
+model AlbumLike {
+  id        String   @id @default(cuid())
+  userId    String
+  albumId   String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  album     Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, albumId])
+  @@index([albumId, createdAt])
+}
+
+model AlbumFavorite {
+  id        String   @id @default(cuid())
+  userId    String
+  albumId   String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  album     Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, albumId])
+  @@index([userId, createdAt])
+}
+
+model ShareEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  albumId   String
+  channel   String
+  deepLink  String?
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  album     Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
+
+  @@index([albumId, createdAt])
+  @@index([userId, createdAt])
+}
+
+model SearchEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  query     String
+  locale    String
+  resultCount Int     @default(0)
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([query, createdAt])
+  @@index([locale, createdAt])
+}
+
+model UserPreference {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  locale      String   @default("en")
+  autoplay    Boolean  @default(true)
+  reducedData Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AlbumTranslation {
+  id          String   @id @default(cuid())
+  albumId     String
+  locale      String
+  title       String
+  description String   @db.Text
+  coverUrl    String?
+  album       Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
+
+  @@unique([albumId, locale])
+  @@index([locale, albumId])
+}
+
+model EpisodeTranslation {
+  id          String   @id @default(cuid())
+  episodeId   String
+  locale      String
+  title       String
+  description String?  @db.Text
+  coverUrl    String?
+  subtitleRef String?
+  episode     Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([episodeId, locale])
+  @@index([locale, episodeId])
+}
+
+model Genre {
+  id           String       @id @default(cuid())
+  slug         String       @unique
+  name         String
+  translations Json?
+  albums       AlbumGenre[]
+  createdAt    DateTime     @default(now())
+}
+
+model AlbumGenre {
+  albumId String
+  genreId String
+  album   Album @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  genre   Genre @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@id([albumId, genreId])
+  @@index([genreId, albumId])
+}
+
+model HomeBlock {
+  id         String          @id @default(cuid())
+  type       HomeBlockType
+  title      String
+  enabled    Boolean         @default(true)
+  sortOrder  Int
+  config     Json?
+  startsAt   DateTime?
+  endsAt     DateTime?
+  items      HomeBlockItem[]
+  updatedAt  DateTime        @updatedAt
+
+  @@unique([type])
+  @@index([enabled, sortOrder])
+}
+
+model HomeBlockItem {
+  id              String     @id @default(cuid())
+  blockId         String
+  albumId         String?
+  targetEpisodeId String?
+  imageUrl        String?
+  linkPath        String?
+  sortOrder       Int
+  startsAt        DateTime?
+  endsAt          DateTime?
+  block           HomeBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  album           Album?    @relation(fields: [albumId], references: [id], onDelete: SetNull)
+  targetEpisode   Episode?  @relation("HomeTargetEpisode", fields: [targetEpisodeId], references: [id], onDelete: SetNull)
+
+  @@index([blockId, sortOrder])
+  @@index([albumId])
+  @@index([targetEpisodeId])
+}
+
+model PlaybackQualityEvent {
+  id            String   @id @default(cuid())
+  userId        String?
+  episodeId     String
+  sessionId     String?
+  eventType     String
+  startupMs     Int?
+  currentTimeMs Int?
+  bufferMs      Int?
+  networkType   String?
+  definition    String?
+  clientVersion String?
+  errorCode     String?
+  createdAt     DateTime @default(now())
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  episode       Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@index([episodeId, createdAt])
+  @@index([eventType, createdAt])
+}
+
+model AdRevenue {
+  id             String   @id @default(cuid())
+  reportDate     DateTime
+  adType         AdType
+  placementId    String
+  albumId        String?
+  episodeId      String?
+  reportKey      String   @unique
+  impressions    Int      @default(0)
+  completedViews Int      @default(0)
+  revenueMicros  BigInt   @default(0)
+  currency       String   @default("USD")
+  source         String
+  ingestedAt     DateTime @default(now())
+  album          Album?   @relation(fields: [albumId], references: [id], onDelete: SetNull)
+  episode        Episode? @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+
+  @@index([reportDate, albumId, episodeId])
+  @@index([placementId, reportDate])
 }
 
 model UploadJob {
@@ -125,11 +385,13 @@ model UploadJob {
   errorMessage    String?
   retryCount      Int          @default(0)
   startedAt       DateTime?
+  nextAttemptAt   DateTime?
   completedAt     DateTime?
   createdAt       DateTime     @default(now())
   episode         Episode      @relation(fields: [episodeId], references: [id], onDelete: Cascade)
 
   @@index([status, createdAt])
+  @@index([status, nextAttemptAt])
 }
 
 model AdminUser {

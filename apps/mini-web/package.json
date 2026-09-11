@@ -7,7 +7,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "tsc --noEmit -p tsconfig.app.json",
-    "test": "echo mini-web: test suite pending M1"
+    "test": "pnpm lint"
   },
   "dependencies": {
     "@breezereels/shared-types": "workspace:*",

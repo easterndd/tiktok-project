@@ -5,13 +5,22 @@ const environment = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   HOST: z.string().default('0.0.0.0'),
   DATABASE_URL: z.string().url(),
-  API_CORS_ORIGIN: z.string().default('http://localhost:5173'),
+  API_CORS_ORIGIN: z.string().default('http://localhost:5173,http://localhost:5174'),
   JWT_SECRET: z.string().min(32),
   TIKTOK_CLIENT_KEY: z.string().min(1),
   TIKTOK_CLIENT_SECRET: z.string().min(1),
+  TIKTOK_OAUTH_TOKEN_URL: z.string().url().default('https://open.tiktokapis.com/v2/oauth/token/'),
+  TIKTOK_USER_INFO_URL: z.string().url().default('https://open.tiktokapis.com/v2/user/info/?fields=open_id'),
+  TIKTOK_REDIRECT_URI: z.string().url().optional(),
+  USER_JWT_EXPIRES_IN: z.coerce.number().int().positive().default(3_600),
+  ADMIN_JWT_EXPIRES_IN: z.coerce.number().int().positive().default(28_800),
+  ADMIN_BOOTSTRAP_EMAIL: z.string().email().optional(),
+  ADMIN_BOOTSTRAP_PASSWORD: z.string().min(12).optional(),
   BYTEPLUS_ACCOUNT_ID: z.string().min(1),
   BYTEPLUS_SPACE_NAME: z.string().min(1),
-  BYTEPLUS_REGION: z.string().min(1)
+  BYTEPLUS_REGION: z.string().min(1),
+  UPLOAD_WORKER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+  UPLOAD_MAX_RETRIES: z.coerce.number().int().min(0).max(20).default(5)
 });
 
 export type Env = z.infer<typeof environment>;

@@ -1,0 +1,33 @@
+.page { display: grid; gap: 24px; }
+.header { display: flex; align-items: center; justify-content: space-between; }
+.backLink { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; color: var(--muted); font-size: 13px; font-weight: 700; text-decoration: none; }
+.profileHero { display: grid; grid-template-columns: 60px minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 22px; border: 1px solid rgba(255, 85, 117, .2); border-radius: 18px; background: linear-gradient(110deg, rgba(255, 85, 117, .14), rgba(21, 26, 37, .96) 62%); }
+.avatar { display: grid; width: 60px; height: 60px; place-items: center; color: #10090b; border-radius: 18px; background: var(--pink); }
+.profileHero h1 { margin: 5px 0 6px; font-size: 25px; }
+.profileHero p:not(.eyebrow) { max-width: 480px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.signIn { min-height: 42px; padding: 0 14px; color: #10090b; border: 0; border-radius: 9px; background: var(--pink); font-size: 12px; font-weight: 800; }
+.error { margin: -10px 0 0; color: #ff9cae; font-size: 12px; }
+.section { display: grid; gap: 13px; }
+.sectionHeading { display: flex; align-items: center; justify-content: space-between; color: var(--faint); }
+.sectionHeading h2 { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--text); font-size: 19px; }
+.sectionHeading h2 svg { color: var(--pink); }
+.historyList { display: grid; gap: 8px; }
+.historyRow { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 72px; padding: 9px; color: var(--text); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); text-decoration: none; }
+.historyRow img { width: 54px; height: 54px; object-fit: cover; border-radius: 8px; }
+.historyRow > span { display: grid; gap: 4px; min-width: 0; }
+.historyRow strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.historyRow small { color: var(--muted); font-size: 11px; }
+.historyRow > svg { color: var(--pink-soft); }
+.historyRow i { display: block; height: 3px; overflow: hidden; border-radius: 99px; background: rgba(255, 255, 255, .12); }
+.historyRow i span { display: block; height: 100%; background: var(--pink); }
+.favoriteGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.muted { margin: 0; padding: 22px 0; color: var(--muted); font-size: 13px; }
+.settingRow { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; padding: 0 14px; color: var(--text); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.settingRow > span { display: inline-flex; align-items: center; gap: 10px; }
+.settingRow > span > svg { color: var(--pink-soft); }
+.settingRow span span { display: grid; gap: 3px; }
+.settingRow strong { font-size: 13px; }
+.settingRow small { color: var(--muted); font-size: 11px; }
+.settingRow select { min-height: 36px; padding: 0 8px; color: var(--text); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.settingRow input[type="checkbox"] { width: 19px; height: 19px; accent-color: var(--pink); }
+@media (max-width: 560px) { .profileHero { grid-template-columns: 48px minmax(0, 1fr); padding: 16px; } .avatar { width: 48px; height: 48px; border-radius: 14px; } .signIn { grid-column: 1 / -1; width: 100%; } .favoriteGrid { grid-template-columns: 1fr; } }

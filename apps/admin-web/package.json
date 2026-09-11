@@ -6,7 +6,7 @@
     "dev": "vite --host 0.0.0.0 --port 5174",
     "build": "tsc -b && vite build",
     "lint": "tsc --noEmit -p tsconfig.app.json",
-    "test": "echo admin-web: test suite pending M2"
+    "test": "pnpm lint"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

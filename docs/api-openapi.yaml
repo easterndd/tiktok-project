@@ -1,0 +1,354 @@
+openapi: 3.0.3
+info:
+  title: QuicK ReeLS API
+  version: 0.1.0
+  description: >
+    Business API used by the TikTok Mini H5 and the separate operations console.
+    Provider credentials and raw media URLs never leave the server.
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development
+  - url: https://api.example.com/api/v1
+    description: Production placeholder
+tags:
+  - name: Public content
+  - name: User session
+  - name: Playback
+  - name: Operations
+paths:
+  /home:
+    get:
+      tags: [Public content]
+      summary: Get the aggregated home feed
+      parameters:
+        - $ref: '#/components/parameters/Locale'
+      responses:
+        '200':
+          description: Home blocks and cursor feed
+  /albums:
+    get:
+      tags: [Public content]
+      summary: List online albums
+      responses:
+        '200':
+          $ref: '#/components/responses/CursorPage'
+  /albums/{albumId}:
+    get:
+      tags: [Public content]
+      summary: Get an online album
+      parameters:
+        - $ref: '#/components/parameters/AlbumId'
+      responses:
+        '200':
+          description: Album detail
+  /albums/{albumId}/episodes:
+    get:
+      tags: [Public content]
+      summary: Get episode access states for an album
+      parameters:
+        - $ref: '#/components/parameters/AlbumId'
+      responses:
+        '200':
+          description: Episode directory
+  /genres:
+    get:
+      tags: [Public content]
+      summary: List available genres
+      responses:
+        '200':
+          description: Genre list
+  /search:
+    get:
+      tags: [Public content]
+      summary: Search online albums with fallback recommendations
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 120 }
+        - $ref: '#/components/parameters/Locale'
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        '200':
+          description: Search result and fallback items
+  /ui-components:
+    get:
+      tags: [Public content]
+      summary: Get CMS-controlled public UI component switches
+      responses:
+        '200':
+          description: Component visibility configuration
+  /admin/ui-components:
+    get:
+      tags: [Operations]
+      summary: List UI component switches
+      security: [{ adminBearerAuth: [] }]
+      responses:
+        '200':
+          description: UI component switches
+  /admin/ui-components/{key}:
+    patch:
+      tags: [Operations]
+      summary: Toggle a public UI component
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - in: path
+          name: key
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+                page: { type: string, enum: [APP, HOME, ALBUM, PROFILE] }
+      responses:
+        '200':
+          description: Updated component
+  /auth/tiktok/login:
+    post:
+      tags: [User session]
+      summary: Exchange TTMinis login code for a business session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200':
+          description: Business session
+        '502':
+          description: TikTok OAuth exchange failed
+  /admin/auth/login:
+    post:
+      tags: [Operations]
+      summary: Log in an operations administrator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Administrator session
+        '401':
+          description: Invalid credentials
+  /episodes/{episodeId}/play:
+    get:
+      tags: [Playback]
+      summary: Get the minimum official-player playback DTO
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/EpisodeId'
+      responses:
+        '200':
+          description: Platform playback identifiers and resume position
+        '403':
+          description: Episode is locked
+        '409':
+          description: Platform playback mapping is not ready
+  /episodes/{episodeId}/reward-unlock:
+    post:
+      tags: [Playback]
+      summary: Idempotently unlock an episode after rewarded ad completion
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/EpisodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [placementId, clientEventId, isEnded]
+              properties:
+                placementId: { type: string }
+                clientEventId: { type: string, maxLength: 128 }
+                isEnded: { type: boolean, enum: [true] }
+                sessionId: { type: string }
+      responses:
+        '200':
+          description: Episode is playable
+  /me/watch-progress:
+    get:
+      tags: [User session]
+      summary: List the current user's watch progress
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Watch progress records
+    put:
+      tags: [User session]
+      summary: Upsert watch progress
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204':
+          description: Progress stored
+  /me/history:
+    get:
+      tags: [User session]
+      summary: Get the current user's viewing history
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: History records
+  /me/favorites:
+    get:
+      tags: [User session]
+      summary: Get the current user's favorites
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Favorite albums
+  /me/preferences:
+    get:
+      tags: [User session]
+      summary: Get preferences
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Locale and playback preferences
+    put:
+      tags: [User session]
+      summary: Update preferences
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Updated preferences
+  /albums/{albumId}/like:
+    put:
+      tags: [User session]
+      summary: Set like state
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/AlbumId'
+      responses:
+        '200':
+          description: Current interaction state
+  /albums/{albumId}/favorite:
+    put:
+      tags: [User session]
+      summary: Set favorite state
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/AlbumId'
+      responses:
+        '200':
+          description: Current interaction state
+  /albums/{albumId}/share:
+    post:
+      tags: [Public content]
+      summary: Create a share deep link and record the share event
+      parameters:
+        - $ref: '#/components/parameters/AlbumId'
+      responses:
+        '200':
+          description: Share payload
+  /ad-events:
+    post:
+      tags: [Playback]
+      summary: Record an ad lifecycle event
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Event accepted
+  /playback-quality-events:
+    post:
+      tags: [Playback]
+      summary: Record playback quality telemetry
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Event accepted
+  /admin/albums:
+    get:
+      tags: [Operations]
+      summary: List albums for operations
+      security: [{ adminBearerAuth: [] }]
+      responses:
+        '200':
+          description: Album management list
+    post:
+      tags: [Operations]
+      summary: Create an album draft
+      security: [{ adminBearerAuth: [] }]
+      responses:
+        '200':
+          description: Created draft
+  /admin/upload-jobs:
+    get:
+      tags: [Operations]
+      summary: List provider upload jobs
+      security: [{ adminBearerAuth: [] }]
+      responses:
+        '200':
+          description: Upload jobs
+    post:
+      tags: [Operations]
+      summary: Create an asynchronous upload job
+      security: [{ adminBearerAuth: [] }]
+      responses:
+        '200':
+          description: Created upload job
+  /admin/upload-jobs/{jobId}:
+    get:
+      tags: [Operations]
+      summary: Get an upload job
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Upload job
+        '404':
+          description: Upload job not found
+components:
+  parameters:
+    Locale:
+      in: query
+      name: locale
+      schema: { type: string, enum: [en, pt, fr, id, ja, es, ko, th], default: en }
+    AlbumId:
+      in: path
+      name: albumId
+      required: true
+      schema: { type: string }
+    EpisodeId:
+      in: path
+      name: episodeId
+      required: true
+      schema: { type: string }
+  responses:
+    CursorPage:
+      description: Cursor page
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              items: { type: array, items: { type: object } }
+              nextCursor: { type: string, nullable: true }
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    adminBearerAuth:
+      type: http
+      scheme: bearer

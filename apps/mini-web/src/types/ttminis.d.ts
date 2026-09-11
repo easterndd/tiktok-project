@@ -4,7 +4,7 @@ declare global {
       init(options: { clientKey: string }): void;
       login(): Promise<{ code: string }>;
       canIUse(apiName: string): boolean;
-      getPlayer(channel?: 'byteplus'): Promise<VePlayerConstructor>;
+      getPlayer?(channel?: 'byteplus'): Promise<VePlayerConstructor>;
       createRewardedVideoAd(options: { adUnitId: string }): RewardedVideoAd;
       createInterstitialAd(options: { adUnitId: string }): InterstitialAd;
     };

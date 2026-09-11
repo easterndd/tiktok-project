@@ -1,7 +1,9 @@
-.list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
-.row { display: grid; grid-template-columns: 32px minmax(0, 1fr) 44px; align-items: center; min-height: 60px; color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border); transition: background-color 180ms ease; }
-.row:hover, .row:focus-visible { background: var(--surface-raised); outline: none; }
-.number { color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.title { display: grid; gap: 2px; font-size: 15px; }
-.title small { color: var(--text-muted); font-size: 12px; }
-.row svg { justify-self: end; color: var(--accent); }
+.list { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.row, .buttonRow { display: block; width: 100%; min-height: 62px; padding: 0; color: var(--text); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); text-align: left; text-decoration: none; transition: background-color 180ms ease, border-color 180ms ease; }
+.buttonRow { cursor: pointer; }
+.row:hover, .row:focus-visible, .buttonRow:hover, .buttonRow:focus-visible { border-color: rgba(255, 85, 117, .55); background: var(--surface-2); outline: 0; }
+.rowInner { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; min-height: 62px; gap: 10px; padding: 0 14px; }
+.number { display: grid; width: 30px; height: 30px; place-items: center; color: var(--faint); border-radius: 50%; background: rgba(255, 255, 255, .05); font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.title { display: grid; min-width: 0; gap: 3px; font-size: 14px; font-weight: 700; }
+.title small { color: var(--muted); font-size: 12px; font-weight: 500; }
+.status { display: inline-flex; align-items: center; gap: 5px; color: var(--pink-soft); }

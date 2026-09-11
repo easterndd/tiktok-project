@@ -1,18 +1,22 @@
-:root { font-family: Poppins, ui-sans-serif, system-ui, sans-serif; color: #fff; background: #0f172a; --primary: #ec4899; --accent: #60a5fa; --text: #fff; --text-muted: #b6bfd1; --surface: #171d30; --surface-raised: #20283d; --muted: #201a32; --border: rgba(255, 255, 255, .13); }
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+:root { font-family: 'DM Sans', ui-sans-serif, system-ui, sans-serif; color: #f8fafc; background: #0a0d14; --bg: #0a0d14; --surface: #151a25; --surface-2: #1d2432; --surface-3: #252e3d; --text: #f8fafc; --muted: #94a0b4; --faint: #697589; --line: rgba(255, 255, 255, .1); --pink: #ff5575; --pink-soft: #ffb4c1; --cyan: #6fe7ee; --yellow: #f8c15a; }
 * { box-sizing: border-box; }
-body { min-width: 320px; min-height: 100dvh; margin: 0; background: #0f172a; }
+html { background: var(--bg); }
+body { min-width: 320px; min-height: 100dvh; margin: 0; overflow-x: hidden; background: radial-gradient(circle at 82% 0%, rgba(255, 85, 117, .12), transparent 26rem), var(--bg); }
+button, input { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 14px; border: 0; border-radius: 6px; color: #fff; background: var(--primary); font: inherit; font-weight: 700; cursor: pointer; transition: opacity 180ms ease, background-color 180ms ease; }
-button:hover, button:focus-visible { background: #db2777; outline: 2px solid #fff; outline-offset: 2px; }
-.app-shell { width: min(100%, 640px); min-height: 100dvh; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom)); }
-.topbar { display: flex; align-items: center; justify-content: space-between; min-height: 48px; margin-bottom: 22px; color: var(--text-muted); font-size: 13px; }
-.topbar a { color: inherit; text-decoration: none; }
-.brand { display: inline-flex; align-items: center; gap: 8px; color: var(--text) !important; font-weight: 800; font-size: 18px; }
-.brand svg { color: var(--primary); }
-.eyebrow { color: var(--accent); letter-spacing: 0; font-size: 12px; font-weight: 800; }
-.icon-button { width: 44px; padding: 0; }
-.back-link { display: inline-flex; align-items: center; gap: 6px; width: max-content; min-height: 44px; color: var(--text-muted); text-decoration: none; font-size: 14px; }
-.state, .loading-state { display: grid; justify-items: start; gap: 12px; margin: 24px 0; color: var(--text-muted); }
-.legal { max-width: 620px; color: var(--text-muted); line-height: 1.65; }
-.legal h1 { color: var(--text); font-size: 28px; }
+button { min-height: 44px; cursor: pointer; }
+button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+h1, h2, h3, p { margin-top: 0; }
+h1, h2, h3 { font-family: Manrope, 'DM Sans', sans-serif; letter-spacing: -.035em; }
+img { display: block; max-width: 100%; }
+.eyebrow { margin: 0; color: var(--pink); font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+.state, .loading-state { display: grid; justify-items: center; gap: 14px; min-height: 260px; padding: 48px 20px; color: var(--muted); text-align: center; }
+.state button, .state a { color: #0a0d14; background: var(--pink); border: 0; border-radius: 10px; padding: 0 16px; text-decoration: none; font-weight: 800; }
+.loading-state { position: relative; }
+.loading-state::after { content: ''; width: 24px; height: 24px; border: 2px solid var(--line); border-top-color: var(--pink); border-radius: 50%; animation: spin .8s linear infinite; }
+.legal { max-width: 660px; color: var(--muted); line-height: 1.7; }
+.legal h1 { color: var(--text); font-size: 34px; }
+.legal a { color: var(--cyan); }
+@keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }

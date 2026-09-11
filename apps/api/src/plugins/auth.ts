@@ -2,8 +2,8 @@ import type { FastifyRequest } from 'fastify';
 
 declare module '@fastify/jwt' {
   interface FastifyJWT {
-    payload: { sub: string; kind: 'user' | 'admin' };
-    user: { sub: string; kind: 'user' | 'admin' };
+    payload: { sub: string; kind: 'user' | 'admin'; role?: string };
+    user: { sub: string; kind: 'user' | 'admin'; role?: string };
   }
 }
 

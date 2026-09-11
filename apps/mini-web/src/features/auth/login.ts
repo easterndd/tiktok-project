@@ -1,8 +1,16 @@
 import { apiClient } from '../../lib/api-client';
+import { isDemoMode, setSessionToken } from '../../lib/storage';
 
 export async function loginWithTikTok() {
-  if (!window.TTMinis) throw new Error('Open BreezeReels in TikTok to sign in.');
+  if (isDemoMode()) {
+    setSessionToken('mock-business-session');
+    return { accessToken: 'mock-business-session', expiresIn: 3600, user: { id: 'mock-user' } };
+  }
+  if (!window.TTMinis?.login) {
+    throw new Error('Open QuicK ReeLS in TikTok to sign in.');
+  }
   const { code } = await window.TTMinis.login();
   const session = await apiClient.post<{ accessToken: string }>('/auth/tiktok/login', { code });
-  sessionStorage.setItem('breezereels_access_token', session.accessToken);
+  setSessionToken(session.accessToken);
+  return session;
 }

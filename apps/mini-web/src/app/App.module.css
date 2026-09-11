@@ -1,0 +1,21 @@
+.appShell { min-height: 100dvh; background: #0a0d14; }
+.topbar { position: sticky; z-index: 20; top: 0; display: flex; align-items: center; justify-content: space-between; width: min(100%, 1180px); min-height: 72px; margin: 0 auto; padding: max(12px, env(safe-area-inset-top)) 28px 12px; background: rgba(10, 13, 20, .9); border-bottom: 1px solid rgba(255, 255, 255, .08); backdrop-filter: blur(18px); }
+.brandButton, .topIcon, .profileButton { border: 0; background: transparent; color: inherit; cursor: pointer; }
+.brandButton { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; padding: 0; color: #f8fafc; font-size: 18px; font-weight: 800; letter-spacing: -.02em; }
+.brandButton span span { color: #ff5575; }
+.brandMark { display: grid; width: 32px; height: 32px; place-items: center; color: #0a0d14; background: #ff5575; border-radius: 10px; }
+.topbarActions { display: flex; align-items: center; gap: 8px; }
+.topIcon, .profileButton { display: grid; width: 44px; height: 44px; place-items: center; color: #bac2d0; border-radius: 50%; transition: color 180ms ease, background-color 180ms ease; }
+.profileButton { color: #0a0d14; background: #f8fafc; }
+.topIcon:hover, .topIcon:focus-visible { color: #f8fafc; background: #1a202d; outline: 0; }
+.profileButton:hover, .profileButton:focus-visible { background: #ffb4c1; outline: 0; }
+.main { width: min(100%, 1180px); margin: 0 auto; padding: 28px 28px 52px; }
+.watchMain { max-width: 760px; }
+.bottomNav { display: none; }
+@media (max-width: 680px) {
+  .topbar { min-height: 64px; padding: max(8px, env(safe-area-inset-top)) 16px 8px; }
+  .main { padding: 18px 16px calc(92px + env(safe-area-inset-bottom)); }
+  .bottomNav { position: fixed; z-index: 30; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; display: grid; grid-template-columns: repeat(3, 1fr); min-height: 64px; padding: 6px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 20px; background: rgba(22, 27, 38, .94); box-shadow: 0 12px 40px rgba(0, 0, 0, .3); backdrop-filter: blur(18px); }
+  .navItem { display: grid; min-height: 52px; place-items: center; gap: 3px; color: #778194; border-radius: 15px; font-size: 10px; font-weight: 700; text-decoration: none; }
+  .navActive { color: #fff; background: #2b3241; }
+}

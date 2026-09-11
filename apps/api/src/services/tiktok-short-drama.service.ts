@@ -4,6 +4,7 @@ export type UploadStatusResult = {
   coverUrl?: string;
   durationMs?: number;
   errorMessage?: string;
+  retryable?: boolean;
 };
 
 export interface TikTokShortDramaService {
@@ -12,20 +13,29 @@ export interface TikTokShortDramaService {
   getPlayAuthToken(input: { tiktokEpisodeId: string }): Promise<string>;
 }
 
+export class ProviderNotConfiguredError extends Error {
+  readonly retryable = true;
+
+  constructor() {
+    super('TikTok media provider is not configured.');
+    this.name = 'ProviderNotConfiguredError';
+  }
+}
+
 /**
  * Platform paths and payloads change independently of business routes. Keep the
  * integration behind this interface and implement it only from the current TikTok API reference.
  */
 export class UnconfiguredTikTokShortDramaService implements TikTokShortDramaService {
   async createVideoUpload(): Promise<{ providerJobId: string }> {
-    throw new Error('TikTok Short Drama integration is not configured.');
+    throw new ProviderNotConfiguredError();
   }
 
   async getVideoUploadStatus(): Promise<UploadStatusResult> {
-    throw new Error('TikTok Short Drama integration is not configured.');
+    throw new ProviderNotConfiguredError();
   }
 
   async getPlayAuthToken(): Promise<string> {
-    throw new Error('TikTok Short Drama integration is not configured.');
+    throw new ProviderNotConfiguredError();
   }
 }
