@@ -80,7 +80,26 @@ sudo docker compose --env-file .env.production \
 
 The Caddy container reaches only `api` and `admin` through `quickreels-proxy`. PostgreSQL is isolated in `quickreels-internal` and is reachable only by the API and worker containers.
 
-## 5. Back up the database
+## 5. Create the first administrator
+
+Do not run the demo seed in production. Temporarily add both values to `.env.production`:
+
+```ini
+ADMIN_BOOTSTRAP_EMAIL=<your-admin-email>
+ADMIN_BOOTSTRAP_PASSWORD=<a-unique-password-of-at-least-12-characters>
+```
+
+Run the one-time bootstrap command:
+
+```bash
+sudo docker compose --env-file .env.production \
+  -f compose.production.self-hosted.yml \
+  run --rm api node dist/scripts/bootstrap-admin.js
+```
+
+After it reports success, remove `ADMIN_BOOTSTRAP_PASSWORD` from `.env.production`. The command is idempotent: an existing administrator is never modified.
+
+## 6. Back up the database
 
 Create a backup directory and make a compressed logical backup before migrations and at least daily:
 
