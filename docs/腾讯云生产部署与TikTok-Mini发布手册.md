@@ -300,10 +300,11 @@ VITE_INTERSTITIAL_AD_UNIT_ID=<Interstitial Placement ID，功能完成后再填>
 
 ### 6.3 迁移原则
 
-生产只执行：
+在服务器上的生产 Compose 中，只执行：
 
 ```bash
-pnpm --filter api exec prisma migrate deploy
+sudo docker compose --env-file .env.production -f compose.production.yml \
+  run --rm api ./node_modules/.bin/prisma migrate deploy
 ```
 
 不要在生产执行 `prisma migrate dev`，不要在未检查内容的情况下执行会写入演示剧集的 seed 脚本。
@@ -352,7 +353,7 @@ sudo docker compose --env-file .env.production -f compose.production.yml up -d
 
 ### 7.1 Caddy 反向代理
 
-如果服务器没有现成 Web 入口，才使用 Nginx。当前服务器实际使用 Caddy，因此应在 `/opt/evergreenprosper-website/Caddyfile` 中保留原官网块，并追加以下两个站点块。Caddy 会自动申请和续期证书；不要在 Caddy 容器外另行申请同一域名证书。
+当前服务器使用 Caddy，因此应在 `/opt/evergreenprosper-website/Caddyfile` 中保留原官网块，并追加以下两个站点块。Caddy 会自动申请和续期证书；不要在 Caddy 容器外另行申请同一域名证书。
 
 QuicK ReeLS 的 Compose 服务名建议固定为 `api` 和 `admin`，并加入外部网络 `quickreels-proxy`：
 
