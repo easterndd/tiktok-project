@@ -1,9 +1,9 @@
-import type { ApiErrorResponse } from '@breezereels/shared-types';
+import type { ApiErrorResponse } from '@quickreels/shared-types';
 import { mockApiRequest } from './mock-api';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/api/v1';
-const useMockApi = import.meta.env.VITE_USE_MOCK_API === 'true' || import.meta.env.VITE_DEMO_MODE !== 'false';
-const enableMockFallback = import.meta.env.VITE_ENABLE_MOCK_FALLBACK !== 'false';
+const useMockApi = import.meta.env.VITE_USE_MOCK_API === 'true' || import.meta.env.VITE_DEMO_MODE === 'true';
+const enableMockFallback = import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
 
 export class ApiError extends Error {
   constructor(
@@ -22,7 +22,7 @@ class ApiClient {
     const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
     if (useMockApi) return mockApiRequest<T>({ method, path, body: parsedBody });
 
-    const token = sessionStorage.getItem('breezereels_access_token');
+    const token = sessionStorage.getItem('quickreels_access_token');
     try {
       const response = await fetch(`${apiBaseUrl}${path}`, {
         ...options,

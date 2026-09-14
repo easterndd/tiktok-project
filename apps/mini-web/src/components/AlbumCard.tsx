@@ -1,11 +1,11 @@
-import type { AlbumSummary } from '@breezereels/shared-types';
+import type { AlbumSummary } from '@quickreels/shared-types';
 import { ChevronRight, Play, Star } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { t, translateGenre } from '../lib/i18n';
 import { useLocale } from '../lib/storage';
 import styles from './AlbumCard.module.css';
 
-export function AlbumCard({ album, locale: providedLocale }: { album: AlbumSummary; locale?: import('@breezereels/shared-types').Locale }) {
+export function AlbumCard({ album, locale: providedLocale }: { album: AlbumSummary; locale?: import('@quickreels/shared-types').Locale }) {
   const currentLocale = useLocale();
   const locale = providedLocale ?? currentLocale;
   return <Link className={styles.card} to={`/album/${album.id}`} aria-label={`${t(locale, 'watchEpisode')}: ${album.title}`}>

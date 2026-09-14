@@ -6,6 +6,7 @@ import {
   type TikTokShortDramaService,
   type UploadStatusResult
 } from '../services/tiktok-short-drama.service';
+import { BytePlusVodService } from '../services/byteplus-vod.service';
 
 const defaultIntervalMs = 30_000;
 const defaultMaxRetries = 5;
@@ -215,7 +216,9 @@ export async function processJobs(
 export async function startUploadWorker() {
   const env = loadEnv();
   const prisma = new PrismaClient();
-  const service = new UnconfiguredTikTokShortDramaService();
+  const service = env.BYTEPLUS_ACCESS_KEY && env.BYTEPLUS_SECRET_KEY
+    ? new BytePlusVodService(env)
+    : new UnconfiguredTikTokShortDramaService();
   const run = () => processJobs(prisma, service, {
     maxRetries: env.UPLOAD_MAX_RETRIES,
     log: (message, details) => console.info(message, details)

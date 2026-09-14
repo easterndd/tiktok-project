@@ -1,4 +1,4 @@
-import type { PlayInfo } from '@breezereels/shared-types';
+import type { PlayInfo } from '@quickreels/shared-types';
 import { getStoredLocale } from '../../lib/storage';
 
 export async function createDramaPlayer(root: HTMLElement, info: PlayInfo): Promise<{ destroy(): void }> {

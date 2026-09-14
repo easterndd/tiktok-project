@@ -8,7 +8,7 @@ import type {
   Locale,
   Preferences,
   SearchResponse
-} from '@breezereels/shared-types';
+} from '@quickreels/shared-types';
 import { defaultUiComponents } from '../features/cms/defaults';
 import { t, translateGenre } from '../lib/i18n';
 
@@ -60,7 +60,7 @@ function localizedGenres(locale: Locale) { return mockGenres.map((genre) => ({ .
 
 export function getMockEpisodes(albumId: string, locale: Locale = 'en'): EpisodeSummary[] {
   const album = mockAlbums.find((item) => item.id === albumId) ?? mockAlbums[0];
-  const unlocked = readStringSet('breezereels_mock_unlocked');
+  const unlocked = readStringSet('quickreels_mock_unlocked');
   return Array.from({ length: Math.min(album.episodeCount, 18) }, (_, index) => {
     const episodeNo = index + 1;
     const id = `${album.id}-episode-${episodeNo}`;
@@ -91,8 +91,8 @@ export function getMockAlbum(albumId: string, locale: Locale = 'en'): AlbumDetai
     favoriteCount: 34_000 + album.episodeCount * 61,
     shareCount: 8_200 + album.episodeCount * 17,
     userState: {
-      liked: readStringSet('breezereels_mock_likes').has(albumId),
-      favorited: readStringSet('breezereels_mock_favorites').has(albumId)
+      liked: readStringSet('quickreels_mock_likes').has(albumId),
+      favorited: readStringSet('quickreels_mock_favorites').has(albumId)
     }
   };
 }
@@ -130,7 +130,7 @@ export function getMockHistory(locale: Locale = 'en'): HistoryItem[] {
 }
 
 export function readPreferences(): Preferences {
-  const raw = localStorage.getItem('breezereels_preferences');
+  const raw = localStorage.getItem('quickreels_preferences');
   if (!raw) return { locale: 'en', autoplay: true, reducedData: false };
   try {
     const preferences = { locale: 'en', autoplay: true, reducedData: false, ...JSON.parse(raw) } as Preferences & { locale: string };
@@ -142,7 +142,7 @@ export function readPreferences(): Preferences {
 }
 
 export function writePreferences(preferences: Preferences) {
-  localStorage.setItem('breezereels_preferences', JSON.stringify(preferences));
+  localStorage.setItem('quickreels_preferences', JSON.stringify(preferences));
 }
 
 export function readStringSet(key: string): Set<string> {

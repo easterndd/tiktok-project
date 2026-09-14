@@ -7,7 +7,7 @@ COPY packages/shared-types/package.json packages/shared-types/package.json
 RUN pnpm install --frozen-lockfile=false
 COPY apps/api apps/api
 COPY packages/shared-types packages/shared-types
-RUN pnpm --filter @breezereels/shared-types build && pnpm --filter api db:generate && pnpm --filter api build
+RUN pnpm --filter @quickreels/shared-types build && pnpm --filter api db:generate && pnpm --filter api build
 
 FROM node:24-alpine
 WORKDIR /app

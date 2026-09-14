@@ -1,4 +1,5 @@
 import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import type { PrismaClient } from '@prisma/client';
@@ -28,7 +29,12 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient } = {}
   const app = Fastify({ logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' } });
   app.decorate('config', env);
   registerErrorHandler(app);
-  await app.register(cors, { origin: env.API_CORS_ORIGIN.split(','), credentials: true });
+  await app.register(cors, {
+    origin: env.API_CORS_ORIGIN.split(','),
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
+  });
+  await app.register(multipart, { limits: { files: 1, fileSize: 2 * 1024 * 1024 * 1024 } });
   await app.register(jwt, { secret: env.JWT_SECRET });
   await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
   await registerPrisma(app, options.prisma);

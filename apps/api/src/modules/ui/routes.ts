@@ -1,4 +1,4 @@
-import type { UiComponent, UiComponentKey } from '@breezereels/shared-types';
+import type { UiComponent, UiComponentKey } from '@quickreels/shared-types';
 import type { FastifyInstance } from 'fastify';
 
 export const defaultUiComponents: UiComponent[] = [

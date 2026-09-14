@@ -10,7 +10,7 @@ export type UploadStatusResult = {
 export interface TikTokShortDramaService {
   createVideoUpload(input: { sourceUrl: string; title: string; spaceName: string; byteplusAccountId: string }): Promise<{ providerJobId: string }>;
   getVideoUploadStatus(input: { providerJobId: string; byteplusAccountId: string }): Promise<UploadStatusResult>;
-  getPlayAuthToken(input: { tiktokEpisodeId: string }): Promise<string>;
+  getPlayAuthToken(input: { vid: string }): Promise<string>;
 }
 
 export class ProviderNotConfiguredError extends Error {

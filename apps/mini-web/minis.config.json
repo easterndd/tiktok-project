@@ -1,4 +1,21 @@
 {
-  "projectName": "QuicK ReeLS",
-  "appId": "7668887325719529492"
+  "appId": "7681547859254429717",
+  "dev": {
+    "clientKey": "REPLACE_WITH_TIKTOK_MINI_CLIENT_KEY",
+    "name": "QuicK ReeLS",
+    "host": "localhost",
+    "port": 5173,
+    "iconUrl": "",
+    "desc": "Short drama mini app.",
+    "ppLink": "",
+    "tosLink": ""
+  },
+  "navbar": {
+    "bgColorLight": "#0f172a",
+    "bgColorDark": "#0f172a"
+  },
+  "build": {
+    "htmlEntry": "index.html",
+    "outputDir": "dist"
+  }
 }

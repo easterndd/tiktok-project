@@ -1,5 +1,5 @@
 {
-  "name": "breezereels",
+  "name": "quickreels",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@11.19.0",
@@ -14,5 +14,8 @@
     "db:generate": "pnpm --filter api db:generate",
     "db:migrate": "pnpm --filter api db:migrate",
     "db:seed": "pnpm --filter api db:seed"
+  },
+  "devDependencies": {
+    "@tiktok-minis/cli": "1.2.0"
   }
 }

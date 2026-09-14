@@ -1,8 +1,9 @@
-import type { AlbumSummary, SearchResponse } from '@breezereels/shared-types';
+import type { AlbumSummary, SearchResponse } from '@quickreels/shared-types';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { optionalUser } from '../../plugins/optional-auth';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
+import { isAlbumVisibleInCountry, requestCountry } from '../../lib/content-visibility';
 
 const querySchema = z.object({ q: z.string().trim().max(120).default(''), locale: publicLocaleSchema.default(defaultLocale), limit: z.coerce.number().int().min(1).max(50).default(20) });
 const genreParams = z.object({ slug: z.string().trim().min(1).max(80) });
@@ -54,6 +55,7 @@ export async function registerSearchRoutes(app: FastifyInstance) {
   app.get('/genres/:slug/albums', async (request): Promise<{ items: AlbumSummary[]; nextCursor: string | null }> => {
     const { slug } = genreParams.parse(request.params);
     const { limit, locale } = querySchema.pick({ limit: true, locale: true }).parse(request.query);
+    const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const albums = await app.prisma.album.findMany({
       where: { status: 'ONLINE', genres: { some: { genre: { slug } } } },
       orderBy: { updatedAt: 'desc' },
@@ -64,12 +66,13 @@ export async function registerSearchRoutes(app: FastifyInstance) {
         translations: true
       }
     });
-    return { items: albums.map((album) => toSummary(album, locale)), nextCursor: null };
+    return { items: albums.filter((album) => isAlbumVisibleInCountry(album.regions, country)).map((album) => toSummary(album, locale)), nextCursor: null };
   });
 
   app.get('/search', async (request): Promise<SearchResponse> => {
     const { q, locale, limit } = querySchema.parse(request.query);
     const user = await optionalUser(request);
+    const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const albums = await app.prisma.album.findMany({
       where: q ? {
         status: 'ONLINE',
@@ -88,7 +91,7 @@ export async function registerSearchRoutes(app: FastifyInstance) {
         translations: true
       }
     });
-    const items = albums.map((album) => toSummary(album, locale));
+    const items = albums.filter((album) => isAlbumVisibleInCountry(album.regions, country)).map((album) => toSummary(album, locale));
     if (q) await app.prisma.searchEvent.create({ data: { query: q, locale, resultCount: items.length, userId: user?.sub } }).catch(() => undefined);
     const fallbackAlbums = items.length ? [] : await app.prisma.album.findMany({
       where: { status: 'ONLINE' },
@@ -100,6 +103,6 @@ export async function registerSearchRoutes(app: FastifyInstance) {
         translations: true
       }
     });
-    return { items, nextCursor: null, query: q, fallbackItems: fallbackAlbums.map((album) => toSummary(album, locale)) };
+    return { items, nextCursor: null, query: q, fallbackItems: fallbackAlbums.filter((album) => isAlbumVisibleInCountry(album.regions, country)).map((album) => toSummary(album, locale)) };
   });
 }

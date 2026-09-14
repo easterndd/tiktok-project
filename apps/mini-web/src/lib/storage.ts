@@ -1,19 +1,19 @@
-import type { Locale } from '@breezereels/shared-types';
+import type { Locale } from '@quickreels/shared-types';
 import { useSyncExternalStore } from 'react';
 import { detectLocale } from './i18n';
 
 const validLocales = new Set(['en', 'pt', 'fr', 'id', 'ja', 'es', 'ko', 'th']);
 
-const sessionKey = 'breezereels_access_token';
+const sessionKey = 'quickreels_access_token';
 const sessionListeners = new Set<() => void>();
 
 export function getStoredLocale(): Locale {
-  const stored = localStorage.getItem('breezereels_locale');
+  const stored = localStorage.getItem('quickreels_locale');
   return stored && validLocales.has(stored) ? stored as Locale : detectLocale();
 }
 
 export function setStoredLocale(locale: Locale) {
-  localStorage.setItem('breezereels_locale', locale);
+  localStorage.setItem('quickreels_locale', locale);
   localeListeners.forEach((listener) => listener());
 }
 

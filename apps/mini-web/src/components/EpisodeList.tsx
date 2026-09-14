@@ -1,4 +1,4 @@
-import type { EpisodeSummary } from '@breezereels/shared-types';
+import type { EpisodeSummary } from '@quickreels/shared-types';
 import { ChevronRight, LockKeyhole, Play } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatDuration } from '../lib/format';

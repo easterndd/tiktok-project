@@ -1,4 +1,4 @@
-import type { UiComponent } from '@breezereels/shared-types';
+import type { UiComponent } from '@quickreels/shared-types';
 
 export const defaultUiComponents: UiComponent[] = [
   { key: 'APP_TOPBAR', page: 'APP', enabled: true },

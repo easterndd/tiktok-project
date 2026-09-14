@@ -1,16 +1,16 @@
 # QuicK ReeLS TikTok Mini Drama 完整开发实施文档
 
-**版本：** v1.4
-**本次修订：** 2026-09-10
+**版本：** v1.5
+**本次修订：** 2026-09-11
 **适用应用：** QuicK ReeLS  
-**TikTok App ID：** `7668887325719529492`  
+**TikTok App ID：** `7681547859254429717`
 **运行形态：** TikTok Minis / Mini Drama（TikTok App 内 WebView）  
 **首期变现范围：** In-App Ads（IAA）中的 Rewarded Ads 与 Interstitial Ads  
 **不包含：** IAP、订阅、自建视频分发、评论系统、机器学习推荐算法
 
-> v1.4 目标：在保留 v1.3 产品范围的基础上，把附件需求文档中的平台资格、商业合规、地区准入和官方资料核验要求纳入工程门禁。本文仍采用 PRD 推荐的“方案 B 一次做到位”：PRD 中标注为二期的搜索、个人中心和多语言也纳入本次 V1.0 发布；首页推荐使用运营配置、播放统计和规则排序，不建设机器学习推荐系统。
+> v1.5 目标：在保留 v1.4 产品范围的基础上，把 BytePlus VOD Server SDK 按 OpenAPI 能力拆分为 V2.0 优先、V1.0 回退的正式集成策略，并把 SDK 版本、适配服务、凭证隔离和迁移检查纳入工程门禁。本文仍采用 PRD 推荐的“方案 B 一次做到位”：PRD 中标注为二期的搜索、个人中心和多语言也纳入本次 V1.0 发布；首页推荐使用运营配置、播放统计和规则排序，不建设机器学习推荐系统。
 
-> 本文是工程实施文档，不是 TikTok 或 BytePlus 的实时 API Reference。本文按当前 TikTok Mini Drama + BytePlus 媒资管理 + TikTok Minis VePlayer 的链路编写；TikTok Minis SDK、TikTok Short Drama Open API 路径、地区能力、字段和审核规则在编码及提交前必须以官方当前页面为准。不要将 TikTok Client Secret、BytePlus AccessKey 或 SecretKey 发给任何人，也不要放入前端项目。
+> 本文是工程实施文档，不是 TikTok 或 BytePlus 的实时 API Reference。本文按当前 TikTok Mini Drama + BytePlus 媒资管理 + TikTok Minis VePlayer 的链路编写；TikTok Minis SDK、TikTok Short Drama Open API 路径、地区能力、字段和审核规则在编码及提交前必须以官方当前页面为准。BytePlus VOD Server SDK 按 OpenAPI 能力选版本：优先使用 V2.0；V2.0 尚未提供的 OpenAPI 继续使用 V1.0。按 2026-09-11 官方文档核验，V2.0 当前仅列出 `StartExecution` 和 `GetExecution`，且只支持 Java、Python、Go；本项目 Node.js 后端使用 V1.0 Node.js SDK 处理其余 VOD 能力，必要时通过独立的 Go/Python/Java 适配服务调用 V2.0。不要将 TikTok Client Secret、BytePlus AccessKey 或 SecretKey 发给任何人，也不要放入前端项目。
 
 > **命名说明：** 项目对外品牌统一为 `QuicK ReeLS`。仓库中的历史文件名、内部包名和存储键暂时保留兼容，不代表用户可见品牌；TikTok Developer Portal 的 Basic Information、合同主体和 App ID 对应名称也应使用 `QuicK ReeLS`。
 
@@ -152,12 +152,16 @@ TikTok Mini Drama 是标准 H5 Web 应用，不是传统小程序。前端代码
 │  ├─ 专辑、剧集、观看进度和广告解锁                              │
 │  ├─ 运营后台接口                                                │
 │  ├─ TikTok Short Drama Open API：上传、审核、上架、播放凭证     │
+│  ├─ BytePlus VOD V1.0：V2.0 尚未覆盖的 VOD OpenAPI            │
 │  └─ 日志、限流、权限与健康检查                                  │
 └───────────────┬──────────────────────────────┬───────────────┘
                 │                              │
                 ▼                              ▼
       PostgreSQL 数据库                   TikTok / BytePlus 媒资能力
       用户/剧集/进度/记录                 审核、上架控制 / 视频托管与传输
+                                                ▲
+                                                │ V2.0（仅受支持的 OpenAPI）
+                                      BytePlus VOD V2 Worker（Go/Python/Java）
 ```
 
 ### 1.1 三类资产必须分开
@@ -166,6 +170,7 @@ TikTok Mini Drama 是标准 H5 Web 应用，不是传统小程序。前端代码
 | --- | --- | --- | --- |
 | Mini 前端代码资产 | TikTok Portal 的 Code version ZIP | 运行页面、调用 TTMinis、请求后端 | AK/SK、Client Secret、数据库密码、视频文件 |
 | 后端服务 | 公网 HTTPS 服务器 | 业务逻辑、业务会话、数据库访问、调用 TikTok Short Drama Open API | 前端私有构建依赖无需部署给用户 |
+| BytePlus VOD V2 适配服务 | 与 API/Worker 同一私有网络 | 调用当前 V2.0 已支持的 OpenAPI；首期仅为需要 `StartExecution`/`GetExecution` 的流程启用 | 不向 Mini 暴露 AK/SK，不承担 V1.0 回退接口 |
 | 视频媒资 | BytePlus VOD / Media Asset Management | 视频托管、转码和传输；TikTok 负责短剧审核、上架和播放控制 | 前端 ZIP 不保存全集视频 |
 
 ### 1.2 建议生产域名
@@ -208,18 +213,49 @@ TypeScript 和 Node.js 并不冲突：TypeScript 是编写代码的语言，Node
 | 部署 | Docker Compose + Nginx | 可重复部署，适合第一版 |
 | 日志 | Pino（Fastify 内置生态） | 结构化日志，便于排障 |
 
-### 2.1 第一版不建议使用
+### 2.1 BytePlus VOD Server SDK 版本策略
+
+本项目采用“按 OpenAPI 逐个选版本”的策略，而不是给整个 BytePlus VOD 项目只指定一个 SDK 大版本。BytePlus 官方 Server SDK 总览明确说明，V2.0 是新一代 SDK；在 OpenAPI 尚未全部迁移期间，可以并行使用两个版本。官方当前 V2.0 页面列出的 VOD API 为：
 
 ```text
-微服务架构
+V2.0：StartExecution、GetExecution
+```
+
+V2.0 当前只提供 Java、Python、Go SDK，不提供 Node.js SDK。因此本项目的 Node.js 主后端不能直接把 V2.0 当作 npm 依赖安装；需要调用 V2.0 API 时，使用独立的 V2 适配服务，推荐 Go，或选择 Python/Java。V1.0 的 Node.js SDK 继续承担 V2.0 尚未覆盖的 VOD OpenAPI。
+
+| 项目能力/BytePlus OpenAPI | 采用版本 | 实现位置 | 说明 |
+| --- | --- | --- | --- |
+| `StartExecution` | V2.0 | `byteplus-vod-v2-worker`（Go/Python/Java） | V2.0 当前已支持；不得用 V1.0 替代 |
+| `GetExecution` | V2.0 | `byteplus-vod-v2-worker`（Go/Python/Java） | 与 `StartExecution` 配套轮询 |
+| `UploadMediaByUrl` | V1.0 | Node.js API/Worker | 当前 V2.0 支持清单未包含 |
+| `QueryUploadTaskInfo` | V1.0 | Node.js API/Worker | 当前 V2.0 支持清单未包含 |
+| `ApplyUploadInfo`、`CommitUploadInfo`、`UploadMedia` | V1.0 | Node.js API/Worker | 当前 V2.0 支持清单未包含；用于服务端上传流程 |
+| `GetPlayInfo`、`GetPlayAuthToken` | V1.0 | Node.js API | 当前 V2.0 支持清单未包含；播放 Token 只在官方播放器链路确实需要时生成 |
+| TikTok Short Drama 的上传、专辑、审核、上架 API | TikTok 官方 Open API | Node.js API/Worker | 这不是 BytePlus VOD Server SDK，不纳入 V1/V2 归类 |
+
+版本选择必须满足以下约束：
+
+1. 对当前 V2.0 支持的 OpenAPI，生产实现优先且固定使用 V2.0。
+2. 对 V2.0 尚未提供的 OpenAPI，使用 V1.0；不得为了“统一版本”强行改写成不存在的 V2 调用。
+3. 同一个业务调用点只绑定一个版本；不得在一次请求中对同一个 OpenAPI 随意混用 V1.0 和 V2.0。
+4. V1.0 与 V2.0 可以并行部署，但必须分别封装在 `BytePlusVodV1Service` 和 `BytePlusVodV2Service` 后面，业务层不直接依赖官方 SDK 类型。
+5. 每次新增 BytePlus OpenAPI 前，先查官方 V2.0 supported APIs 清单并记录核验日期；如果后来迁移到 V2.0，先做兼容测试，再删除对应 V1.0 调用。
+6. V2.0 适配服务只接收内部任务和最小参数，AK/SK 只注入该服务；Mini 前端永远不能接触任一版本的 BytePlus 凭证。
+
+当前首发范围不需要 BytePlus 工作流执行时，不必为了引入 V2.0 而强行启动 V2 Worker；但一旦使用 `StartExecution` 或 `GetExecution`，必须按上述 V2.0 路径实现，不能回退到 Node.js V1.0。
+
+### 2.2 第一版不建议使用
+
+```text
 Kubernetes
 Redis 集群
 Kafka/RabbitMQ 集群
 复杂 DDD 分层
+除 BytePlus V2.0 OpenAPI 明确需要外的其他微服务
 自建视频 CDN、裸 MP4/HLS 或原生 `<video>` 播放链路（Mini Drama 不允许）
 ```
 
-先用一个 API 服务、一个 Worker 进程、一个 PostgreSQL 数据库跑通「上传视频 -> 上架 -> 看剧 -> 看广告解锁」闭环。流量增长后再拆分。
+首期先用一个 Node.js API、一个 Node.js Worker 和一个 PostgreSQL 跑通「上传视频 -> 上架 -> 看剧 -> 看广告解锁」闭环；只有实际使用 `StartExecution`/`GetExecution` 时，才增加轻量 BytePlus V2 Worker。流量增长后再拆分其他服务。
 
 ---
 
@@ -533,6 +569,12 @@ quickreels/
 │   │   ├── package.json
 │   │   └── .env.example
 │   │
+│   ├── byteplus-vod-v2-worker/             # 仅调用 BytePlus V2.0 已支持的 OpenAPI
+│   │   ├── cmd/
+│   │   ├── internal/
+│   │   ├── go.mod                          # 或使用 Python/Java 实现
+│   │   └── README.md
+│   │
 │   └── admin-web/                          # 独立运营后台，不上传 TikTok ZIP
 │       ├── src/
 │       ├── package.json
@@ -652,9 +694,23 @@ cd apps/api
 pnpm init
 pnpm add fastify @fastify/cors @fastify/jwt @fastify/rate-limit zod dotenv pino-pretty
 pnpm add @prisma/client
+pnpm add @byteplus/vcloud-sdk-nodejs
 pnpm add -D typescript tsx prisma @types/node
 pnpm prisma init
 ```
+
+`@byteplus/vcloud-sdk-nodejs` 是 BytePlus VOD Server SDK V1.0，用于当前 V2.0 尚未覆盖的 Node.js VOD OpenAPI。不要在 Node.js 项目中寻找不存在的 V2.0 npm 包。
+
+如果本次业务确实使用 BytePlus VOD `StartExecution` 或 `GetExecution`，另建 V2 Worker。以 Go 为例：
+
+```bash
+mkdir apps/byteplus-vod-v2-worker
+cd apps/byteplus-vod-v2-worker
+go mod init quickreels/byteplus-vod-v2-worker
+go get github.com/byteplus-sdk/byteplus-go-sdk-v2
+```
+
+V2 Worker 只实现当前官方 V2.0 支持的 OpenAPI，并通过内部 HTTP、任务表或消息队列与 Node.js API 通信；不把 Go SDK 引入 `apps/api`，也不在 V2 Worker 中复制 V1.0 的接口实现。
 
 建议的 API 脚本：
 
@@ -736,9 +792,30 @@ BYTEPLUS_ACCOUNT_ID=your_bound_byteplus_account_id
 BYTEPLUS_SPACE_NAME=your_bound_vod_space_name
 BYTEPLUS_REGION=ap-southeast-1
 
-# 只有在另行使用 BytePlus VOD 直连 API 时才配置；Mini Drama Open API 默认不需要
+# BytePlus VOD Server SDK V1.0：用于 V2.0 尚未覆盖的 VOD OpenAPI
+# 仅在 Node.js API/Worker 直接调用 BytePlus VOD 时配置
+# 以下为项目自定义变量；服务启动时读取后显式注入 SDK。
+# 如改用 SDK 官方环境变量自动读取，应使用 BYTEPLUS_ACCESSKEY / BYTEPLUS_SECRETKEY。
 # BYTEPLUS_ACCESS_KEY=never-expose-this-value
 # BYTEPLUS_SECRET_KEY=never-expose-this-value
+# BYTEPLUS_VOD_ENDPOINT=https://vod.byteplusapi.com
+
+# BytePlus VOD Server SDK V2.0 由独立 V2 Worker 调用；
+# Node.js API 只需要内网 Worker 地址，不保存 V2.0 AK/SK。
+# BYTEPLUS_V2_WORKER_URL=http://byteplus-vod-v2-worker:8080
+```
+
+### 6.2.1 BytePlus V2 Worker `.env.example`（仅启用 `StartExecution`/`GetExecution` 时）
+
+```env
+NODE_ENV=production
+PORT=8080
+HOST=0.0.0.0
+
+BYTEPLUS_REGION=ap-southeast-1
+BYTEPLUS_V2_ACCESS_KEY=never-expose-this-value
+BYTEPLUS_V2_SECRET_KEY=never-expose-this-value
+BYTEPLUS_V2_ENDPOINT=https://vod.byteplusapi.com
 ```
 
 ### 6.3 必须遵守的规则
@@ -746,7 +823,9 @@ BYTEPLUS_REGION=ap-southeast-1
 ```text
 .env 永远不提交 Git
 生产密钥使用服务器环境变量或密钥管理服务
-BytePlus AK/SK 通过 TikTok Developer Portal 的 Media asset management 绑定流程管理；不把它们放入 Mini 前端，也不要为了短剧 Open API 在应用服务器中复制一份
+BytePlus AK/SK 只放在实际调用 BytePlus Server SDK/OpenAPI 的后端服务中；不放入 Mini 前端
+V1.0 凭证只注入需要 V1.0 的 Node.js API/Worker，V2.0 凭证只注入需要 V2.0 的 Go/Python/Java Worker
+不要为了 TikTok Short Drama Open API 在应用服务器中复制 BytePlus 凭证；若该链路使用 TikTok 的应用授权，则按 TikTok 官方授权流程配置
 日志不可输出 Authorization、code、access_token、AK、SK
 配置错误时只显示变量名，不显示变量值
 泄漏后的密钥必须立即在平台轮换
@@ -2156,14 +2235,42 @@ GET /me/ad-eligibility?type=INTERSTITIAL&episodeId=ep_003
 -> TikTok 播放控制与 BytePlus VePlayer 可用，Episode/Album = ONLINE
 ```
 
-这里有两套服务端凭证，不能混用；授权方式和 token endpoint 仍必须按当前官方 API Reference 核验：
+这里有三类可能的服务端授权，不能混用：
 
 ```text
 用户登录：前端 TTMinis.login() code -> /auth/tiktok/login -> TikTok OAuth -> QuicK ReeLS 用户会话
-媒资管理：QuicK ReeLS API -> 当前官方应用授权流程 -> Short Drama/Media Asset API
+TikTok 短剧媒资：QuicK ReeLS API -> TikTok Short Drama/Media Asset Open API 授权流程
+BytePlus VOD V1.0：Node.js API/Worker -> @byteplus/vcloud-sdk-nodejs 或 V1.0 签名 OpenAPI
+BytePlus VOD V2.0：Go/Python/Java V2 Worker -> StartExecution/GetExecution
 ```
 
-如果当前 API 采用应用级 access token，后端可以缓存到过期前并自动刷新；如果采用其他授权方式，应按官方流程实现。媒资管理凭证不是用户登录 token，也不是播放器临时凭证。调用视频、图片、专辑、审核和上架接口时，后端按当前 API Reference 使用对应的 Authorization、client key、签名或其他要求，不能从本示例推导固定请求头。
+如果当前 API 采用应用级 access token，后端可以缓存到过期前并自动刷新；如果采用其他授权方式，应按官方流程实现。TikTok 媒资授权、BytePlus V1.0 AK/SK、BytePlus V2.0 AK/SK、用户登录 token 和播放器临时凭证都是不同用途的凭证，不能互相替代。调用视频、图片、上传任务、播放和工作流接口时，按对应版本的官方 API Reference 使用相应的 Authorization、client key、签名或 SDK 配置，不能从本示例推导固定请求头。
+
+#### 10.5.1 BytePlus OpenAPI 路由表
+
+BytePlus VOD 调用必须先经过版本路由，再进入具体 SDK。下面是本项目当前的路由基线：
+
+| BytePlus 能力 | API/方法 | 版本 | 调用方 | 备注 |
+| --- | --- | --- | --- | --- |
+| 工作流执行 | `StartExecution` | V2.0 | V2 Worker | 当前官方 V2.0 支持 |
+| 工作流查询 | `GetExecution` | V2.0 | V2 Worker | 与 `StartExecution` 配套轮询 |
+| URL 上传 | `UploadMediaByUrl` | V1.0 | Node.js API/Worker | V2.0 尚未提供 |
+| 上传任务查询 | `QueryUploadTaskInfo` | V1.0 | Node.js API/Worker | V2.0 尚未提供 |
+| 服务端本地文件上传 | `ApplyUploadInfo` + `CommitUploadInfo` 或 V1.0 `UploadMedia` | V1.0 | Node.js API/Worker | 以当前 V1.0 Node SDK 和 API Reference 为准 |
+| 播放信息/临时播放 Token | `GetPlayInfo` / `GetPlayAuthToken` | V1.0 | Node.js API | V2.0 尚未提供；只返回最小必要信息 |
+
+其中，`StartExecution`/`GetExecution` 属于 BytePlus VOD V2.0；它们不是 TikTok Short Drama 的专辑审核或上架接口。TikTok Short Drama 的专辑、剧集、审核和 listing 仍由 TikTok 官方 Open API 负责。不要因为两个系统都涉及视频，就把 TikTok API 错接到 BytePlus V2 SDK。
+
+V2 Worker 的最小内部接口可以设计为：
+
+```ts
+interface BytePlusVodV2Client {
+  startExecution(input: Record<string, unknown>): Promise<{ runId: string }>;
+  getExecution(input: { runId: string }): Promise<Record<string, unknown>>;
+}
+```
+
+该接口是 QuicK ReeLS 的内部 DTO，不是 BytePlus 官方方法签名。V2 Worker 应在自己的语言中使用官方 `vod20250701` SDK 客户端和模型；Node.js 只调用内部适配接口，不直接伪造 V2 SDK 类型。
 
 以下是服务适配器需要覆盖的业务概念，不是对当前官方 API 路径、字段或返回值的承诺（具体区域前缀、字段、授权方式和枚举以 API Reference 为准）：
 
@@ -2224,8 +2331,8 @@ interface TikTokShortDramaService {
 首期 Worker 每 30 秒查询一次 `PENDING`/`PROCESSING` 任务：
 
 ```text
-PENDING：调用 TikTok Short Drama 视频上传接口，保存 providerJobId，置 PROCESSING
-PROCESSING：查询远端状态
+PENDING：按 10.5.1 的版本路由调用 TikTok Short Drama Open API 或 BytePlus VOD V1.0，保存 providerJobId，置 PROCESSING
+PROCESSING：查询 TikTok/BytePlus 远端状态；若任务属于 BytePlus V2 工作流，交给 V2 Worker 调用 GetExecution
 SUCCEEDED：更新 Episode.byteplusVid、封面/时长和 Episode.status = READY
 FAILED：保存脱敏错误，Episode.status = ERROR
 ```
@@ -2506,6 +2613,7 @@ BytePlus 账号与 VOD 空间（已在 TikTok Developer Portal 绑定到 QuicK R
 nginx
 api
 worker
+byteplus-vod-v2-worker（仅在使用 StartExecution/GetExecution 时）
 postgres（若不使用托管数据库）
 ```
 
@@ -2519,6 +2627,7 @@ postgres（若不使用托管数据库）
 -> 配置 HTTPS 证书
 -> 设置生产环境变量
 -> docker compose up -d
+-> 若启用 BytePlus V2.0，单独部署 byteplus-vod-v2-worker，并只注入 V2.0 所需 IAM 凭证
 -> 执行 Prisma migrate deploy
 -> 访问 /health
 -> Portal 添加 https://api.example.com 为 Trusted domain
@@ -2554,6 +2663,10 @@ HTTPS 终止
 [ ] 当前 App 的官方播放器资格已确认，并保留 Portal/官方/直客证据
 [ ] 当前 Player Reference、SDK 版本、构造参数和事件已复核
 [ ] BytePlus 账号/空间已在本 App 的 Media asset management 中显示 Connected
+[ ] 已保存当前 BytePlus VOD V2.0 supported APIs 清单和核验日期
+[ ] `StartExecution`/`GetExecution`（如使用）由 Go/Python/Java V2 Worker 调用，未回退到 Node.js V1.0
+[ ] V2.0 未覆盖的 Upload/Query/Playback OpenAPI 已明确登记为 V1.0，并由 Node.js V1.0 SDK/适配器调用
+[ ] V1.0 与 V2.0 的 AK/SK 按服务隔离，日志和前端均不暴露
 [ ] TikTok Short Drama/Media Asset 测试上传任务可成功完成，且 Worker 可得到当前平台视频标识
 [ ] 测试专辑审核通过、在线版本已设置（如适用）且已 Listed/Published
 [ ] TikTok 内按当前官方播放器契约完成首帧、进度、连续播放和销毁测试
@@ -2681,6 +2794,9 @@ Middle Funnel 未纳入本次范围 -> 仅保留扩展接口，不阻塞 V1
 | 插屏加载失败 | 无感继续进入下一集 |
 | Interstitial Placement 未 Active | 不阻断基础观看；生产发布被商业门禁阻断 |
 | 弱网或断网 | 明确错误和重试入口，无白屏 |
+| BytePlus V2.0 工作流 | 使用 `StartExecution`/`GetExecution` 时由 V2 Worker 调用；不得由 Node.js V1.0 代替 |
+| BytePlus V1.0 回退接口 | `UploadMediaByUrl`、`QueryUploadTaskInfo`、上传和播放接口按路由表使用 V1.0；记录 API、版本和调用服务 |
+| BytePlus SDK 迁移 | 每次发布前核对 V2.0 supported APIs 清单；已迁移接口不得继续双写或随机回退 |
 | 已审核且 Listed 的测试剧集 | 仅在播放器资格、当前 Player Reference、参数和 SDK 能力均已确认后，由当前适配器创建官方播放器并正常首帧播放；未确认时不得标记为生产通过 |
 | 草稿、审核中或未 Listed 剧集 | 后端不返回播放信息，VePlayer 不创建 |
 | TikTok 旧客户端 | 按当前官方能力矩阵执行：播放成功或明确降级提示；不得因旧版示例固定生成 `play_auth_token` |
@@ -2698,7 +2814,7 @@ Middle Funnel 未纳入本次范围 -> 仅保留扩展接口，不阻塞 V1
 | M1 | 用户端产品骨架 | 首页五类板块、详情互动、搜索、个人中心、多语言页面 |
 | M2 | 后端与数据 | Fastify、Prisma、首页/内容/互动/搜索/语言/进度 API |
 | M3 | 登录与播放适配 | 匿名浏览与认证分层、TTMinis 初始化；仅在播放器资格和当前 Player Reference 确认后接入真实官方播放器，否则完成适配器、Mock 和阻断态 |
-| M4 | 媒资闭环 | BytePlus 绑定、Open API 上传任务、Worker、审核、上架状态同步 |
+| M4 | 媒资闭环 | BytePlus 绑定、V1.0 上传/查询任务、按需启用 V2.0 `StartExecution`/`GetExecution` Worker、审核、上架状态同步 |
 | M5 | 广告变现 | 仅在 IAA 合同、Organization 审批和 Placement 满足条件后接入真实 Rewarded 解锁与 Interstitial 频控；此前使用 Mock/降级 |
 | M6 | 数据与运营 | 首页配置、题材管理、收益导入、搜索/互动/播放质量看板 |
 | M7 | TikTok 调试与证据 | minis dev、IAA mock、扫码真机验证、播放器参数/事件/版本证据、地区过滤和失败降级记录 |
@@ -2736,11 +2852,11 @@ M8：代码资产通过审核，且所有适用的平台、商业、地区和投
 10. 实现 `/home` 的首屏聚合、缓存、游标 feed、线上状态/地区过滤和无网络降级。
 11. 实现详情页点赞/收藏/分享、搜索无结果兜底、个人中心历史/收藏夹和 locale 切换；验证静默登录失败后的可恢复路径。
 12. 建立 HTTPS 测试 API 域名，填入 TikTok Portal Trusted domains；加载 `TTMinis` SDK，完成公开访问、静默登录、后端 code 交换和强制认证动作重试。
-13. 在 Portal 绑定 BytePlus 账号/空间，按当前官方媒资流程上传一条测试视频，保存平台返回的最小必要标识；不要预设 `sourceUrl`、固定 API path 或永久字段。
+13. 在 Portal 绑定 BytePlus 账号/空间，建立 BytePlus OpenAPI 版本路由表：`StartExecution`/`GetExecution` 优先走 V2.0；上传、上传任务查询和播放等 V2.0 尚未覆盖的能力走 Node.js V1.0；再按当前官方媒资流程上传一条测试视频，保存平台返回的最小必要标识。
 14. 用当前官方图片/专辑/剧集流程创建测试内容，完成审核、online version/Listed（如适用）并同步平台状态。
 15. 仅在第 1 步播放器资格确认后，按当前 Player Reference 接入真实官方播放器，跑通已批准测试内容、进度恢复和连续 5 集播放；否则保留阻断态和 Mock。
 16. 仅在第 2 步广告资格满足后接入 Rewarded Ad 解锁、Interstitial 频控和失败降级；Placement 非 Active 时验证不错误解锁和不阻塞基础观看。
-17. 建立媒资上传 Worker、内容审核和上线状态同步；补齐首页配置、翻译维护、收益报表导入和数据看板。
+17. 建立 Node.js V1.0 媒资上传 Worker；如使用 `StartExecution`/`GetExecution`，再建立独立的 Go/Python/Java V2 Worker，并完成内容审核和上线状态同步；补齐首页配置、翻译维护、收益报表导入和数据看板。
 18. 执行单元测试、集成测试、`minis dev` 和 IAA Mock，完成不同版本 TikTok 真机测试，并归档播放器、广告、地区和失败降级证据。
 19. 执行 `pnpm build`、`minis build`，上传 ZIP 预览，按验收清单和审核反馈修复。
 20. 复核所有适用 P0 门禁后再提交生产发布；未完成的 Middle Funnel、Smart+ API 或短剧商品库 API 只保留扩展接口，不阻塞也不冒充 V1 已完成。
@@ -2828,6 +2944,12 @@ M8：代码资产通过审核，且所有适用的平台、商业、地区和投
 - [Media Asset API Reference](https://developers.tiktok.com/docs/zh-Hans/media-asset-api-reference)
 - [TikTok Minis Player（VePlayer）](https://developers.tiktok.com/docs/zh-Hans/minis-player)
 - [Release Your Mini Drama](https://developers.tiktok.com/docs/zh-Hans/tiktok-minis-release-your-mini-app)
+- [BytePlus VOD Server SDK 总览](https://docs.byteplus.com/en/docs/byteplus-vod/docs-server-sdk-overview)
+- [BytePlus VOD Server SDK V2.0](https://docs.byteplus.com/en/docs/byteplus-vod/docs-server-sdk-v2)
+- [BytePlus VOD Node.js SDK（V1.0）](https://docs.byteplus.com/en/docs/byteplus-vod/docs-nodejs-sdk?type=preview)
+- [BytePlus VOD V2.0 Go SDK](https://github.com/byteplus-sdk/byteplus-go-sdk-v2)
+- [BytePlus VOD V2.0 Python SDK](https://github.com/byteplus-sdk/byteplus-python-sdk-v2)
+- [BytePlus VOD V2.0 Java SDK](https://github.com/byteplus-sdk/byteplus-java-sdk-v2)
 
 ---
 
@@ -2863,10 +2985,12 @@ Smart+ API、短剧商品库 API 的后续计划或明确不纳入结论
 首发验收账号、测试设备、TikTok 客户端版本和弱网测试条件
 ```
 
-私密信息只由部署人员写入服务器环境变量；BytePlus AK/SK 若需要绑定，只在 TikTok Developer Portal 的安全绑定流程中提交，不复制到前端或应用服务器：
+私密信息只由部署人员写入服务器环境变量。BytePlus AK/SK 如需直接调用 Server SDK/OpenAPI，只注入对应的后端服务，不复制到前端：
 
 ```text
 TikTok Client Secret
 数据库密码
 JWT_SECRET
+BytePlus V1.0 AK/SK（仅 Node.js API/Worker）
+BytePlus V2.0 AK/SK（仅 Go/Python/Java V2 Worker）
 ```

@@ -14,6 +14,7 @@ export type EpisodeSummary = {
 
 export type PlayInfo = {
   albumId: string;
+  localEpisodeId: string;
   episodeId: string;
   vid: string;
   playAuthToken: string | null;

@@ -1,4 +1,44 @@
-export function LegalPage({ type }: { type: 'privacy' | 'terms' }) {
-  const privacy = type === 'privacy';
-  return <article className="legal"><p className="eyebrow">BREEZEREELS</p><h1>{privacy ? 'Privacy Policy' : 'Terms of Service'}</h1><p>This development placeholder must be replaced with counsel-approved legal text and a public HTTPS URL before TikTok submission.</p></article>;
+import { ArrowLeft, Mail, ScrollText, ShieldCheck } from 'lucide-react';
+import { useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { legalDocuments, type LegalDocumentType } from './legal-docs';
+import styles from './LegalPage.module.css';
+
+export function LegalPage({ type }: { type: LegalDocumentType }) {
+  const legalDocument = legalDocuments[type];
+  const related = type === 'privacy' ? { path: '/terms', label: 'Terms of Service', icon: ScrollText } : { path: '/privacy', label: 'Privacy Policy', icon: ShieldCheck };
+  const RelatedIcon = related.icon;
+
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+    globalThis.document.title = `${legalDocument.title} | QuicKReeL`;
+  }, [legalDocument.title]);
+
+  return <article className={styles.page}>
+    <header className={styles.hero}>
+      <div className={styles.heroTop}>
+        <Link className={styles.backLink} to="/profile"><ArrowLeft size={17} aria-hidden="true" /> Back</Link>
+        <span className={styles.brandMark}>QR</span>
+      </div>
+      <p className="eyebrow">{legalDocument.eyebrow}</p>
+      <h1>{legalDocument.title}</h1>
+      <div className={styles.heroLayout}>
+        <div className={styles.intro} dangerouslySetInnerHTML={{ __html: legalDocument.introHtml }} />
+        <dl className={styles.metaPanel} dangerouslySetInnerHTML={{ __html: legalDocument.metaHtml }} />
+      </div>
+      <div className={styles.actions}>
+        <Link className={styles.actionLink} to={related.path}><RelatedIcon size={16} aria-hidden="true" /> {related.label}</Link>
+        <a className={styles.primaryAction} href="mailto:caijiarong@xuyins.com"><Mail size={16} aria-hidden="true" /> Contact</a>
+      </div>
+      <div className={styles.markets} aria-label="Supported regional sections" dangerouslySetInnerHTML={{ __html: legalDocument.marketsHtml }} />
+    </header>
+
+    <div className={styles.readerShell}>
+      <aside className={styles.toc} aria-label={`${legalDocument.title} contents`}>
+        <div className={styles.tocTitle}>Contents</div>
+        <nav dangerouslySetInnerHTML={{ __html: legalDocument.tocHtml }} />
+      </aside>
+      <section className={styles.document} dangerouslySetInnerHTML={{ __html: legalDocument.contentHtml }} />
+    </div>
+  </article>;
 }

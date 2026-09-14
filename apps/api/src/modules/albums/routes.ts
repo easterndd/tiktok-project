@@ -1,9 +1,10 @@
-import type { AlbumDetail, AlbumSummary, CursorPage, EpisodeSummary } from '@breezereels/shared-types';
+import type { AlbumDetail, AlbumSummary, CursorPage, EpisodeSummary } from '@quickreels/shared-types';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { optionalUser } from '../../plugins/optional-auth';
 import { isEpisodeFree } from '../../lib/content-access';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
+import { isAlbumVisibleInCountry, requestCountry } from '../../lib/content-visibility';
 
 const params = z.object({ albumId: z.string().min(1).max(128) });
 const localeQuery = z.object({ locale: publicLocaleSchema.default(defaultLocale) });
@@ -26,6 +27,7 @@ function toSummary(album: { id: string; title: string; description: string; cove
 export async function registerAlbumRoutes(app: FastifyInstance) {
   app.get('/albums', async (request): Promise<CursorPage<AlbumSummary>> => {
     const { locale } = localeQuery.parse(request.query);
+    const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const albums = await app.prisma.album.findMany({
       where: { status: 'ONLINE' },
       orderBy: { updatedAt: 'desc' },
@@ -36,12 +38,13 @@ export async function registerAlbumRoutes(app: FastifyInstance) {
         genres: { include: { genre: { select: { slug: true } } } }
       }
     });
-    return { items: albums.map((album) => toSummary(album, locale)), nextCursor: null };
+    return { items: albums.filter((album) => isAlbumVisibleInCountry(album.regions, country)).map((album) => toSummary(album, locale)), nextCursor: null };
   });
 
   app.get('/albums/:albumId', async (request, reply): Promise<AlbumDetail> => {
     const { albumId } = params.parse(request.params);
     const { locale } = localeQuery.parse(request.query);
+    const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const user = await optionalUser(request);
     const album = await app.prisma.album.findFirst({
       where: { id: albumId, status: 'ONLINE' },
@@ -53,7 +56,7 @@ export async function registerAlbumRoutes(app: FastifyInstance) {
         genres: { include: { genre: { select: { slug: true } } } }
       }
     });
-    if (!album) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Album not found.', requestId: request.id } }) as never;
+    if (!album || !isAlbumVisibleInCountry(album.regions, country)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Album not found.', requestId: request.id } }) as never;
     const regions = Array.isArray(album.regions) ? album.regions.filter((value: unknown): value is string => typeof value === 'string') : null;
     return {
       ...toSummary(album, locale),
@@ -69,9 +72,10 @@ export async function registerAlbumRoutes(app: FastifyInstance) {
   app.get('/albums/:albumId/episodes', async (request, reply): Promise<{ items: EpisodeSummary[] }> => {
     const { albumId } = params.parse(request.params);
     const { locale } = localeQuery.parse(request.query);
+    const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const user = await optionalUser(request);
-    const exists = await app.prisma.album.findFirst({ where: { id: albumId, status: 'ONLINE' }, select: { id: true } });
-    if (!exists) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Album not found.', requestId: request.id } }) as never;
+    const exists = await app.prisma.album.findFirst({ where: { id: albumId, status: 'ONLINE' }, select: { id: true, regions: true } });
+    if (!exists || !isAlbumVisibleInCountry(exists.regions, country)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Album not found.', requestId: request.id } }) as never;
     const album = await app.prisma.album.findFirst({ where: { id: albumId, status: 'ONLINE' }, select: { accessConfig: true } });
     const episodes = await app.prisma.episode.findMany({
       where: { albumId, status: 'ONLINE' },

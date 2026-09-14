@@ -3,8 +3,11 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.production.example
 coverage/
 *.log
+.pnpm-*.out
+.pnpm-*.err
 .pnpm-store/
 apps/*/generated/
 .codegraph/

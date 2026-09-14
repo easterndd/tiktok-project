@@ -1,4 +1,4 @@
-import type { AlbumDetail, EpisodeSummary, InteractionResponse, ShareResponse } from '@breezereels/shared-types';
+import type { AlbumDetail, EpisodeSummary, InteractionResponse, ShareResponse } from '@quickreels/shared-types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Bookmark, Heart, Play, RefreshCw, Share2, Star } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -23,7 +23,10 @@ export function AlbumPage() {
   const album = useQuery({ queryKey: ['album', albumId, locale], queryFn: () => apiClient.get<AlbumDetail>(`/albums/${albumId}?locale=${encodeURIComponent(locale)}`) });
   const episodes = useQuery({ queryKey: ['episodes', albumId, locale], queryFn: () => apiClient.get<{ items: EpisodeSummary[] }>(`/albums/${albumId}/episodes?locale=${encodeURIComponent(locale)}`) });
   const mutateInteraction = useMutation({
-    mutationFn: ({ action, active }: { action: 'like' | 'favorite'; active: boolean }) => apiClient.put<InteractionResponse>(`/albums/${albumId}/${action}`, { active }),
+    mutationFn: async ({ action, active }: { action: 'like' | 'favorite'; active: boolean }) => {
+      if (!getSessionToken()) await loginWithTikTok();
+      return apiClient.put<InteractionResponse>(`/albums/${albumId}/${action}`, { active });
+    },
     onSuccess: (state) => queryClient.setQueryData<AlbumDetail>(['album', albumId, locale], (current) => current ? { ...current, likeCount: state.likeCount, favoriteCount: state.favoriteCount, shareCount: state.shareCount, userState: { liked: state.liked, favorited: state.favorited } } : current)
   });
   const share = useMutation({
@@ -58,6 +61,7 @@ export function AlbumPage() {
     </header>
     {(unlock.isPending || mutateInteraction.isPending || share.isPending) && <div className={styles.inlineStatus}><RefreshCw size={14} aria-hidden="true" /> {t(locale, 'syncing')}</div>}
     {unlock.isError && <div className={styles.errorStatus}>{unlock.error instanceof Error ? unlock.error.message : t(locale, 'unlockFailed')}</div>}
+    {mutateInteraction.isError && <div className={styles.errorStatus}>{mutateInteraction.error instanceof Error ? mutateInteraction.error.message : t(locale, 'unavailable')}</div>}
     {detail.tags?.length ? <div className={styles.tags}>{detail.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
     {componentIsEnabled(ui, 'ALBUM_DESCRIPTION') && <section className={styles.about}><h2>{t(locale, 'about')}</h2><p>{detail.description}</p></section>}
     <section className={styles.episodes}><div className={styles.sectionHeader}><h2>{t(locale, 'episodes')}</h2><span>{episodes.data?.items.length ?? 0} / {detail.episodeCount}</span></div><EpisodeList albumId={albumId} episodes={episodes.data?.items ?? []} onLocked={(episode) => unlock.mutate(episode)} /></section>

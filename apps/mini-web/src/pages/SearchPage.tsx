@@ -1,4 +1,4 @@
-import type { CursorPage, Genre, SearchResponse } from '@breezereels/shared-types';
+import type { CursorPage, Genre, SearchResponse } from '@quickreels/shared-types';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Search as SearchIcon, SlidersHorizontal, X } from 'lucide-react';
 import { useEffect, useState } from 'react';

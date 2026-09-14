@@ -1,9 +1,10 @@
-import type { HomeResponse, Locale } from '@breezereels/shared-types';
+import type { HomeResponse, Locale } from '@quickreels/shared-types';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { optionalUser } from '../../plugins/optional-auth';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { defaultUiComponents } from '../ui/routes';
+import { isAlbumVisibleInCountry, requestCountry } from '../../lib/content-visibility';
 
 const querySchema = z.object({ locale: publicLocaleSchema.default(defaultLocale) });
 
@@ -19,6 +20,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
   app.get('/home', async (request): Promise<HomeResponse> => {
     const { locale } = querySchema.parse(request.query);
     const user = await optionalUser(request);
+    const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const components = await app.prisma.uiComponent.findMany({ orderBy: { key: 'asc' } });
     const albums = await app.prisma.album.findMany({
       where: { status: 'ONLINE' },
@@ -30,7 +32,8 @@ export async function registerHomeRoutes(app: FastifyInstance) {
         genres: { include: { genre: { select: { slug: true } } } }
       }
     });
-    const summaries = albums.map((album) => ({
+    const visibleAlbums = albums.filter((album) => isAlbumVisibleInCountry(album.regions, country));
+    const summaries = visibleAlbums.map((album) => ({
       id: album.id,
       title: translatedText(album.translations, locale, 'title') ?? album.title,
       description: translatedText(album.translations, locale, 'description') ?? album.description,
@@ -79,7 +82,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
     });
     const configured: HomeResponse['blocks'] = [];
     for (const block of configuredBlocks) {
-      const onlineItems = block.items.filter((item) => item.album?.status === 'ONLINE');
+      const onlineItems = block.items.filter((item) => item.album?.status === 'ONLINE' && isAlbumVisibleInCountry(item.album?.regions, country));
       if (block.type === 'CAROUSEL') {
         configured.push({
           type: 'CAROUSEL',
@@ -125,7 +128,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
       blocks.unshift({
         type: 'CONTINUE_WATCHING',
         title: 'Continue watching',
-        items: progress.map((item) => ({
+        items: progress.filter((item) => isAlbumVisibleInCountry(item.episode.album.regions, country)).map((item) => ({
           albumId: item.episode.albumId,
           episodeId: item.episodeId,
           episodeNo: item.episode.episodeNo,

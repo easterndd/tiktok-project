@@ -6,6 +6,9 @@ const environment = z.object({
   HOST: z.string().default('0.0.0.0'),
   DATABASE_URL: z.string().url(),
   API_CORS_ORIGIN: z.string().default('http://localhost:5173,http://localhost:5174'),
+  // Enable only when the public API is behind a proxy that removes client
+  // supplied X-Geo-Country and writes a verified ISO 3166-1 alpha-2 value.
+  TRUST_GEO_COUNTRY_HEADER: z.coerce.boolean().default(false),
   JWT_SECRET: z.string().min(32),
   TIKTOK_CLIENT_KEY: z.string().min(1),
   TIKTOK_CLIENT_SECRET: z.string().min(1),
@@ -19,6 +22,9 @@ const environment = z.object({
   BYTEPLUS_ACCOUNT_ID: z.string().min(1),
   BYTEPLUS_SPACE_NAME: z.string().min(1),
   BYTEPLUS_REGION: z.string().min(1),
+  BYTEPLUS_ACCESS_KEY: z.string().min(1).optional(),
+  BYTEPLUS_SECRET_KEY: z.string().min(1).optional(),
+  BYTEPLUS_VOD_ENDPOINT: z.string().url().default('https://vod.byteplusapi.com'),
   UPLOAD_WORKER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
   UPLOAD_MAX_RETRIES: z.coerce.number().int().min(0).max(20).default(5)
 });

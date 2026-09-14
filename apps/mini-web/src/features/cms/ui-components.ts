@@ -1,4 +1,4 @@
-import type { UiComponent, UiComponentKey } from '@breezereels/shared-types';
+import type { UiComponent, UiComponentKey } from '@quickreels/shared-types';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../lib/api-client';
 import { defaultUiComponents } from './defaults';

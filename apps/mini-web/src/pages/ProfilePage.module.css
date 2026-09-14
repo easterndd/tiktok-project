@@ -30,4 +30,6 @@
 .settingRow small { color: var(--muted); font-size: 11px; }
 .settingRow select { min-height: 36px; padding: 0 8px; color: var(--text); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
 .settingRow input[type="checkbox"] { width: 19px; height: 19px; accent-color: var(--pink); }
+.linkRow { text-decoration: none; }
+.linkRow > svg { flex: 0 0 auto; color: var(--faint); }
 @media (max-width: 560px) { .profileHero { grid-template-columns: 48px minmax(0, 1fr); padding: 16px; } .avatar { width: 48px; height: 48px; border-radius: 14px; } .signIn { grid-column: 1 / -1; width: 100%; } .favoriteGrid { grid-template-columns: 1fr; } }

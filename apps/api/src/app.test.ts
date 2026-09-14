@@ -11,6 +11,7 @@ const env: Env = {
   HOST: '127.0.0.1',
   DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
   API_CORS_ORIGIN: 'http://localhost:5173',
+  TRUST_GEO_COUNTRY_HEADER: true,
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters',
   TIKTOK_CLIENT_KEY: 'test-client-key',
   TIKTOK_CLIENT_SECRET: 'test-client-secret',
@@ -24,6 +25,9 @@ const env: Env = {
   BYTEPLUS_ACCOUNT_ID: 'test-account',
   BYTEPLUS_SPACE_NAME: 'test-space',
   BYTEPLUS_REGION: 'test-region',
+  BYTEPLUS_ACCESS_KEY: undefined,
+  BYTEPLUS_SECRET_KEY: undefined,
+  BYTEPLUS_VOD_ENDPOINT: 'https://vod.byteplusapi.com',
   UPLOAD_WORKER_INTERVAL_MS: 30_000,
   UPLOAD_MAX_RETRIES: 5
 };
@@ -35,7 +39,7 @@ async function createPrismaStub() {
     description: 'A test drama.',
     coverUrl: 'https://example.com/cover.jpg',
     language: 'en',
-    regions: null,
+    regions: ['US'],
     status: 'ONLINE',
     updatedAt: new Date('2026-09-10T00:00:00.000Z'),
     tiktokAlbumId: 'tiktok-album-1',
@@ -165,12 +169,32 @@ describe('QuicK ReeLS API', () => {
   it('serves public home and search without authentication', async () => {
     const app = await createTestApp();
     apps.push(app);
-    const home = await app.inject({ method: 'GET', url: '/api/v1/home' });
+    const home = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { 'x-geo-country': 'US' } });
     assert.equal(home.statusCode, 200);
     assert.equal(home.json().feed.items[0].title, 'Test Drama');
 
     const search = await app.inject({ method: 'GET', url: '/api/v1/search?q=test' });
     assert.equal(search.statusCode, 200);
+  });
+
+  it('does not expose regional content when the trusted country does not match', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const headers = { 'x-geo-country': 'CA' };
+
+    const [home, albums, detail, episodes, search] = await Promise.all([
+      app.inject({ method: 'GET', url: '/api/v1/home', headers }),
+      app.inject({ method: 'GET', url: '/api/v1/albums', headers }),
+      app.inject({ method: 'GET', url: '/api/v1/albums/album-1', headers }),
+      app.inject({ method: 'GET', url: '/api/v1/albums/album-1/episodes', headers }),
+      app.inject({ method: 'GET', url: '/api/v1/search?q=test', headers })
+    ]);
+
+    assert.deepEqual(home.json().feed.items, []);
+    assert.deepEqual(albums.json().items, []);
+    assert.equal(detail.statusCode, 404);
+    assert.equal(episodes.statusCode, 404);
+    assert.deepEqual(search.json().items, []);
   });
 
   it('rejects authenticated interactions without a user token', async () => {
@@ -238,7 +262,7 @@ describe('QuicK ReeLS API', () => {
   it('requires isEnded and makes rewarded unlock idempotent', async () => {
     const app = await createTestApp();
     apps.push(app);
-    const authorization = { authorization: `Bearer ${await token(app, 'user')}` };
+    const authorization = { authorization: `Bearer ${await token(app, 'user')}`, 'x-geo-country': 'US' };
     const incomplete = await app.inject({
       method: 'POST',
       url: '/api/v1/episodes/episode-1/reward-unlock',
@@ -269,7 +293,7 @@ describe('QuicK ReeLS API', () => {
     const response = await app.inject({
       method: 'PUT',
       url: '/api/v1/me/watch-progress',
-      headers: { authorization: `Bearer ${await token(app, 'user')}` },
+      headers: { authorization: `Bearer ${await token(app, 'user')}`, 'x-geo-country': 'US' },
       payload: { episodeId: 'episode-1', positionMs: 100_001, durationMs: 100_000, completed: false }
     });
     assert.equal(response.statusCode, 400);

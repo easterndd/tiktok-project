@@ -5,12 +5,18 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
+    "build:minis:sandbox": "ttdx minis build --sandbox",
+    "build:minis": "ttdx minis build --prod",
+    "check:minis:local": "ttdx minis check --local",
+    "check:minis:output": "ttdx minis check --output",
+    "check:release": "node scripts/check-release.mjs",
+    "debug:minis": "ttdx minis debug",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "tsc --noEmit -p tsconfig.app.json",
     "test": "pnpm lint"
   },
   "dependencies": {
-    "@breezereels/shared-types": "workspace:*",
+    "@quickreels/shared-types": "workspace:*",
     "@tanstack/react-query": "^5.90.12",
     "lucide-react": "^0.468.0",
     "react": "^19.2.0",

@@ -38,6 +38,11 @@ enum UploadStatus {
   FAILED
 }
 
+enum UploadSourceType {
+  URL
+  FILE
+}
+
 enum AdType {
   REWARDED
   INTERSTITIAL
@@ -380,6 +385,8 @@ model UploadJob {
   episodeId       String
   providerJobId   String?      @unique
   sourceUrl       String
+  sourceType      UploadSourceType @default(URL)
+  sourceName      String?
   sourceExpiresAt DateTime?
   status          UploadStatus @default(PENDING)
   errorMessage    String?

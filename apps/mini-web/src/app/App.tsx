@@ -19,9 +19,9 @@ export function App() {
 
   return <div className={styles.appShell}>
     {componentIsEnabled(ui, 'APP_TOPBAR') && <header className={styles.topbar}>
-      <button className={styles.brandButton} onClick={() => navigate('/')} aria-label="QuicK ReeLS home">
+      <button className={styles.brandButton} onClick={() => navigate('/')} aria-label="QuicKReeL home">
         <span className={styles.brandMark}><Film size={18} aria-hidden="true" /></span>
-        <span>QuicK <span>ReeLS</span></span>
+        <span>QuicK<span>ReeL</span></span>
       </button>
       <div className={styles.topbarActions}>
         <button className={styles.topIcon} onClick={() => navigate('/search')} aria-label={t(locale, 'search')} title={t(locale, 'search')}><Search size={19} aria-hidden="true" /></button>
