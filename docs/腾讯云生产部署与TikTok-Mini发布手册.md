@@ -298,6 +298,8 @@ VITE_INTERSTITIAL_AD_UNIT_ID=<Interstitial Placement ID，功能完成后再填>
 
 仅适合 Preview/早期测试。PostgreSQL 容器不使用 `ports: "5432:5432"`，仅加入内部 Docker network，并配置持久化 volume 与异机备份。
 
+当前腾讯云 CVM 的可执行步骤见 [自建 PostgreSQL 部署手册](腾讯云CVM自建PostgreSQL部署步骤.md)。该方案使用独立的 `compose.production.self-hosted.yml`，不会修改现有托管数据库 Compose 文件。
+
 ### 6.3 迁移原则
 
 在服务器上的生产 Compose 中，只执行：

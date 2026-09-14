@@ -4,6 +4,7 @@ dist/
 .env.*
 !.env.example
 !.env.production.example
+!.env.production.self-hosted.example
 coverage/
 *.log
 .pnpm-*.out
