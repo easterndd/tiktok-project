@@ -234,6 +234,6 @@ export async function startUploadWorker() {
   process.once('SIGTERM', () => void shutdown());
 }
 
-if (process.argv[1]?.endsWith('tiktok-short-drama.worker.ts')) {
+if (/tiktok-short-drama\.worker\.(?:ts|js)$/.test(process.argv[1] ?? '')) {
   void startUploadWorker();
 }
