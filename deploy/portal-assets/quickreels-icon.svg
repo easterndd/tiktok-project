@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="QuicK ReeLS app icon">
+  <defs>
+    <radialGradient id="bg-glow" cx="31%" cy="21%" r="86%">
+      <stop offset="0%" stop-color="#24345f"/>
+      <stop offset="42%" stop-color="#101827"/>
+      <stop offset="100%" stop-color="#05070d"/>
+    </radialGradient>
+    <linearGradient id="ribbon-a" x1="214" y1="286" x2="800" y2="735" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff6b8a"/>
+      <stop offset="45%" stop-color="#ff285f"/>
+      <stop offset="100%" stop-color="#7cf7ff"/>
+    </linearGradient>
+    <linearGradient id="ribbon-b" x1="302" y1="770" x2="768" y2="238" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#9013ff"/>
+      <stop offset="52%" stop-color="#ff477e"/>
+      <stop offset="100%" stop-color="#ffd166"/>
+    </linearGradient>
+    <filter id="soft-shadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="30" stdDeviation="34" flood-color="#000000" flood-opacity=".42"/>
+    </filter>
+    <filter id="neon" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="16" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 1  0 1 0 0 .13  0 0 1 0 .38  0 0 0 .55 0"/>
+      <feBlend in2="SourceGraphic" mode="screen"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg-glow)"/>
+  <circle cx="248" cy="214" r="188" fill="#ff386d" opacity=".16"/>
+  <circle cx="812" cy="805" r="198" fill="#4de9ff" opacity=".13"/>
+  <circle cx="512" cy="512" r="338" fill="none" stroke="#ffffff" stroke-width="4" opacity=".07"/>
+  <circle cx="512" cy="512" r="260" fill="none" stroke="#ff4f7d" stroke-width="10" opacity=".16"/>
+  <g filter="url(#soft-shadow)">
+    <path d="M293 270c-54 31-73 100-42 154l134 232c31 54 100 73 154 42l160-92c54-31 73-100 42-154L607 220c-31-54-100-73-154-42l-160 92Z" fill="#090c15" opacity=".78"/>
+    <path d="M332 262c-36 21-48 67-27 103l121 210c21 36 67 48 103 27l128-74c36-21 48-67 27-103L563 215c-21-36-67-48-103-27l-128 74Z" fill="url(#ribbon-a)" opacity=".96"/>
+    <path d="M342 680c-28 16-38 52-22 80s52 38 80 22l290-168c28-16 38-52 22-80s-52-38-80-22L342 680Z" fill="url(#ribbon-b)" opacity=".97"/>
+    <path d="M405 328v368l284-184L405 328Z" fill="#ffffff" opacity=".95"/>
+    <path d="M446 402v220l171-110-171-110Z" fill="#101827"/>
+  </g>
+  <g filter="url(#neon)" opacity=".86">
+    <path d="M238 650c66 118 188 180 317 167 105-11 196-70 255-164" fill="none" stroke="#7cf7ff" stroke-width="20" stroke-linecap="round"/>
+    <path d="M225 385c50-104 152-173 270-181 111-8 216 39 284 126" fill="none" stroke="#ff5d82" stroke-width="16" stroke-linecap="round"/>
+  </g>
+</svg>
