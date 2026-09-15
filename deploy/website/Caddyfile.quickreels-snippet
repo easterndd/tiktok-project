@@ -1,0 +1,9 @@
+# Add these lines inside the existing evergreenprosper.com site block,
+# before the final file_server directive.
+@quickreelsPrivacy path /quickreels/privacy
+rewrite @quickreelsPrivacy /quickreels/privacy/index.html
+
+@quickreelsTerms path /quickreels/terms
+rewrite @quickreelsTerms /quickreels/terms/index.html
+
+header /quickreels/* Cache-Control "public, max-age=300"

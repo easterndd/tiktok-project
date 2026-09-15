@@ -60,6 +60,21 @@ https://evergreenprosper.com/quickreels/terms
 
 这样既不增加域名，又能为 TikTok Portal 的 Basic Information 提供稳定、公开、HTTPS 的隐私政策和服务条款链接。
 
+本仓库会从 Mini 前端使用的同一份法律文本导出官网静态页：
+
+```bash
+pnpm --filter mini-web export:legal
+```
+
+导出结果位于：
+
+```text
+deploy/website/quickreels/privacy/index.html
+deploy/website/quickreels/terms/index.html
+```
+
+为避免 TikTok Portal 填写的无尾斜杠 URL 发生 404，应把 `deploy/website/Caddyfile.quickreels-snippet` 中的 rewrite 规则加入现有 `evergreenprosper.com` 站点块，并放在最终 `file_server` 指令之前。
+
 ### 1.1 域名分工
 
 | 域名 | DNS | 对外用途 | 是否填入 TikTok Trusted Domains |
@@ -458,9 +473,65 @@ pnpm --filter mini-web check:release
 
 1. 确认当前 App 为 QuicK ReeLS，App ID 为 `7681547859254429717`；
 2. 填写名称、图标、简介、目标国家/地区；
-3. 填写公开 HTTPS 的隐私政策和服务条款 URL；
+3. 填写公开 HTTPS 的隐私政策和服务条款 URL：
+   - `https://evergreenprosper.com/quickreels/privacy`
+   - `https://evergreenprosper.com/quickreels/terms`
 4. 按目标市场完成企业验证和 Mini Drama 行业资质；
 5. IAA 上线前确认 Organization 已完成商业验证与广告能力审批。
+
+### 9.1.1 部署官网法律页
+
+在服务器执行以下步骤，将仓库导出的法律页放入现有官网，并让无尾斜杠路径可直接访问。
+
+```bash
+cd /opt/quickreels
+git pull --ff-only origin main
+
+# 如需重新生成，先确保服务器具备 pnpm 依赖；否则可直接使用仓库中的 deploy/website 目录。
+pnpm --filter mini-web export:legal
+
+# 先确认现有官网 Caddyfile 和站点根目录。
+sudo sed -n '1,180p' /opt/evergreenprosper-website/Caddyfile
+
+# 默认假设 /opt/evergreenprosper-website 是现有官网静态根目录。
+# 如果 Caddyfile 中 root 指向其它宿主机挂载目录，应把下面目标目录替换为那个 root。
+sudo mkdir -p /opt/evergreenprosper-website/quickreels
+sudo cp -a deploy/website/quickreels/. /opt/evergreenprosper-website/quickreels/
+```
+
+编辑 `/opt/evergreenprosper-website/Caddyfile`，在 `evergreenprosper.com` 站点块的最终 `file_server` 之前加入：
+
+```caddy
+@quickreelsPrivacy path /quickreels/privacy
+rewrite @quickreelsPrivacy /quickreels/privacy/index.html
+
+@quickreelsTerms path /quickreels/terms
+rewrite @quickreelsTerms /quickreels/terms/index.html
+
+header /quickreels/* Cache-Control "public, max-age=300"
+```
+
+保存后校验并重载 Caddy：
+
+```bash
+sudo docker exec evergreenprosper-website-web-1 \
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+sudo docker exec evergreenprosper-website-web-1 \
+  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+最后验证 Portal 要填写的两个 URL 不再返回 404：
+
+```bash
+curl -IL https://evergreenprosper.com/quickreels/privacy
+curl -IL https://evergreenprosper.com/quickreels/terms
+
+curl -L https://evergreenprosper.com/quickreels/privacy | grep -i "QuicK ReeLS Privacy Policy"
+curl -L https://evergreenprosper.com/quickreels/terms | grep -i "QuicK ReeLS Terms of Service"
+```
+
+预期结果：`curl -IL` 最终状态为 `HTTP/2 200`，页面内容能 grep 到对应标题。正式提交 TikTok 前，隐私政策和服务条款仍需由美国律师或合规人员审阅。
 
 ### 9.2 Development configuration
 

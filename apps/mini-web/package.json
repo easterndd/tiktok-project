@@ -10,6 +10,7 @@
     "check:minis:local": "ttdx minis check --local",
     "check:minis:output": "ttdx minis check --output",
     "check:release": "node scripts/check-release.mjs",
+    "export:legal": "node scripts/export-legal-pages.mjs",
     "debug:minis": "ttdx minis debug",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "tsc --noEmit -p tsconfig.app.json",
