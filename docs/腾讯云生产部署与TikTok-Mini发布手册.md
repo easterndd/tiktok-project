@@ -1,378 +1,218 @@
-# QuicK ReeLS：腾讯云生产部署与 TikTok Mini 发布手册
+# QuicK ReeLS 腾讯云生产部署与 TikTok Mini 发布手册
 
-**适用 App ID：** `7681547859254429717`
-**适用域名：** `evergreenprosper.com`
-**目标：** 不影响既有官网，在腾讯云服务器上新增 QuicK ReeLS API、运营后台和公开法律页面，并完成 TikTok Mini Preview 的前置条件。
+适用项目：QuicK ReeLS。
+现有官网：`evergreenprosper.com`。
+新增公网入口：`api.evergreenprosper.com`、`admin.evergreenprosper.com`。
+适用服务器：腾讯云 Ubuntu Docker 镜像，已有 Evergreen Prosper 官网 Caddy 容器。
 
-> 本手册不执行服务器、DNS、Portal 或证书变更；每一项会影响公网服务的操作都应在确认备份、维护窗口和回滚方案后由有服务器权限的人员执行。
+本手册覆盖两件相互独立的事：将 API、Worker 和运营后台部署到腾讯云；在 Windows 本机或 CI 构建并通过 TikTok Developer Portal 上传 Mini 包。**服务器部署不会自动发布 Mini 包。**
+
+> 本项目的用户端采用匿名访客身份，不要求 TikTok 登录。不要为用户端配置账户授权、回调地址或用户 token 刷新/撤销任务。
 >
-> 本项目当前的 `docker-compose.yml` 仅用于本地 PostgreSQL 开发，**不能原样用于生产环境**。生产部署前需要补充独立的生产 Compose、后台静态站构建和管理员初始化流程。
+> 所有会影响服务器、DNS、证书、Portal 的命令都应由有权限的运维人员在备份完成后执行。本文不授权在未核验的机器上直接操作。
 
----
-
-## 1. 推荐架构
-
-现有官网无需迁移。使用同一个公网 IP、不同 HTTPS 域名即可由现有 Caddy 正确分流：
+## 1. 架构与安全边界
 
 ```text
 用户 / TikTok Mini
         |
         | HTTPS
         v
-腾讯云 CVM / Lighthouse（现有公网 IP）
+腾讯云 CVM（同一公网 IP）
         |
-        +-- evergreenprosper.com
-        |     现有官网（保持不动）
-        |
-        +-- api.evergreenprosper.com
-        |     Caddy -> QuicK ReeLS Fastify API:3000
-        |
-        +-- admin.evergreenprosper.com
-              Caddy -> QuicK ReeLS 管理后台静态文件
+        +-- evergreenprosper.com       -> 既有官网和法律页面
+        +-- api.evergreenprosper.com   -> Caddy -> api:3000
+        +-- admin.evergreenprosper.com -> Caddy -> admin:80
 
-API / Worker / PostgreSQL 仅在私网 Docker 网络或 localhost 通信。
-3000、5432 不向公网开放。
+Docker 私网
+        api + worker + 托管 PostgreSQL（推荐）
+        或 api + worker + 内部 postgres（仅自建数据库方案）
 ```
 
-### 1.2 已确认的本机实际情况
+已有官网的 Caddy 容器应独占 `80/tcp`、`443/tcp`、`443/udp`。QuicK ReeLS 的 Compose 服务只使用 Docker 网络中的 `expose`，不向主机发布 `3000` 或 `5432`。不要安装宿主机 Nginx、Certbot 或第二个公网反向代理。
 
-本项目目标服务器当前已核验为：
+部署前以下信息必须以服务器实际输出为准，而不是假定：Caddy 容器名称、Caddyfile 宿主机路径、官网静态根目录以及外部 Docker 网络名。本文用下列当前预期值示例：
 
 ```text
-操作系统：Ubuntu
-公网 IP：43.172.66.90
-现有官网入口：Docker 容器 evergreenprosper-website-web-1
-入口软件：Caddy 2.11.4
 官网目录：/opt/evergreenprosper-website
 Caddyfile：/opt/evergreenprosper-website/Caddyfile
-公网端口：Caddy 容器独占 80/tcp、443/tcp、443/udp
-共享 Docker 网络：quickreels-proxy
+Caddy 容器：evergreenprosper-website-web-1
+共享网络：quickreels-proxy
 ```
 
-因此本机**不要安装宿主机 Nginx**，也不要让 QuicK ReeLS 的任何容器发布 80/443。Caddy 继续负责官网、两个新子域名的 HTTPS 和反向代理。
+## 2. 上线前检查
 
-对外法律页可优先放在已有官网：
+### 2.1 服务器与 Caddy
 
-```text
-https://evergreenprosper.com/quickreels/privacy
-https://evergreenprosper.com/quickreels/terms
-```
-
-这样既不增加域名，又能为 TikTok Portal 的 Basic Information 提供稳定、公开、HTTPS 的隐私政策和服务条款链接。
-
-本仓库会从 Mini 前端使用的同一份法律文本导出官网静态页：
+通过 SSH 登录服务器后先只读检查：
 
 ```bash
-pnpm --filter mini-web export:legal
+sudo ss -lntup | grep -E ':80|:443|:3000|:5432'
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}'
+docker network ls
+sudo sed -n '1,240p' /opt/evergreenprosper-website/Caddyfile
+df -h
+free -h
 ```
 
-导出结果位于：
+确认官网 Caddy 正常运行、`quickreels-proxy` 已存在或可由有权限人员创建，且没有其他服务占用 80/443。若容器名或目录不同，后续命令应统一替换为实际值。
 
-```text
-deploy/website/quickreels/privacy/index.html
-deploy/website/quickreels/terms/index.html
-```
+### 2.2 腾讯云安全组、UFW 与 DNS
 
-为避免 TikTok Portal 填写的无尾斜杠 URL 发生 404，应把 `deploy/website/Caddyfile.quickreels-snippet` 中的 rewrite 规则加入现有 `evergreenprosper.com` 站点块，并放在最终 `file_server` 指令之前。
+腾讯云安全组应为：
 
-### 1.1 域名分工
+| 用途 | 协议/端口 | 来源 |
+| --- | --- | --- |
+| SSH 运维 | TCP 22 | 固定办公公网 IP |
+| HTTP 与证书校验 | TCP 80 | `0.0.0.0/0`、`::/0` |
+| HTTPS | TCP 443 | `0.0.0.0/0`、`::/0` |
+| HTTP/3 | UDP 443 | `0.0.0.0/0`、`::/0` |
 
-| 域名 | DNS | 对外用途 | 是否填入 TikTok Trusted Domains |
-| --- | --- | --- | --- |
-| `evergreenprosper.com` | 保持现状 | 既有官网、法律页 | 仅当 Mini 直接请求它时才填写 |
-| `api.evergreenprosper.com` | 新增 A 记录 | Mini 用户端 API | 是，填 `https://api.evergreenprosper.com` |
-| `admin.evergreenprosper.com` | 新增 A 记录 | 内部运营后台 | 否 |
-
-TikTok Trusted Domains 只接受 HTTPS 域名，不填 URL path、端口或通配符。TikTok Mini 运行时会拒绝未登记域名的网络请求；官方上限为 20 个域名。
-
----
-
-## 2. 上线前必须决定的事项
-
-### 2.1 服务器地区与首发市场
-
-当前服务器在美国硅谷，技术上可以托管 API；服务器位置本身不会阻止 DNS、证书或 Mini Preview。
-
-但发布市场和数据位置必须一致：
-
-- **首发美国、英国或欧盟：** 在 TikTok Developer Portal 提交相应 Launch Approval；如启用 IAA 广告，需要按 Portal 指引披露主体、团队、支持人员、数据中心和第四方服务商，并可能进入 TPRM 与数据安全协议流程。
-- **首发非美国/欧盟/英国市场：** 仍应在隐私政策中如实说明美国服务器、数据库、日志和运维人员的访问位置；不要沿用“数据仅在新加坡”的旧表述。
-- **首发市场偏东南亚或东亚：** 建议将 API 和数据库部署到新加坡等靠近目标用户的地域，降低延迟并简化数据驻留说明。
-
-在没有美国发布批准前，不要把美国设为 Mini 的正式可用地区，也不要开启面向美国用户的 IAA。
-
-### 2.2 现有官网的技术栈
-
-登录服务器后先确认现有站点使用什么方式运行。以下命令只读取状态，不会改动服务：
+不开放 `2375`、`2376`、`3000`、`5432` 或 Caddy 管理端口。若启用了 UFW，先允许 SSH 再启用：
 
 ```bash
-sudo ss -ltnp | grep -E ':80|:443|:3000|:5432'
-sudo nginx -T
-docker ps
-docker compose ls
-```
-
-记录：
-
-1. 当前 Nginx 配置目录和 `server_name`；
-2. 当前官网的部署目录、容器名称或进程管理方式；
-3. 是否已有证书及证书管理方式；
-4. 操作系统版本、磁盘余量、内存余量；
-5. 当前备份策略。
-
-**不要**先替换 `/etc/nginx/nginx.conf`、不要停止 Nginx、不要执行会删除 Docker 卷的命令。
-
-### 2.3 推荐最低规格
-
-首期测试环境建议至少：
-
-| 项目 | 建议 |
-| --- | --- |
-| 系统 | Ubuntu 22.04 LTS 或 24.04 LTS |
-| CPU / 内存 | 2 vCPU / 4 GB 起步 |
-| 磁盘 | 60 GB SSD 起步，日志和备份另行规划 |
-| 数据库 | 优先腾讯云 PostgreSQL 托管实例；低成本测试可用私有 Docker PostgreSQL |
-| 备份 | 每日数据库逻辑备份 + 腾讯云快照/托管备份 |
-| 网络 | 仅开放 22、80、443；22 仅允许固定办公 IP |
-
----
-
-## 3. 腾讯云控制台操作
-
-### 3.1 安全组
-
-在 CVM/Lighthouse 对应实例的安全组中配置：
-
-| 方向 | 协议 / 端口 | 来源 | 用途 |
-| --- | --- | --- | --- |
-| 入站 | TCP 22 | 你的固定公网 IP | SSH 运维 |
-| 入站 | TCP 80 | `0.0.0.0/0`、`::/0` | HTTP 到 HTTPS 跳转、证书验证 |
-| 入站 | TCP 443 | `0.0.0.0/0`、`::/0` | 官网、API、后台 HTTPS |
-| 入站 | TCP 3000 | 不开放 | Fastify 仅本机/容器网络 |
-| 入站 | TCP 5432 | 不开放 | PostgreSQL 仅私网 |
-
-若服务器还启用了 UFW，规则应与安全组一致：
-
-```bash
-sudo ufw allow from <你的固定公网IP> to any port 22 proto tcp
+sudo ufw allow from <办公公网IP> to any port 22 proto tcp
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
+sudo ufw allow 443/udp
 sudo ufw enable
 sudo ufw status verbose
 ```
 
-启用 UFW 前先保持当前 SSH 会话不关闭，并确认 22 端口规则已生效。
-
-### 3.2 DNSPod / 云解析 DNS
-
-在 `evergreenprosper.com` 的解析区域新增：
+在 DNS 中新增以下 A 记录，根域名和既有 `www` 记录不修改：
 
 | 主机记录 | 类型 | 记录值 | TTL |
 | --- | --- | --- | --- |
-| `api` | A | 腾讯云服务器公网 IPv4 | 600 |
-| `admin` | A | 腾讯云服务器公网 IPv4 | 600 |
+| `api` | A | CVM 公网 IPv4 | 600 |
+| `admin` | A | CVM 公网 IPv4 | 600 |
 
-不修改根记录 `@` 或 `www`，现有官网不会因此变化。
+DNS 生效后验证：
 
-验证解析：
-
-```bash
-nslookup api.evergreenprosper.com
-nslookup admin.evergreenprosper.com
+```powershell
+Resolve-DnsName api.evergreenprosper.com
+Resolve-DnsName admin.evergreenprosper.com
 ```
 
-返回的地址必须是预期服务器公网 IP。未生效前不要申请证书或修改 TikTok Portal 配置。
+返回必须是目标 CVM IP。DNS、80/443 未正确就绪前，不要改 Caddy 或填写 Portal 的 Trusted Domain。
 
-### 3.3 备份与快照
+### 2.3 备份与发布记录
 
-在第一次安装新服务前：
-
-1. 在腾讯云控制台为云硬盘创建快照；
-2. 备份现有 Caddyfile 和网站目录；
-3. 记录当前运行中的容器镜像版本；
-4. 确认数据库备份可恢复。
-
-示例：
+首次部署和每次生产发布前，创建云硬盘快照并验证数据库备份。服务器上至少备份当前 Caddyfile 和容器状态：
 
 ```bash
-sudo mkdir -p /root/pre-quickreels-backup
-sudo cp -a /opt/evergreenprosper-website/Caddyfile /root/pre-quickreels-backup/Caddyfile
-sudo docker inspect evergreenprosper-website-web-1 > /root/pre-quickreels-backup/caddy-container-inspect.json
-docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' | tee /root/pre-quickreels-backup/docker-ps.txt
+sudo install -d -m 700 /root/pre-quickreels-backup
+sudo cp -a /opt/evergreenprosper-website/Caddyfile \
+  /root/pre-quickreels-backup/Caddyfile.$(date +%F-%H%M%S)
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' \
+  | sudo tee /root/pre-quickreels-backup/docker-ps.$(date +%F-%H%M%S).txt
 ```
 
----
+记录发布 Git commit、镜像构建时间、迁移版本和操作人。不要以 `docker compose down -v` 作为普通更新步骤，它会删除命名卷。
 
-## 4. 服务器基础环境
+## 3. 生产配置
 
-以下以 Ubuntu 为例。现有官网已使用 Docker 和 Caddy，不安装宿主机 Nginx，也不占用 Caddy 已使用的 80/443 端口。
+### 3.1 选择 Compose 文件
+
+| 数据库方案 | Compose 文件 | 用途 |
+| --- | --- | --- |
+| 腾讯云托管 PostgreSQL，推荐 | `compose.production.yml` | API、Worker、Admin；数据库经私网连接 |
+| 私有 Docker PostgreSQL | `compose.production.self-hosted.yml` | API、Worker、Admin、内部 postgres；仅早期测试或已有恢复方案时使用 |
+
+托管 PostgreSQL 应只允许 CVM 所在 VPC/安全组访问 5432，并启用自动备份和恢复演练。自建 PostgreSQL 不得配置 `ports: "5432:5432"`。
+
+### 3.2 密钥文件
+
+在服务器建立一个不随代码发布覆盖的配置目录：
 
 ```bash
-sudo apt update
-sudo apt install -y ca-certificates curl git ufw
-node --version
-pnpm --version
-docker --version
-docker compose version
-```
-
-项目构建当前使用 Node 24 和 pnpm 11。生产建议使用 Docker 多阶段镜像固定构建环境，不依赖服务器上临时安装的 Node 版本。
-
-建议目录：
-
-```text
-/opt/quickreels/
-  releases/                 # 每次发布一个不可变目录或 Git commit
-  shared/
-    api.production.env       # 仅服务器可读，权限 600
-    postgres/                # 若采用自建 PostgreSQL
-  backups/
-  current -> releases/<git-sha>
-```
-
-创建并限制密钥文件权限：
-
-```bash
-sudo install -d -m 750 -o $USER -g $USER /opt/quickreels/shared
+sudo install -d -m 750 -o "$USER" -g "$USER" /opt/quickreels/shared
 sudo touch /opt/quickreels/shared/api.production.env
 sudo chmod 600 /opt/quickreels/shared/api.production.env
 ```
 
-密钥只写入服务器文件、腾讯云密钥管理系统或 CI Secret；绝不放入 Git、前端 `.env`、Portal ZIP、截图或日志。
-
----
-
-## 5. 生产环境变量
-
-### 5.1 API 服务端
-
-`/opt/quickreels/shared/api.production.env` 的示意内容：
+`/opt/quickreels/shared/api.production.env` 示例：
 
 ```env
 NODE_ENV=production
 HOST=0.0.0.0
 PORT=3000
 
-DATABASE_URL=postgresql://<app_user>:<long_password>@<private_db_host>:5432/quickreels?schema=public
-JWT_SECRET=<至少32位、随机生成的值>
-
-# 不要填 localhost；实际 Mini Preview 的 Origin 需要先通过日志核对后再精确配置。
-API_CORS_ORIGIN=<TikTok Preview验证后的必要Origin>,https://admin.evergreenprosper.com
+DATABASE_URL=postgresql://<app_user>:<strong_password>@<private_db_host>:5432/quickreels?schema=public
+JWT_SECRET=<至少32位的随机值>
+API_CORS_ORIGIN=https://admin.evergreenprosper.com
 TRUST_GEO_COUNTRY_HEADER=false
 
-TIKTOK_CLIENT_KEY=<Portal Client Key>
-TIKTOK_CLIENT_SECRET=<Portal Client Secret>
-TIKTOK_OAUTH_TOKEN_URL=https://open.tiktokapis.com/v2/oauth/token/
-TIKTOK_USER_INFO_URL=https://open.tiktokapis.com/v2/user/info/?fields=open_id
+# 管理后台构建时会使用，属于公开浏览器配置。
+VITE_API_BASE_URL=https://api.evergreenprosper.com/api/v1
 
 USER_JWT_EXPIRES_IN=3600
 ADMIN_JWT_EXPIRES_IN=28800
+
+# 按实际启用的媒体供应商填写，密钥仅留在此文件。
+BYTEPLUS_ACCOUNT_ID=<account_id>
+BYTEPLUS_SPACE_NAME=<space_name>
+BYTEPLUS_REGION=ap-southeast-1
+BYTEPLUS_ACCESS_KEY=<backend_only_key>
+BYTEPLUS_SECRET_KEY=<backend_only_secret>
+BYTEPLUS_VOD_ENDPOINT=https://vod.byteplusapi.com
+API_PUBLIC_BASE_URL=https://api.evergreenprosper.com
+COVER_ASSET_STORAGE_DIR=/var/lib/quickreels/cover-assets
+UPLOAD_WORKER_INTERVAL_MS=30000
+UPLOAD_MAX_RETRIES=5
 ```
 
-说明：
+使用真实 TikTok Preview 请求日志确认 Mini 的 `Origin` 后，才将其精确追加到 `API_CORS_ORIGIN`（逗号分隔）。不要设置为 `*`。`TRUST_GEO_COUNTRY_HEADER` 只有在可信代理会覆盖该请求头时才可设为 `true`。
 
-- 不在此处写 `VITE_*` 变量；这些会被编译进 Mini 前端。
-- 不要使用 `API_CORS_ORIGIN=*` 和携带凭证的跨域组合。
-- `TRUST_GEO_COUNTRY_HEADER` 在没有可信 CDN/GeoIP 反向代理覆盖该 Header 前必须保持 `false`。
-- 当前项目需要补齐 TikTok OAuth token 的加密保存、refresh 与 revoke 后，才可将 OAuth 标为生产完成。
-- 生产管理员不要使用演示 seed 自动创建；应补充独立的管理员初始化/轮换流程。
+`JWT_SECRET`、数据库密码、BytePlus 密钥不得进入 Git、`VITE_*` 变量、Mini ZIP、截图或日志。`VITE_TIKTOK_CLIENT_KEY` 仅在本机/CI Mini 构建时设置，不属于服务器 API 密钥文件。
 
-### 5.2 Mini 前端构建变量
+## 4. 首次服务器部署
 
-只可放公开配置：
-
-```env
-VITE_API_BASE_URL=https://api.evergreenprosper.com/api/v1
-VITE_DEMO_MODE=false
-VITE_USE_MOCK_API=false
-VITE_ENABLE_MOCK_FALLBACK=false
-VITE_TIKTOK_CLIENT_KEY=<Portal Client Key>
-VITE_REWARDED_AD_UNIT_ID=<Rewarded Placement ID，未获批前不要填生产值>
-VITE_INTERSTITIAL_AD_UNIT_ID=<Interstitial Placement ID，功能完成后再填>
-```
-
-`TIKTOK_CLIENT_SECRET`、数据库密码、JWT Secret、任何第三方密钥都不能使用 `VITE_` 前缀。
-
----
-
-## 6. 数据库方案
-
-### 6.1 推荐：腾讯云托管 PostgreSQL
-
-优点：自动备份、私网访问、扩容、监控和恢复更可靠。
-
-要求：
-
-1. 数据库与 CVM 放在可私网访问的网络；
-2. 仅允许 CVM/容器所在安全组访问 5432；
-3. 创建专用业务用户，不使用超级管理员账号；
-4. 开启每日自动备份与恢复演练；
-5. 数据库连接串只保存到服务器密钥文件。
-
-### 6.2 低成本测试：服务器私有 Docker PostgreSQL
-
-仅适合 Preview/早期测试。PostgreSQL 容器不使用 `ports: "5432:5432"`，仅加入内部 Docker network，并配置持久化 volume 与异机备份。
-
-当前腾讯云 CVM 的可执行步骤见 [自建 PostgreSQL 部署手册](腾讯云CVM自建PostgreSQL部署步骤.md)。该方案使用独立的 `compose.production.self-hosted.yml`，不会修改现有托管数据库 Compose 文件。
-
-### 6.3 迁移原则
-
-在服务器上的生产 Compose 中，只执行：
+以下示例使用 `/opt/quickreels/current`。也可以采用带 Git commit 的不可变 release 目录并用符号链接切换；无论哪种方式，配置文件必须位于 release 目录之外。
 
 ```bash
-sudo docker compose --env-file .env.production -f compose.production.yml \
-  run --rm api ./node_modules/.bin/prisma migrate deploy
-```
-
-不要在生产执行 `prisma migrate dev`，不要在未检查内容的情况下执行会写入演示剧集的 seed 脚本。
-
-发布前先备份数据库；迁移失败时停止继续发布并按已验证的恢复流程处理。
-
----
-
-## 7. Docker 与进程拓扑
-
-目标生产 Compose 至少要有：
-
-```text
-api       Fastify HTTP 服务，仅容器网络暴露 3000
-worker    独立上传/异步任务进程
-postgres  仅当不使用托管数据库时启用
-admin     管理后台静态文件服务，或由宿主机 Nginx 直接托管
-```
-
-仓库已包含 API、Worker 和后台生产镜像。正式发布前仍须完成独立管理员初始化、日志保留策略、数据库备份和恢复演练；不要将开发模式 `pnpm dev:*` 常驻在公网服务器上。
-
-本仓库现在已补充以下生产部署资产：
-
-```text
-compose.production.yml          # API + Worker + Admin，接入外部 quickreels-proxy
-.env.production.example         # 生产变量模板，不含真实密钥
-apps/admin-web/Dockerfile       # 管理后台生产镜像
-apps/admin-web/nginx.conf       # 管理后台 SPA 路由回退
-```
-
-这套 Compose 默认连接腾讯云托管 PostgreSQL，因此没有自建数据库服务，也不会发布 5432。API 和 Worker 只加入 `quickreels-proxy`，不发布 3000；Caddy 通过 Docker 服务名 `api`、`admin` 访问它们。
-
-在服务器取得代码后，执行：
-
-```bash
+sudo install -d -m 755 -o "$USER" -g "$USER" /opt/quickreels
 cd /opt/quickreels
-cp .env.production.example .env.production
-chmod 600 .env.production
-# 使用编辑器填写托管 PostgreSQL、TikTok、JWT 和 BytePlus 变量
-sudo docker compose --env-file .env.production -f compose.production.yml config
-sudo docker compose --env-file .env.production -f compose.production.yml build
-sudo docker compose --env-file .env.production -f compose.production.yml up -d
+git clone <你的Git仓库SSH或HTTPS地址> current
+cd current
 ```
 
-`docker compose ... config` 报 `env file not found` 表示尚未创建 `.env.production`；这是预期的安全行为，不要用占位模板直接当生产密钥文件启动。
+仅在 `docker network inspect quickreels-proxy` 确认网络不存在时创建共享网络：
 
-### 7.1 Caddy 反向代理
+```bash
+docker network inspect quickreels-proxy >/dev/null 2>&1 || docker network create quickreels-proxy
+```
 
-当前服务器使用 Caddy，因此应在 `/opt/evergreenprosper-website/Caddyfile` 中保留原官网块，并追加以下两个站点块。Caddy 会自动申请和续期证书；不要在 Caddy 容器外另行申请同一域名证书。
+设定 env 文件位置并在启动前校验 Compose 展开结果：
 
-QuicK ReeLS 的 Compose 服务名建议固定为 `api` 和 `admin`，并加入外部网络 `quickreels-proxy`：
+```bash
+export QUICKREELS_ENV_FILE=/opt/quickreels/shared/api.production.env
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml config
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml build
+```
+
+数据库迁移只执行生产安全命令，且必须在备份完成后执行：
+
+```bash
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml \
+  run --rm api npx prisma migrate deploy
+
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml \
+  up -d api worker admin
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml ps
+```
+
+生产环境不要执行开发迁移或演示数据 seed。若选用自建数据库，将所有上述 `compose.production.yml` 替换为 `compose.production.self-hosted.yml`，并在首次 `up -d` 后再执行迁移。
+
+检查容器及共享网络：
+
+```bash
+docker network inspect quickreels-proxy --format '{{range .Containers}}{{println .Name}}{{end}}'
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml logs --tail=100 api worker admin
+```
+
+## 5. Caddy、HTTPS 与运营后台
+
+确认 API 和 Admin 已加入 `quickreels-proxy` 后，在现有 Caddyfile 中保留官网站点块，并增加：
 
 ```caddy
 api.evergreenprosper.com {
@@ -386,239 +226,356 @@ admin.evergreenprosper.com {
 }
 ```
 
-在 API/后台容器已经启动并加入网络后，先备份并验证 Caddy 配置：
+在修改前备份、校验并重载 Caddy。将容器名替换为第 2.1 节得到的真实值：
 
 ```bash
-sudo cp /opt/evergreenprosper-website/Caddyfile /opt/evergreenprosper-website/Caddyfile.bak.$(date +%F-%H%M%S)
-sudo docker exec evergreenprosper-website-web-1 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-sudo docker exec evergreenprosper-website-web-1 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-sudo docker logs --tail=100 evergreenprosper-website-web-1
+export CADDY_CONTAINER=evergreenprosper-website-web-1
+sudo cp /opt/evergreenprosper-website/Caddyfile \
+  /opt/evergreenprosper-website/Caddyfile.bak.$(date +%F-%H%M%S)
+
+sudo docker exec "$CADDY_CONTAINER" \
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo docker exec "$CADDY_CONTAINER" \
+  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo docker logs --tail=150 "$CADDY_CONTAINER"
 ```
 
-验证网络和公网入口：
+Caddy 在 DNS 正确且 80/443 可达时自动签发和续期证书。不要再为这两个子域名安装 Certbot。验证入口：
 
 ```bash
-sudo docker network inspect quickreels-proxy --format '{{range .Containers}}{{println .Name}}{{end}}'
-curl -I https://evergreenprosper.com
-curl -i https://api.evergreenprosper.com/health
+curl -fsS https://api.evergreenprosper.com/health
 curl -I https://admin.evergreenprosper.com
+curl -I https://evergreenprosper.com
 ```
 
-如果 Caddy 日志出现 `dial tcp: lookup api` 或 `lookup admin`，说明 QuicK ReeLS 容器尚未加入 `quickreels-proxy`，不要修改 DNS。
+若日志显示 `lookup api` 或 `lookup admin`，优先检查服务是否在 `quickreels-proxy` 网络中，而不是修改 DNS。
 
-### 7.2 TLS 证书
+## 6. 发布法律页面
 
-Caddy 在 DNS 已指向本机且 80/443 可访问时，会自动为 `api.evergreenprosper.com` 和 `admin.evergreenprosper.com` 申请并续期证书。不要安装 Certbot，也不要在 Caddy 容器外申请同一子域名证书。通过 Caddy 日志检查签发结果：
+法律文本源于 Mini 前端，并能导出为官网静态页：
 
 ```bash
-sudo docker logs --tail=150 evergreenprosper-website-web-1
+pnpm --filter mini-web export:legal
 ```
 
----
-
-## 8. 发布流程
-
-### 8.1 测试服务器演练
-
-先在测试子域名上演练，例如：
+输出目录：
 
 ```text
-api-staging.evergreenprosper.com
-admin-staging.evergreenprosper.com
+deploy/website/quickreels/privacy/index.html
+deploy/website/quickreels/terms/index.html
 ```
 
-测试域名也必须有 HTTPS；真正让 TikTok Mini 请求它时，也需登记为 Trusted Domain。
-
-测试清单：
+建议在本机或 CI 导出、复核后随发布包上传。也可以在有依赖的服务器 release 目录执行。部署前先根据实际 Caddyfile 核对官网 `root` 指向；以下以 `/opt/evergreenprosper-website` 为静态根目录示例：
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm lint
-pnpm test
-pnpm build
-pnpm --filter mini-web check:minis:local
-pnpm --filter mini-web build:minis:prod
-pnpm --filter mini-web check:minis:output
-pnpm --filter mini-web check:release
-```
-
-只有 `check:release` 通过，且构建产物内没有 `localhost`、Mock、测试 Placement 或占位 Client Key，才能上传 Portal Preview。
-
-### 8.2 API / 后台发布顺序
-
-1. 创建数据库备份；
-2. 拉取指定 Git commit 或发布包；
-3. 检查生产 env 文件权限与变量完整性；
-4. 构建 API、后台和 Mini；
-5. 执行 `prisma migrate deploy`；
-6. 启动或滚动更新 API 和 Worker；
-7. 发布后台静态文件；
-8. 检查 `https://api.evergreenprosper.com/health`；
-9. 用管理员账户验证后台登录、内容查询；
-10. 验证现有官网、API、后台三者均可访问；
-11. 记录发布 commit、镜像 tag、迁移版本和操作人。
-
-### 8.3 回滚原则
-
-- Caddy 配置：恢复已备份的 Caddyfile 后执行 `caddy reload`；
-- API/Worker：切回上一个镜像 tag 或 release directory；
-- 数据库：迁移通常不可简单倒退，发布前先备份；发现迁移问题时停止业务写入并按恢复演练操作；
-- DNS 和证书不是普通代码发布的一部分，不在故障时随意修改。
-
----
-
-## 9. TikTok Developer Portal 配置顺序
-
-### 9.1 App 与基础资料
-
-1. 确认当前 App 为 QuicK ReeLS，App ID 为 `7681547859254429717`；
-2. 填写名称、图标、简介、目标国家/地区；
-3. 填写公开 HTTPS 的隐私政策和服务条款 URL：
-   - `https://evergreenprosper.com/quickreels/privacy`
-   - `https://evergreenprosper.com/quickreels/terms`
-4. 按目标市场完成企业验证和 Mini Drama 行业资质；
-5. IAA 上线前确认 Organization 已完成商业验证与广告能力审批。
-
-### 9.1.1 部署官网法律页
-
-在服务器执行以下步骤，将仓库导出的法律页放入现有官网，并让无尾斜杠路径可直接访问。
-
-```bash
-cd /opt/quickreels
-git pull --ff-only origin main
-
-# 如需重新生成，先确保服务器具备 pnpm 依赖；否则可直接使用仓库中的 deploy/website 目录。
+cd /opt/quickreels/current
 pnpm --filter mini-web export:legal
-
-# 先确认现有官网 Caddyfile 和站点根目录。
-sudo sed -n '1,180p' /opt/evergreenprosper-website/Caddyfile
-
-# 默认假设 /opt/evergreenprosper-website 是现有官网静态根目录。
-# 如果 Caddyfile 中 root 指向其它宿主机挂载目录，应把下面目标目录替换为那个 root。
-sudo mkdir -p /opt/evergreenprosper-website/quickreels
+sudo install -d -m 755 /opt/evergreenprosper-website/quickreels
 sudo cp -a deploy/website/quickreels/. /opt/evergreenprosper-website/quickreels/
 ```
 
-编辑 `/opt/evergreenprosper-website/Caddyfile`，在 `evergreenprosper.com` 站点块的最终 `file_server` 之前加入：
-
-```caddy
-@quickreelsPrivacy path /quickreels/privacy
-rewrite @quickreelsPrivacy /quickreels/privacy/index.html
-
-@quickreelsTerms path /quickreels/terms
-rewrite @quickreelsTerms /quickreels/terms/index.html
-
-header /quickreels/* Cache-Control "public, max-age=300"
-```
-
-保存后校验并重载 Caddy：
-
-```bash
-sudo docker exec evergreenprosper-website-web-1 \
-  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-
-sudo docker exec evergreenprosper-website-web-1 \
-  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-```
-
-最后验证 Portal 要填写的两个 URL 不再返回 404：
+将 [`deploy/website/Caddyfile.quickreels-snippet`](../deploy/website/Caddyfile.quickreels-snippet) 的内容加到 `evergreenprosper.com` 站点块中最终 `file_server` 之前，然后按第 5 节校验并重载 Caddy。验证 TikTok Portal 要填写的 URL：
 
 ```bash
 curl -IL https://evergreenprosper.com/quickreels/privacy
 curl -IL https://evergreenprosper.com/quickreels/terms
-
-curl -L https://evergreenprosper.com/quickreels/privacy | grep -i "QuicK ReeLS Privacy Policy"
-curl -L https://evergreenprosper.com/quickreels/terms | grep -i "QuicK ReeLS Terms of Service"
 ```
 
-预期结果：`curl -IL` 最终状态为 `HTTP/2 200`，页面内容能 grep 到对应标题。正式提交 TikTok 前，隐私政策和服务条款仍需由美国律师或合规人员审阅。
+两条命令最终都应返回 `200`。法律页内容与实际匿名观看记录、广告、数据存储位置和支持渠道必须保持一致，正式审核前应由合规人员确认。
 
-### 9.2 Development configuration
+## 7. 将本机更新同步到服务器
 
-在 Security / Trusted Domains 添加：
+服务器不会自动感知本机代码变化。一次完整同步遵循以下链路：
 
 ```text
-https://api.evergreenprosper.com
+本机修改并验证
+        -> Git 提交并推送到 origin
+        -> 服务器拉取指定 commit
+        -> 构建新镜像
+        -> 执行生产迁移（如有）
+        -> 重建 api / worker / admin
+        -> 健康检查、日志检查、真机验证
 ```
 
-不要填写：
+不要把本机整个项目目录直接复制到正在运行的 `/opt/quickreels/current`，也不要用 `git reset --hard`、`git clean -fd`、`rm -rf` 来“同步”。前者会造成代码和运行镜像不一致，后者可能删除服务器上尚未处理的文件或配置。
 
-```text
-http://api.evergreenprosper.com
-https://api.evergreenprosper.com/api/v1
-https://*.evergreenprosper.com
+### 7.1 先判断本次需要同步什么
+
+| 本次改动 | 需要在服务器发布 | 需要在 TikTok Portal 重新上传 Mini |
+| --- | --- | --- |
+| `apps/api/`、`packages/`、Prisma migration、生产 Compose | 是 | 若 Mini API 合同/用户行为改变，建议一并上传 |
+| `apps/admin-web/` 或后台 API 地址 | 是 | 否 |
+| `apps/mini-web/` 的页面、广告、播放器、匿名会话 | API 支持变化时是 | 是 |
+| `deploy/website/quickreels/` 或法律文本 | 是，复制法律静态页并重载 Caddy | 否 |
+| 仅文档、测试或本地工具 | 否 | 否 |
+| `.env.production.example` | 仅检查是否需要手工补充真实服务器 env | 否 |
+
+Mini 包和服务器镜像是两份独立产物：发布 API 后，已安装的 Mini 包仍然是旧前端；仅上传 Mini 后，旧 API 也仍会继续运行。改动涉及两端时必须分别完成两次发布。
+
+### 7.2 本机发布前准备
+
+在 Windows PowerShell 的项目根目录执行。先检查改动，确认没有把真实密钥、临时文件或意外删除的文件混入提交：
+
+```powershell
+Set-Location 'D:\my project\tiktok-project'
+git status --short
+git diff --check
+pnpm lint
+pnpm test
 ```
 
-若以后启用支付、订单或其他 TikTok 事件，在 Webhooks 中配置真实处理端点，例如：
+有数据库结构改动时，还需确认 Prisma migration 已在 `apps/api/prisma/migrations/` 中，并检查生成的 SQL；不要只修改 `schema.prisma` 就发布。需要发布 Mini 时，再运行：
 
-```text
-https://api.evergreenprosper.com/webhooks/tiktok
+```powershell
+$env:VITE_API_BASE_URL = 'https://api.evergreenprosper.com/api/v1'
+$env:VITE_TIKTOK_CLIENT_KEY = '<TikTok Portal Client Key>'
+
+pnpm --filter mini-web export:legal
+pnpm --filter mini-web build:minis:release
+pnpm --filter mini-web check:minis:output
 ```
 
-但当前仓库没有该处理路由，不能先点击 Portal 的 Test URL。应先实现签名校验、幂等、日志脱敏和失败重试，再在测试环境验证。
+将本次改动作为一个可追溯版本提交。下面的 `<文件或目录>` 必须替换为本次实际要发布的内容；不要对不明文件直接执行 `git add .`：
 
-### 9.3 Mini 构建与 Preview
+```powershell
+git add <文件或目录>
+git commit -m 'feat: <本次更新说明>'
+git push origin main
 
-1. 用生产公开变量构建 Mini；
-2. 运行本地与输出检查；
-3. 上传 CLI 生成的代码资产到 Portal；
-4. 配置测试用户并生成 Preview QR；
-5. 在真实 TikTok 测试设备扫码；
-6. 核对 API 访问日志中的 Origin，回填精确 CORS 白名单；
-7. 依次验证登录、公开浏览、受限操作、播放器、广告、弱网与前后台切换；
-8. 所有 P0 验收通过后才提交审核。
+$releaseCommit = git rev-parse HEAD
+git tag -a "release-$(Get-Date -Format yyyyMMdd-HHmm)" -m "Release $releaseCommit"
+git push origin --tags
+Write-Host "本次服务器发布版本：$releaseCommit"
+```
 
----
+服务器应发布该输出的 commit 或 tag，而不是“当时 main 最新的内容”。在多人协作或自动化部署中，这一点能避免把其他未验收提交带入生产。
+
+### 7.3 登录服务器并建立发布上下文
+
+在本机连接服务器：
+
+```powershell
+ssh <服务器用户>@<服务器公网IP>
+```
+
+登录后执行下列命令。`COMPOSE_FILE` 二选一：托管 PostgreSQL 使用 `compose.production.yml`；自建 PostgreSQL 使用 `compose.production.self-hosted.yml`。后续同一终端都使用这四个变量：
+
+```bash
+export APP_DIR=/opt/quickreels/current
+export QUICKREELS_ENV_FILE=/opt/quickreels/shared/api.production.env
+export COMPOSE_FILE=compose.production.yml
+export CADDY_CONTAINER=evergreenprosper-website-web-1
+
+cd "$APP_DIR"
+git status --short
+git rev-parse --short HEAD
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" ps
+```
+
+若 `git status --short` 有输出，先停止发布并确认原因。服务器代码目录原则上不应手工修改；生产密钥必须保留在 `/opt/quickreels/shared/api.production.env`，不应放在 Git 工作区。不要用强制 Git 命令消除未知改动。
+
+### 7.4 备份、记录当前可回滚版本并拉取代码
+
+每次准备更新前保存旧版本值并创建数据库备份。托管数据库使用腾讯云控制台的即时备份或已验证的逻辑备份；自建数据库请按实际容器/卷备份流程操作。
+
+```bash
+cd "$APP_DIR"
+export PREVIOUS_COMMIT=$(git rev-parse HEAD)
+export TARGET_COMMIT=<第7.2节输出的commit或tag>
+printf 'previous=%s\ntarget=%s\nstarted=%s\n' \
+  "$PREVIOUS_COMMIT" "$TARGET_COMMIT" "$(date -Is)" \
+  | sudo tee /opt/quickreels/shared/last-release.txt >/dev/null
+
+git fetch --tags origin
+git show --stat --oneline "$TARGET_COMMIT"
+```
+
+在 `git show` 中确认改动确实是准备上线的内容，再切换：
+
+```bash
+git checkout --detach "$TARGET_COMMIT"
+git rev-parse HEAD
+git status --short
+```
+
+如果团队约定服务器始终跟随 `main`，可改为 `git switch main && git pull --ff-only origin main`；仍需先记录 `PREVIOUS_COMMIT`，并且只在服务器工作区干净时执行。固定 commit/tag 更适合生产回滚。
+
+### 7.5 检查生产配置并构建镜像
+
+代码更新不会自动修改服务器密钥文件。对照当前 checkout 的 `.env.production.example` 检查是否增加了必须变量；只用编辑器手工补充真实值，绝不使用示例文件覆盖 `/opt/quickreels/shared/api.production.env`。
+
+```bash
+cd "$APP_DIR"
+sudo stat -c '%a %U:%G %n' "$QUICKREELS_ENV_FILE"
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" config >/tmp/quickreels-compose.rendered.yml
+sed -n '1,260p' /tmp/quickreels-compose.rendered.yml
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" build --pull api worker admin
+```
+
+预期密钥文件权限为 `600`。`config` 失败、缺变量、服务名/网络不正确时不要继续。默认使用 Docker 缓存是正常的：发生 Dockerfile、依赖锁文件或构建异常时，才针对受影响服务追加 `--no-cache` 重新构建，而不是每次全量无缓存构建。
+
+### 7.6 迁移数据库并更新服务
+
+只有本次包含新的 Prisma migration 时才执行迁移；迁移必须在数据库备份完成后进行。生产只允许使用：
+
+```bash
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" \
+  run --rm api npx prisma migrate deploy
+```
+
+随后重建服务。`--no-deps` 不会停止或重建托管数据库；自建数据库方案中也不会在普通应用发布时触碰 `postgres`：
+
+```bash
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" \
+  up -d --no-deps --force-recreate api worker admin
+
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" ps
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" logs --tail=150 api worker admin
+```
+
+不要执行 `prisma migrate dev`，不要在生产执行 seed，也不要在常规更新中使用 `docker compose down -v`。
+
+### 7.7 验证新版本
+
+容器显示 `Up` 不代表接口和数据库已经可用。依次验证容器健康、内部服务、Caddy 公网入口和日志：
+
+```bash
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" ps
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" logs --tail=200 api worker admin
+curl -fsS https://api.evergreenprosper.com/health
+curl -I https://admin.evergreenprosper.com
+curl -I https://evergreenprosper.com
+```
+
+注意：当前 API 没有向主机发布 `3000`；健康检查应通过 Caddy 的公网 HTTPS 入口完成。检查 `quickreels-proxy` 网络：
+
+```bash
+docker network inspect quickreels-proxy --format '{{range .Containers}}{{println .Name}}{{end}}'
+sudo docker logs --tail=150 "$CADDY_CONTAINER"
+```
+
+最后用浏览器验证后台，并用 TikTok Preview 真机验证受本次改动影响的匿名首开、进入广告、剧集解锁、播放器、历史记录和继续观看。发布日志出现持续报错、health 失败或核心验收失败时，不要继续发布 Mini 正式版本。
+
+### 7.8 法律页、Caddyfile 与 Mini 包的同步
+
+**法律页有改动时**，先在本机构建并确认 Git 提交中包含 `deploy/website/quickreels/`；然后从 Windows 上传该目录，而不是覆盖官网根目录：
+
+```powershell
+$server = '<服务器用户>@<服务器公网IP>'
+$releaseCommit = git rev-parse HEAD
+scp -r '.\deploy\website\quickreels' "${server}:/tmp/quickreels-legal-$releaseCommit"
+```
+
+在服务器检查内容后再复制到已核对的官网静态根目录：
+
+```bash
+export RELEASE_COMMIT=<第7.2节输出的commit>
+sudo find "/tmp/quickreels-legal-$RELEASE_COMMIT" -maxdepth 3 -type f -print
+sudo install -d -m 755 /opt/evergreenprosper-website/quickreels
+sudo cp -a "/tmp/quickreels-legal-$RELEASE_COMMIT/." \
+  /opt/evergreenprosper-website/quickreels/
+curl -IL https://evergreenprosper.com/quickreels/privacy
+curl -IL https://evergreenprosper.com/quickreels/terms
+```
+
+**Caddyfile 有改动时**，先备份，再执行 `caddy validate` 成功后才 reload，命令见第 5 节。不要重启或重建已有官网 Caddy 容器来应用普通 API 更新。
+
+**Mini 前端有改动时**，按第 8 节在本机/CI 重新构建，将 `apps/mini-web/dist` 的实际 CLI 产物上传 TikTok Developer Portal，生成新的 Preview 后再真机验证。仅发布服务器不会更新用户手机上的 Mini 前端。
+
+### 7.9 回滚
+
+应用代码或镜像出问题且数据库没有不兼容迁移时，先回到第 7.4 节记录的旧版本：
+
+```bash
+cd "$APP_DIR"
+export ROLLBACK_COMMIT=$(sed -n 's/^previous=//p' /opt/quickreels/shared/last-release.txt)
+test -n "$ROLLBACK_COMMIT"
+git checkout --detach "$ROLLBACK_COMMIT"
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" build api worker admin
+docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" \
+  up -d --no-deps --force-recreate api worker admin
+curl -fsS https://api.evergreenprosper.com/health
+```
+
+若已经执行了数据库迁移，不要假定仅回退应用就完全安全。先停止进一步写入，评估旧版本是否兼容新 schema；不兼容时按已演练的数据库恢复计划处理。Caddyfile 回滚则恢复第 2.3 节备份文件，先校验再 reload。Mini 回滚需要在 Portal 选择或重新上传上一份已验证的 Mini 版本。
+
+## 8. Windows 本机或 CI 构建 TikTok Mini
+
+Mini 的上传产物必须本机或 CI 构建，不能由服务器的 Docker Compose 生成。PowerShell 示例：
+
+```powershell
+Set-Location 'D:\my project\tiktok-project'
+
+$env:VITE_API_BASE_URL = 'https://api.evergreenprosper.com/api/v1'
+$env:VITE_TIKTOK_CLIENT_KEY = '<TikTok Portal Client Key>'
+
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm test
+pnpm --filter mini-web export:legal
+pnpm --filter mini-web build:minis:release
+pnpm --filter mini-web check:minis:output
+```
+
+`build:minis:release` 会构建 Web、生成生产 Mini 包并验证以下约束：API 地址必须是非 localhost 的 HTTPS URL；Client Key 不可为空或占位符；构建产物必须包含两项公开配置。实际上传目录以命令生成的 `apps/mini-web/dist` 内容为准，不要手工压缩源代码目录替代 CLI 产物。
+
+生产 Mini 构建变量只能包含公开值，例如 API 地址、Client Key 和已获批准的广告 Placement ID。服务端密钥、数据库连接串和 JWT Secret 不得进入 Mini 构建。
+
+## 9. TikTok Developer Portal 与真机验收
+
+在 TikTok Developer Portal 使用同一个 Mini App 的 App ID 和 Client Key，按以下顺序配置：
+
+1. 填写公开可访问的隐私政策和服务条款：
+   `https://evergreenprosper.com/quickreels/privacy`、`https://evergreenprosper.com/quickreels/terms`。
+2. 在 Trusted Domains 添加 `https://api.evergreenprosper.com`。不要填 API path、端口、通配符或 `http` URL。
+3. 上传第 8 节 CLI 产生的生产 Mini 产物，创建 Preview 并配置测试用户。
+4. 用真机 TikTok 扫 Preview 二维码，查看 API 日志并把真实必要 Origin 精确写入 `API_CORS_ORIGIN` 后重新发布 API。
+5. 完成匿名访客首开、进入广告（开关与观看次数）、剧集广告、播放、继续观看、历史记录、前后台切换、弱网与错误提示的验收。
+
+进入广告如使用 `REWARDED_GATED`，需先确认 Portal 广告政策和 Placement 已获批准，并与剧集解锁广告使用不同的 Placement。
+
+对于美国、欧盟、英国等首发市场，提交前还需按 TikTok Portal 的地区发布审批、数据处理和广告政策完成材料；隐私政策必须准确披露服务器、数据库、日志和第三方媒体服务的实际地域。
 
 ## 10. 生产验收清单
 
 ### 基础设施
 
-- [ ] 现有官网访问正常，未被新的 Caddy 配置覆盖
-- [ ] `api`、`admin` DNS 指向正确服务器
-- [ ] 两个子域名均为有效 HTTPS，证书自动续期已测试
-- [ ] 安全组和 UFW 不开放 3000、5432
-- [ ] 数据库处于私网，备份已启用且测试过恢复
-- [ ] API、Worker 配置重启策略与日志轮转
+- [ ] 官网、API、后台均可访问，且新 Caddy 配置没有覆盖官网。
+- [ ] `api`、`admin` DNS 已解析到正确 CVM，HTTPS 证书有效。
+- [ ] 安全组和 UFW 未对公网开放 3000、5432 或 Docker API。
+- [ ] 数据库为私网访问，自动备份已启用并完成过恢复演练。
+- [ ] `api`、`worker`、`admin` 均处于运行状态，日志没有持续错误。
 
-### 应用
+### 应用与 Mini
 
-- [ ] `https://api.evergreenprosper.com/health` 返回数据库正常
-- [ ] 管理后台可登录，普通用户 token 无法访问管理员 API
-- [ ] 所有生产环境变量无占位符
-- [ ] Mini 构建内无 `localhost`、Mock 开关或密钥
-- [ ] API CORS 只允许经 Preview 验证的来源
-- [ ] TikTok OAuth 已实现 token 存储、刷新和撤销
-- [ ] Rewarded 和 Interstitial 均通过真实设备测试后才开启生产 Placement
+- [ ] `https://api.evergreenprosper.com/health` 健康检查成功。
+- [ ] 管理员可登录后台，匿名用户不会获得管理员权限。
+- [ ] 生产 API 使用精确 CORS 白名单，未启用不可信地理请求头。
+- [ ] 所有真实密钥均在服务器 Secret 文件或 CI Secret 中，不在仓库和 Mini 产物中。
+- [ ] Mini 产物无 localhost、Mock 配置或占位 Client Key。
+- [ ] 真机 Preview 已完成匿名观看、进入广告、剧集广告、播放进度与历史记录验证。
 
 ### Portal 与合规
 
-- [ ] `https://api.evergreenprosper.com` 已加入 Trusted Domains
-- [ ] 隐私政策、服务条款公开可访问且与真实数据中心一致
-- [ ] Portal App ID 与 `apps/mini-web/minis.config.json` 一致
-- [ ] 目标市场、企业验证、行业资质和广告能力已获批
-- [ ] 若覆盖美国/欧盟/英国，已完成 Launch Approval / TPRM / 协议要求
-- [ ] 已在 TikTok 真机 Preview 完成登录、播放器、广告和故障路径验收
+- [ ] Trusted Domain 为 `https://api.evergreenprosper.com`。
+- [ ] 隐私政策和服务条款为公开 HTTPS 页面且最终响应为 200。
+- [ ] Portal App ID 与 `apps/mini-web/minis.config.json` 一致。
+- [ ] 目标市场、广告 Placement、企业/行业资质及地区审批已按 Portal 要求完成。
 
----
+## 11. 常见故障
 
-## 11. 当前项目在服务器部署前仍需补齐的工程项
-
-1. 新增生产 Compose、后台静态镜像或可回滚发布脚本；
-2. 实现 TikTok OAuth token 的加密持久化、refresh 与 revoke；
-3. 实现 Interstitial 广告实际触发与频控；
-4. 实现需要时的 TikTok Webhook；
-5. 增加 CI：lint、test、build、Mini release check；
-6. 接入生产日志、错误告警、监控和数据库备份校验；
-7. 建立非演示管理员初始化、密码轮换和最小权限流程；
-8. 使用测试子域名完成一次完整发布和回滚演练。
-
----
+| 现象 | 优先检查 |
+| --- | --- |
+| 证书签发失败 | DNS 是否已生效，安全组/UFW 是否放行 TCP 80、443，Caddy 日志是否有挑战失败信息 |
+| API 502 | `docker compose ... ps`、API healthcheck、`quickreels-proxy` 是否有 `api` 容器 |
+| 后台空白或 API 请求失败 | `VITE_API_BASE_URL` 是否为 HTTPS API 地址，浏览器 Console 与 CORS 白名单是否一致 |
+| Mini 不能请求 API | Trusted Domains 是否填写根域名而非 path，生产包是否真的使用 HTTPS API 地址 |
+| 法律页 404 | Caddy `root` 是否和复制目录一致，rewrite 规则是否位于 `file_server` 之前 |
+| 发布后功能异常 | 比对发布 commit、环境变量和迁移结果；先回退应用，再按备份计划处理数据库 |
 
 ## 12. 官方资料
 
 - [TikTok Mini Development Configuration](https://developers.tiktok.com/docs/en/set-up-development-configuration)
 - [TikTok Minis Server APIs Overview](https://developers.tiktok.com/docs/en/minis-server-apis-overview)
-- [TikTok Mini OAuth](https://developers.tiktok.com/docs/en/minis-oauth)
 - [TikTok U.S. and EU/UK Launch Approval Process](https://developers.tiktok.com/docs/en/us-launch-approval-process)
 - [Tencent Cloud CVM Documentation](https://www.tencentcloud.com/document/product/213)

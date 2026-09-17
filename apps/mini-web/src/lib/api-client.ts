@@ -5,6 +5,14 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/a
 const useMockApi = import.meta.env.VITE_USE_MOCK_API === 'true' || import.meta.env.VITE_DEMO_MODE === 'true';
 const enableMockFallback = import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
 
+type UnauthorizedHandler = () => Promise<void>;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+let pendingUnauthorizedRecovery: Promise<void> | null = null;
+
+export function registerUnauthorizedHandler(handler: UnauthorizedHandler) {
+  unauthorizedHandler = handler;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -17,7 +25,7 @@ export class ApiError extends Error {
 }
 
 class ApiClient {
-  async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  async request<T>(path: string, options: RequestInit = {}, retried = false): Promise<T> {
     const method = options.method ?? 'GET';
     const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
     if (useMockApi) return mockApiRequest<T>({ method, path, body: parsedBody });
@@ -35,6 +43,11 @@ class ApiClient {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null) as ApiErrorResponse | null;
+        if (response.status === 401 && !retried && path !== '/auth/anonymous/session' && unauthorizedHandler) {
+          pendingUnauthorizedRecovery ??= unauthorizedHandler().finally(() => { pendingUnauthorizedRecovery = null; });
+          await pendingUnauthorizedRecovery;
+          return this.request<T>(path, options, true);
+        }
         throw new ApiError(
           body?.error.message ?? 'The request could not be completed.',
           response.status,

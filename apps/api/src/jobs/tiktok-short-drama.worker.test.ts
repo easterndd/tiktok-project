@@ -23,7 +23,7 @@ function createWorkerPrisma() {
       nextAttemptAt: null,
       completedAt: null,
       createdAt: new Date('2026-09-10T00:00:00.000Z'),
-      episode: { title: 'Episode 1', status: 'DRAFT' }
+      episode: { title: 'Episode 1', status: 'DRAFT', coverAsset: null }
     },
     episode: { status: 'DRAFT', byteplusVid: null }
   };

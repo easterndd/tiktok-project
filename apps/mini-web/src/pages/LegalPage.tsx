@@ -1,7 +1,7 @@
 import { ArrowLeft, Mail, ScrollText, ShieldCheck } from 'lucide-react';
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { legalDocuments, type LegalDocumentType } from './legal-docs';
+import { legalContactEmail, legalDocuments, type LegalDocumentType } from './legal-docs';
 import styles from './LegalPage.module.css';
 
 export function LegalPage({ type }: { type: LegalDocumentType }) {
@@ -11,7 +11,7 @@ export function LegalPage({ type }: { type: LegalDocumentType }) {
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
-    globalThis.document.title = `${legalDocument.title} | QuicKReeL`;
+    globalThis.document.title = `${legalDocument.title} | QuicK ReeLS`;
   }, [legalDocument.title]);
 
   return <article className={styles.page}>
@@ -28,7 +28,7 @@ export function LegalPage({ type }: { type: LegalDocumentType }) {
       </div>
       <div className={styles.actions}>
         <Link className={styles.actionLink} to={related.path}><RelatedIcon size={16} aria-hidden="true" /> {related.label}</Link>
-        <a className={styles.primaryAction} href="mailto:caijiarong@xuyins.com"><Mail size={16} aria-hidden="true" /> Contact</a>
+        <a className={styles.primaryAction} href={`mailto:${legalContactEmail}`}><Mail size={16} aria-hidden="true" /> Contact</a>
       </div>
       <div className={styles.markets} aria-label="Supported regional sections" dangerouslySetInnerHTML={{ __html: legalDocument.marketsHtml }} />
     </header>

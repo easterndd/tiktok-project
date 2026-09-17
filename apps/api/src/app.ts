@@ -4,6 +4,9 @@ import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import type { PrismaClient } from '@prisma/client';
 import Fastify from 'fastify';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { extname, relative, resolve } from 'node:path';
 import type { Env } from './config/env';
 import { registerAlbumRoutes } from './modules/albums/routes';
 import { registerAuthRoutes } from './modules/auth/routes';
@@ -14,6 +17,7 @@ import { registerSearchRoutes } from './modules/search/routes';
 import { registerInteractionRoutes } from './modules/interactions/routes';
 import { registerProfileRoutes } from './modules/profile/routes';
 import { registerAdRoutes } from './modules/ads/routes';
+import { registerAppEntryAdRoutes } from './modules/app-entry-ads/routes';
 import { registerAdminRoutes } from './modules/admin/routes';
 import { registerUiRoutes } from './modules/ui/routes';
 import { registerErrorHandler } from './plugins/error-handler';
@@ -23,6 +27,21 @@ declare module 'fastify' {
   interface FastifyInstance {
     config: Env;
   }
+}
+
+const coverContentTypes: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp'
+};
+
+function resolveCoverPath(root: string, fileName: string) {
+  const storageRoot = resolve(root);
+  const targetPath = resolve(storageRoot, fileName);
+  const offset = relative(storageRoot, targetPath);
+  if (!offset || offset.startsWith('..')) return null;
+  return targetPath;
 }
 
 export async function buildApp(env: Env, options: { prisma?: PrismaClient } = {}) {
@@ -39,17 +58,40 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient } = {}
   await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
   await registerPrisma(app, options.prisma);
 
-  app.get('/health', async () => {
+  app.get('/api/v1/assets/covers/:fileName', async (request, reply) => {
+    const { fileName } = request.params as { fileName: string };
+    const targetPath = resolveCoverPath(env.COVER_ASSET_STORAGE_DIR, fileName);
+    if (!targetPath) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Cover asset not found.', requestId: request.id } });
+    try {
+      await stat(targetPath);
+    } catch {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Cover asset not found.', requestId: request.id } });
+    }
+    reply.header('cache-control', 'public, max-age=31536000, immutable');
+    reply.type(coverContentTypes[extname(targetPath).toLowerCase()] ?? 'application/octet-stream');
+    return reply.send(createReadStream(targetPath));
+  });
+
+  app.get('/live', async () => ({
+    status: 'ok',
+    timestamp: new Date().toISOString()
+  }));
+
+  const readiness = async (_request: unknown, reply: { code: (statusCode: number) => unknown }) => {
     try {
       await app.prisma.$queryRaw`SELECT 1`;
       return { status: 'ok', database: 'ok', timestamp: new Date().toISOString() };
     } catch {
-      return { status: 'degraded', database: 'unavailable', timestamp: new Date().toISOString() };
+      reply.code(503);
+      return { status: 'unavailable', database: 'unavailable', timestamp: new Date().toISOString() };
     }
-  });
+  };
+  app.get('/ready', readiness);
+  app.get('/health', readiness);
 
   await app.register(async (api) => {
-    await registerAuthRoutes(api, env);
+    await registerAuthRoutes(api);
+    await registerAppEntryAdRoutes(api);
     await registerAlbumRoutes(api);
     await registerEpisodeRoutes(api);
     await registerProgressRoutes(api);

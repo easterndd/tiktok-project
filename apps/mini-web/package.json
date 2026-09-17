@@ -7,6 +7,7 @@
     "build": "tsc -b && vite build",
     "build:minis:sandbox": "ttdx minis build --sandbox",
     "build:minis": "ttdx minis build --prod",
+    "build:minis:release": "pnpm build && ttdx minis build --prod && node scripts/check-release.mjs",
     "check:minis:local": "ttdx minis check --local",
     "check:minis:output": "ttdx minis check --output",
     "check:release": "node scripts/check-release.mjs",

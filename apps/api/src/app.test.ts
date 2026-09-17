@@ -13,11 +13,6 @@ const env: Env = {
   API_CORS_ORIGIN: 'http://localhost:5173',
   TRUST_GEO_COUNTRY_HEADER: true,
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters',
-  TIKTOK_CLIENT_KEY: 'test-client-key',
-  TIKTOK_CLIENT_SECRET: 'test-client-secret',
-  TIKTOK_OAUTH_TOKEN_URL: 'https://example.com/oauth/token',
-  TIKTOK_USER_INFO_URL: 'https://example.com/user/info',
-  TIKTOK_REDIRECT_URI: undefined,
   USER_JWT_EXPIRES_IN: 3_600,
   ADMIN_JWT_EXPIRES_IN: 28_800,
   ADMIN_BOOTSTRAP_EMAIL: undefined,
@@ -28,6 +23,10 @@ const env: Env = {
   BYTEPLUS_ACCESS_KEY: undefined,
   BYTEPLUS_SECRET_KEY: undefined,
   BYTEPLUS_VOD_ENDPOINT: 'https://vod.byteplusapi.com',
+  API_PUBLIC_BASE_URL: undefined,
+  COVER_ASSET_STORAGE_DIR: 'tmp/cover-assets-test',
+  COVER_ASSET_PUBLIC_BASE_URL: undefined,
+  LOCAL_PLAYBACK_ENABLED: false,
   UPLOAD_WORKER_INTERVAL_MS: 30_000,
   UPLOAD_MAX_RETRIES: 5
 };
@@ -40,6 +39,7 @@ async function createPrismaStub() {
     coverUrl: 'https://example.com/cover.jpg',
     language: 'en',
     regions: ['US'],
+    accessConfig: { freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: 'rewarded_episode_unlock', rewardedAdCount: 3 },
     status: 'ONLINE',
     updatedAt: new Date('2026-09-10T00:00:00.000Z'),
     tiktokAlbumId: 'tiktok-album-1',
@@ -64,10 +64,21 @@ async function createPrismaStub() {
     likes: new Set<string>(),
     favorites: new Set<string>(),
     unlocks: new Set<string>(),
-    adEvents: new Map<string, { episodeId: string; adType: string; eventType: string }>(),
-    shareCount: 0
+    adEvents: new Map<string, any>(),
+    rewardSessions: new Map<string, any>(),
+    rewards: new Map<string, any>(),
+    entrySessions: new Map<string, any>(),
+    entryCompletions: new Map<string, any>(),
+    appSessions: new Map<string, any>(),
+    playbackSessions: new Map<string, any>(),
+    completionEvents: new Map<string, any>(),
+    uiConfigVersions: new Map<number, any>(),
+    entryPolicy: null as any,
+    shareCount: 0,
+    admin: { id: 'admin-1', email: 'operator@example.com', passwordHash: '', role: 'OWNER', status: 'ACTIVE', tokenVersion: 0, createdAt: new Date(), updatedAt: new Date() }
   };
   const adminPasswordHash = await hashPassword('not-used');
+  state.admin.passwordHash = adminPasswordHash;
   const prisma: any = {
     album: {
       findMany: async () => [album],
@@ -93,15 +104,44 @@ async function createPrismaStub() {
       },
       count: async () => state.unlocks.size
     },
+    rewardedUnlockSession: {
+      updateMany: async () => ({ count: 0 }),
+      findFirst: async (args: { where: { userId: string; episodeId: string; status: string } }) => Array.from(state.rewardSessions.values()).find((session) => session.userId === args.where.userId && session.episodeId === args.where.episodeId && session.status === args.where.status) ?? null,
+      findUnique: async (args: { where: { id: string } }) => state.rewardSessions.get(args.where.id) ?? null,
+      findUniqueOrThrow: async (args: { where: { id: string } }) => state.rewardSessions.get(args.where.id),
+      create: async (args: { data: any }) => {
+        const session = { id: `session-${state.rewardSessions.size + 1}`, completedCount: 0, status: 'ACTIVE', ...args.data };
+        state.rewardSessions.set(session.id, session);
+        return session;
+      },
+      update: async (args: { where: { id: string }; data: any }) => {
+        const session = { ...state.rewardSessions.get(args.where.id), ...args.data };
+        state.rewardSessions.set(args.where.id, session);
+        return session;
+      }
+    },
+    rewardedUnlockReward: {
+      findUnique: async (args: { where: { sessionId_clientEventId: { sessionId: string; clientEventId: string } } }) => state.rewards.get(`${args.where.sessionId_clientEventId.sessionId}:${args.where.sessionId_clientEventId.clientEventId}`) ?? null,
+      create: async (args: { data: any }) => {
+        const reward = { id: `reward-${state.rewards.size + 1}`, ...args.data };
+        state.rewards.set(`${reward.sessionId}:${reward.clientEventId}`, reward);
+        return reward;
+      }
+    },
     adEvent: {
-      upsert: async (args: { where: { userId_clientEventId: { userId: string; clientEventId: string } }; create: { episodeId: string; adType: string; eventType: string } }) => {
+      upsert: async (args: any) => {
         const key = `${args.where.userId_clientEventId.userId}:${args.where.userId_clientEventId.clientEventId}`;
         const existing = state.adEvents.get(key);
-        if (existing) return existing;
-        const event = { episodeId: args.create.episodeId, adType: args.create.adType, eventType: args.create.eventType };
+        if (existing) {
+          const event = { ...existing, ...args.update };
+          state.adEvents.set(key, event);
+          return event;
+        }
+        const event = { id: `ad-event-${state.adEvents.size + 1}`, ...args.create };
         state.adEvents.set(key, event);
         return event;
       },
+      findFirst: async (args: any) => Array.from(state.adEvents.values()).find((event) => Object.entries(args.where).every(([key, value]) => event[key] === value)) ?? null,
       create: async () => ({ id: 'ad-event-1' }),
       count: async () => state.adEvents.size
     },
@@ -123,25 +163,101 @@ async function createPrismaStub() {
     },
     searchEvent: { create: async () => ({ id: 'search-1' }), count: async () => 0 },
     user: {
-      upsert: async () => ({ id: 'user-1', tiktokOpenId: 'open-1', createdAt: new Date() }),
+      upsert: async () => ({ id: 'user-1', identityType: 'ANONYMOUS', tiktokOpenId: 'open-1', createdAt: new Date() }),
       findUniqueOrThrow: async () => ({ id: 'user-1', tiktokOpenId: 'open-1', createdAt: new Date() }),
       count: async () => 1
+    },
+    appSession: {
+      upsert: async (args: any) => {
+        const key = `${args.where.userId_clientSessionId.userId}:${args.where.userId_clientSessionId.clientSessionId}`;
+        const session = { ...(state.appSessions.get(key) ?? args.create), ...(state.appSessions.has(key) ? args.update : {}), id: key };
+        state.appSessions.set(key, session);
+        return session;
+      },
+      findMany: async () => []
+    },
+    appEntryAdPolicy: {
+      findUnique: async () => state.entryPolicy,
+      upsert: async (args: any) => {
+        state.entryPolicy = { ...(state.entryPolicy ?? args.create), ...args.update, id: 'default' };
+        return state.entryPolicy;
+      }
+    },
+    appEntryAdSession: {
+      findUnique: async (args: any) => {
+        if (args.where.id) return state.entrySessions.get(args.where.id) ?? null;
+        const key = `${args.where.userId_launchId.userId}:${args.where.userId_launchId.launchId}`;
+        return state.entrySessions.get(key) ?? null;
+      },
+      findUniqueOrThrow: async (args: any) => state.entrySessions.get(args.where.id),
+      create: async (args: any) => {
+        const session = { id: `entry-session-${state.entrySessions.size + 1}`, completedCount: 0, status: 'ACTIVE', ...args.data };
+        state.entrySessions.set(session.id, session);
+        state.entrySessions.set(`${session.userId}:${session.launchId}`, session);
+        return session;
+      },
+      update: async (args: any) => {
+        const session = { ...state.entrySessions.get(args.where.id), ...args.data };
+        state.entrySessions.set(session.id, session);
+        state.entrySessions.set(`${session.userId}:${session.launchId}`, session);
+        return session;
+      }
+    },
+    appEntryAdCompletion: {
+      findUnique: async (args: any) => state.entryCompletions.get(`${args.where.sessionId_clientEventId.sessionId}:${args.where.sessionId_clientEventId.clientEventId}`) ?? null,
+      create: async (args: any) => {
+        const completion = { id: `entry-completion-${state.entryCompletions.size + 1}`, ...args.data };
+        state.entryCompletions.set(`${completion.sessionId}:${completion.clientEventId}`, completion);
+        return completion;
+      }
     },
     userPreference: {
       upsert: async () => ({ locale: 'en', autoplay: true, reducedData: false }),
       findUnique: async () => null
     },
     adminUser: {
-      findUnique: async () => ({ id: 'admin-1', email: 'operator@example.com', passwordHash: adminPasswordHash, role: 'OWNER' })
+      findUnique: async (args: any) => {
+        if (args.where.id && args.where.id !== state.admin.id) return null;
+        if (args.where.email && args.where.email !== state.admin.email) return null;
+        return state.admin;
+      },
+      findUniqueOrThrow: async () => state.admin,
+      update: async (args: any) => {
+        const changes = { ...args.data };
+        if (changes.tokenVersion?.increment) changes.tokenVersion = state.admin.tokenVersion + changes.tokenVersion.increment;
+        state.admin = { ...state.admin, ...changes, updatedAt: new Date() };
+        return state.admin;
+      },
+      findMany: async () => [state.admin],
+      create: async (args: any) => ({ id: 'admin-2', ...args.data })
     },
     auditLog: { create: async () => ({ id: 'audit-1' }) },
+    coverAsset: { findUnique: async () => null, findMany: async () => [], upsert: async () => ({ id: 'cover-1', publicUrl: 'https://example.com/cover.jpg', status: 'READY' }) },
     homeBlock: { findMany: async () => [] },
     uiComponent: { findMany: async () => [], upsert: async () => ({ key: 'HOME_FEED', page: 'HOME', enabled: true, config: null }) },
+    uiConfigVersion: {
+      findFirst: async (args: any) => Array.from(state.uiConfigVersions.values()).filter((item: any) => !args?.where?.status || item.status === args.where.status).at(-1) ?? null,
+      findUnique: async (args: any) => state.uiConfigVersions.get(args.where.version) ?? null,
+      create: async (args: any) => { const version = state.uiConfigVersions.size + 1; const item = { version, status: 'DRAFT', ...args.data }; state.uiConfigVersions.set(version, item); return item; },
+      update: async (args: any) => { const item = { ...state.uiConfigVersions.get(args.where.version), ...args.data }; state.uiConfigVersions.set(args.where.version, item); return item; },
+      updateMany: async (args: any) => { for (const [version, item] of state.uiConfigVersions) if (!args.where?.status || item.status === args.where.status) state.uiConfigVersions.set(version, { ...item, ...args.data }); return { count: state.uiConfigVersions.size }; }
+    },
     genre: { findMany: async () => [], create: async () => ({ id: 'genre-1' }), update: async () => ({ id: 'genre-1' }) },
-    playbackQualityEvent: { create: async () => ({ id: 'quality-1' }), groupBy: async () => [] },
+    playbackQualityEvent: { create: async () => ({ id: 'quality-1' }), groupBy: async () => [], aggregate: async () => ({ _count: 0, _avg: { startupMs: null }, _sum: { bufferMs: null } }), count: async () => 0, findMany: async () => [] },
+    playbackSession: {
+      findUnique: async (args: any) => state.playbackSessions.get(args.where.id) ?? null,
+      create: async (args: any) => { state.playbackSessions.set(args.data.id, args.data); return args.data; },
+      update: async (args: any) => { const item = { ...state.playbackSessions.get(args.where.id), ...args.data }; state.playbackSessions.set(args.where.id, item); return item; },
+      count: async () => state.playbackSessions.size
+    },
+    episodeCompletionEvent: {
+      upsert: async (args: any) => { const key = `${args.where.userId_episodeId.userId}:${args.where.userId_episodeId.episodeId}`; const item = state.completionEvents.get(key) ?? args.create; state.completionEvents.set(key, item); return item; },
+      count: async () => state.completionEvents.size
+    },
     adRevenue: { findMany: async () => [], upsert: async () => ({ id: 'revenue-1' }) },
     uploadJob: { findMany: async () => [], findUnique: async () => null, create: async () => ({ id: 'job-1' }) },
-    $transaction: async <T>(callback: (tx: typeof prisma) => Promise<T>) => callback(prisma)
+    $transaction: async <T>(callback: (tx: typeof prisma) => Promise<T>) => callback(prisma),
+    $queryRaw: async () => [{ '?column?': 1 }]
   };
   return prisma;
 }
@@ -154,7 +270,7 @@ async function createTestApp() {
 }
 
 async function token(app: Awaited<ReturnType<typeof createTestApp>>, kind: 'user' | 'admin') {
-  return app.jwt.sign({ sub: kind === 'user' ? 'user-1' : 'admin-1', kind });
+  return app.jwt.sign(kind === 'user' ? { sub: 'user-1', kind } : { sub: 'admin-1', kind, role: 'OWNER', tokenVersion: 0 });
 }
 
 describe('QuicK ReeLS API', () => {
@@ -164,6 +280,17 @@ describe('QuicK ReeLS API', () => {
   afterEach(async () => {
     globalThis.fetch = originalFetch;
     while (apps.length) await apps.pop()!.close();
+  });
+
+  it('reports liveness and database readiness separately', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const live = await app.inject({ method: 'GET', url: '/live' });
+    const ready = await app.inject({ method: 'GET', url: '/ready' });
+    assert.equal(live.statusCode, 200);
+    assert.equal(live.json().status, 'ok');
+    assert.equal(ready.statusCode, 200);
+    assert.equal(ready.json().database, 'ok');
   });
 
   it('serves public home and search without authentication', async () => {
@@ -209,23 +336,121 @@ describe('QuicK ReeLS API', () => {
     assert.equal(response.json().error.code, 'UNAUTHORIZED');
   });
 
-  it('exchanges a TikTok login code server-side and returns a business session', async () => {
+  it('creates an anonymous viewer session without TikTok OAuth', async () => {
     const app = await createTestApp();
     apps.push(app);
-    globalThis.fetch = async () => new Response(JSON.stringify({
-      access_token: 'provider-access-token',
-      open_id: 'tiktok-open-1',
-      expires_in: 7_200
-    }), { status: 200, headers: { 'content-type': 'application/json' } });
     const response = await app.inject({
       method: 'POST',
-      url: '/api/v1/auth/tiktok/login',
-      payload: { code: 'one-time-login-code' }
+      url: '/api/v1/auth/anonymous/session',
+      payload: { visitorKey: 'a'.repeat(64), clientSessionId: 'session-test-0001', platform: 'WEB' }
     });
     assert.equal(response.statusCode, 200);
-    assert.equal(response.json().expiresIn, 3_600);
+    assert.equal(response.json().viewer.type, 'ANONYMOUS');
     assert.equal(typeof response.json().accessToken, 'string');
-    assert.equal(response.json().user.id, 'user-1');
+  });
+
+  it('records a completed playback session separately from watch progress', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/playback-quality-events',
+      headers: { authorization: `Bearer ${await token(app, 'user')}`, 'x-geo-country': 'US' },
+      payload: { episodeId: 'episode-1', sessionId: 'playback-session-0001', eventType: 'ENDED', currentTimeMs: 100_000 }
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().accepted, true);
+  });
+
+  it('publishes component drafts and serves only the published version to the mini app', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const headers = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const draft = await app.inject({ method: 'PATCH', url: '/api/v1/admin/ui-components/HOME_FEED', headers, payload: { enabled: false, page: 'HOME' } });
+    assert.equal(draft.statusCode, 200);
+    const beforePublish = await app.inject({ method: 'GET', url: '/api/v1/ui-components' });
+    assert.equal(beforePublish.json().items.find((item: { key: string }) => item.key === 'HOME_FEED').enabled, true);
+    const publish = await app.inject({ method: 'POST', url: '/api/v1/admin/ui-components/publish', headers });
+    assert.equal(publish.statusCode, 200);
+    const afterPublish = await app.inject({ method: 'GET', url: '/api/v1/ui-components' });
+    assert.equal(afterPublish.json().items.find((item: { key: string }) => item.key === 'HOME_FEED').enabled, false);
+    assert.equal(afterPublish.json().version, 1);
+  });
+
+  it('invalidates an administrator token after a password change', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const oldToken = await token(app, 'admin');
+    const change = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/me/password',
+      headers: { authorization: `Bearer ${oldToken}` },
+      payload: { currentPassword: 'not-used', newPassword: 'a-new-test-password' }
+    });
+    assert.equal(change.statusCode, 200);
+    const expired = await app.inject({ method: 'GET', url: '/api/v1/admin/albums', headers: { authorization: `Bearer ${oldToken}` } });
+    assert.equal(expired.statusCode, 403);
+  });
+
+  it('enforces role permissions server-side and accepts explicit analytics dates', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    await app.prisma.adminUser.update({ where: { id: 'admin-1' }, data: { role: 'ANALYST' } });
+    const headers = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const forbiddenWrite = await app.inject({ method: 'POST', url: '/api/v1/admin/albums', headers, payload: {} });
+    assert.equal(forbiddenWrite.statusCode, 403);
+    const analytics = await app.inject({ method: 'GET', url: '/api/v1/admin/analytics/audience?from=2026-09-01&to=2026-09-07&timezone=Asia%2FShanghai', headers });
+    assert.equal(analytics.statusCode, 200);
+    assert.equal(analytics.json().from, '2026-09-01');
+    assert.equal(analytics.json().to, '2026-09-07');
+    assert.equal(analytics.json().timezone, 'Asia/Shanghai');
+  });
+
+  it('requires configured app-entry ad completions exactly once per launch', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/app-entry-ad-policy',
+      headers: adminHeaders,
+      payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 2, onUnavailable: 'ALLOW' }
+    });
+    assert.equal(update.statusCode, 200);
+    const headers = { authorization: `Bearer ${await token(app, 'user')}` };
+    const launchId = '5da2f7b4-73fd-4d8e-a1b8-6c6dc03120ef';
+    const start = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId } });
+    assert.equal(start.statusCode, 200);
+    assert.equal(start.json().requiredCount, 2);
+    const sessionId = start.json().sessionId as string;
+    for (const eventId of ['de0d4d84-f1e5-4a4d-b6b6-1de0124e1201', 'b124bec0-1af4-4dc6-aec6-98f1c0f77e4a']) {
+      const premature = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId: eventId, isEnded: true } });
+      assert.equal(premature.statusCode, 409);
+      const shown = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers, payload: { clientEventId: eventId, adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'SHOWN', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: eventId.startsWith('de0') ? 1 : 2 } });
+      assert.equal(shown.statusCode, 200);
+      const completed = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId: eventId, isEnded: true } });
+      assert.equal(completed.statusCode, 200);
+    }
+    const repeatedLaunch = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId } });
+    assert.equal(repeatedLaunch.statusCode, 200);
+    assert.equal(repeatedLaunch.json().required, false);
+  });
+
+  it('renews an expired unfinished app-entry session for the same launch', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'INTERSTITIAL', placementId: 'entry-interstitial', requiredCount: 1, onUnavailable: 'BLOCK' } });
+    const headers = { authorization: `Bearer ${await token(app, 'user')}` };
+    const launchId = '20d0846e-441d-4c12-9d32-bcf8f876734b';
+    const first = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId } });
+    const sessionId = first.json().sessionId as string;
+    await app.prisma.appEntryAdSession.update({ where: { id: sessionId }, data: { status: 'EXPIRED', expiresAt: new Date(0) } });
+    const resumed = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId } });
+    assert.equal(resumed.statusCode, 200);
+    assert.equal(resumed.json().sessionId, sessionId);
+    assert.equal(resumed.json().completedCount, 0);
+    assert.equal(resumed.json().required, true);
   });
 
   it('separates user and admin tokens', async () => {
@@ -263,28 +488,84 @@ describe('QuicK ReeLS API', () => {
     const app = await createTestApp();
     apps.push(app);
     const authorization = { authorization: `Bearer ${await token(app, 'user')}`, 'x-geo-country': 'US' };
+    const start = await app.inject({ method: 'POST', url: '/api/v1/episodes/episode-1/reward-session', headers: authorization, payload: {} });
+    const sessionId = start.json().sessionId as string;
     const incomplete = await app.inject({
       method: 'POST',
-      url: '/api/v1/episodes/episode-1/reward-unlock',
+      url: `/api/v1/episodes/episode-1/reward-session/${sessionId}/complete`,
       headers: authorization,
-      payload: { placementId: 'rewarded-test', clientEventId: 'event-1', isEnded: false }
+      payload: { clientEventId: 'event-1', isEnded: false }
     });
     assert.equal(incomplete.statusCode, 400);
 
+    const withoutShown = await app.inject({
+      method: 'POST',
+      url: `/api/v1/episodes/episode-1/reward-session/${sessionId}/complete`,
+      headers: authorization,
+      payload: { clientEventId: 'event-1', isEnded: true }
+    });
+    assert.equal(withoutShown.statusCode, 409);
+
+    const shown = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ad-events',
+      headers: authorization,
+      payload: { clientEventId: 'event-1', adType: 'REWARDED', eventType: 'SHOWN', placementId: 'rewarded_episode_unlock', episodeId: 'episode-1', sessionId, rewardSessionId: sessionId, adIndex: 1 }
+    });
+    assert.equal(shown.statusCode, 200);
+
     const first = await app.inject({
       method: 'POST',
-      url: '/api/v1/episodes/episode-1/reward-unlock',
+      url: `/api/v1/episodes/episode-1/reward-session/${sessionId}/complete`,
       headers: authorization,
-      payload: { placementId: 'rewarded-test', clientEventId: 'event-1', isEnded: true }
+      payload: { clientEventId: 'event-1', isEnded: true }
     });
     const second = await app.inject({
       method: 'POST',
-      url: '/api/v1/episodes/episode-1/reward-unlock',
+      url: `/api/v1/episodes/episode-1/reward-session/${sessionId}/complete`,
       headers: authorization,
-      payload: { placementId: 'rewarded-test', clientEventId: 'event-1', isEnded: true }
+      payload: { clientEventId: 'event-1', isEnded: true }
     });
     assert.equal(first.statusCode, 200);
     assert.equal(second.statusCode, 200);
+  });
+
+  it('requires every configured rewarded completion before granting an unlock', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const headers = { authorization: `Bearer ${await token(app, 'user')}`, 'x-geo-country': 'US' };
+    const start = await app.inject({ method: 'POST', url: '/api/v1/episodes/episode-1/reward-session', headers, payload: {} });
+    assert.equal(start.statusCode, 200);
+    const sessionId = start.json().sessionId as string;
+
+    for (const [index, expectedAccess] of ['REWARDED_AD_REQUIRED', 'REWARDED_AD_REQUIRED', 'PLAYABLE'].entries()) {
+      const eventId = `three-step-${index + 1}`;
+      const shown = await app.inject({
+        method: 'POST',
+        url: '/api/v1/ad-events',
+        headers,
+        payload: { clientEventId: eventId, adType: 'REWARDED', eventType: 'SHOWN', placementId: 'rewarded_episode_unlock', episodeId: 'episode-1', sessionId, rewardSessionId: sessionId, adIndex: index + 1 }
+      });
+      assert.equal(shown.statusCode, 200);
+      const complete = await app.inject({
+        method: 'POST',
+        url: `/api/v1/episodes/episode-1/reward-session/${sessionId}/complete`,
+        headers,
+        payload: { clientEventId: eventId, isEnded: true }
+      });
+      assert.equal(complete.statusCode, 200);
+      assert.equal(complete.json().access, expectedAccess);
+      assert.equal(complete.json().shouldContinue, index < 2);
+    }
+
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: `/api/v1/episodes/episode-1/reward-session/${sessionId}/complete`,
+      headers,
+      payload: { clientEventId: 'three-step-3', isEnded: true }
+    });
+    assert.equal(duplicate.statusCode, 200);
+    assert.equal(duplicate.json().access, 'PLAYABLE');
   });
 
   it('rejects playback progress past the online episode duration', async () => {

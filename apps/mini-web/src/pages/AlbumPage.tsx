@@ -5,11 +5,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { EpisodeList } from '../components/EpisodeList';
 import { LoadingState } from '../components/LoadingState';
 import { unlockEpisodeByRewardedAd } from '../features/ads/rewarded-ad';
-import { loginWithTikTok } from '../features/auth/login';
 import { apiClient } from '../lib/api-client';
 import { formatCompactNumber } from '../lib/format';
 import { t } from '../lib/i18n';
-import { useLocale, getSessionToken } from '../lib/storage';
+import { useLocale } from '../lib/storage';
 import { componentIsEnabled, useUiComponents } from '../features/cms/ui-components';
 import styles from './AlbumPage.module.css';
 
@@ -24,7 +23,6 @@ export function AlbumPage() {
   const episodes = useQuery({ queryKey: ['episodes', albumId, locale], queryFn: () => apiClient.get<{ items: EpisodeSummary[] }>(`/albums/${albumId}/episodes?locale=${encodeURIComponent(locale)}`) });
   const mutateInteraction = useMutation({
     mutationFn: async ({ action, active }: { action: 'like' | 'favorite'; active: boolean }) => {
-      if (!getSessionToken()) await loginWithTikTok();
       return apiClient.put<InteractionResponse>(`/albums/${albumId}/${action}`, { active });
     },
     onSuccess: (state) => queryClient.setQueryData<AlbumDetail>(['album', albumId, locale], (current) => current ? { ...current, likeCount: state.likeCount, favoriteCount: state.favoriteCount, shareCount: state.shareCount, userState: { liked: state.liked, favorited: state.favorited } } : current)
@@ -35,7 +33,6 @@ export function AlbumPage() {
   });
   const unlock = useMutation({
     mutationFn: async (episode: EpisodeSummary) => {
-      if (!getSessionToken()) await loginWithTikTok();
       await unlockEpisodeByRewardedAd(episode.id);
       return episode;
     },
@@ -60,7 +57,7 @@ export function AlbumPage() {
       </div></div>
     </header>
     {(unlock.isPending || mutateInteraction.isPending || share.isPending) && <div className={styles.inlineStatus}><RefreshCw size={14} aria-hidden="true" /> {t(locale, 'syncing')}</div>}
-    {unlock.isError && <div className={styles.errorStatus}>{unlock.error instanceof Error ? unlock.error.message : t(locale, 'unlockFailed')}</div>}
+    {unlock.isError && <div className={styles.errorStatus}>{t(locale, 'unlockFailed')}</div>}
     {mutateInteraction.isError && <div className={styles.errorStatus}>{mutateInteraction.error instanceof Error ? mutateInteraction.error.message : t(locale, 'unavailable')}</div>}
     {detail.tags?.length ? <div className={styles.tags}>{detail.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
     {componentIsEnabled(ui, 'ALBUM_DESCRIPTION') && <section className={styles.about}><h2>{t(locale, 'about')}</h2><p>{detail.description}</p></section>}

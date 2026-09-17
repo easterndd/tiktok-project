@@ -13,11 +13,13 @@ export type EpisodeSummary = {
 };
 
 export type PlayInfo = {
+  playbackMode?: 'BYTEPLUS' | 'LOCAL';
   albumId: string;
   localEpisodeId: string;
   episodeId: string;
   vid: string;
   playAuthToken: string | null;
+  sourceUrl?: string | null;
   title: string;
   coverUrl: string | null;
   durationMs: number | null;

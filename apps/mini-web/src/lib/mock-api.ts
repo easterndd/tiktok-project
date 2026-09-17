@@ -101,7 +101,6 @@ export async function mockApiRequest<T>({ method, path, body }: MockRequest): Pr
   }
   if (method === 'PUT' && pathname === '/me/watch-progress') return undefined as T;
   if (method === 'POST' && (pathname === '/ad-events' || pathname === '/playback-quality-events')) return undefined as T;
-  if (method === 'POST' && pathname === '/auth/tiktok/login') return { accessToken: 'mock-business-session', expiresIn: 3600, user: { id: 'mock-user' } } as T;
 
   throw new Error(`Mock endpoint is not implemented: ${method} ${pathname}`);
 }

@@ -1,0 +1,9 @@
+.gate { display: grid; min-height: 100dvh; padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom)); place-items: center; background: #0a0d14; }
+.surface { display: grid; width: min(100%, 360px); justify-items: center; gap: 14px; padding: 28px 24px; color: var(--muted); text-align: center; }
+.surface h1 { margin: 0; color: var(--text); font-size: 22px; }
+.surface p { margin: 0; line-height: 1.5; }
+.surface svg { color: var(--pink); }
+.surface button { display: inline-flex; min-height: 44px; align-items: center; gap: 8px; margin-top: 6px; padding: 0 16px; color: #0a0d14; border: 0; border-radius: 8px; background: var(--pink); font-weight: 800; }
+.spinner { width: 26px; height: 26px; border: 2px solid rgba(255, 255, 255, .16); border-top-color: var(--pink); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

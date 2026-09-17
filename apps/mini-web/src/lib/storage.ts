@@ -5,6 +5,7 @@ import { detectLocale } from './i18n';
 const validLocales = new Set(['en', 'pt', 'fr', 'id', 'ja', 'es', 'ko', 'th']);
 
 const sessionKey = 'quickreels_access_token';
+const visitorKey = 'quickreels_visitor_key';
 const sessionListeners = new Set<() => void>();
 
 export function getStoredLocale(): Locale {
@@ -39,6 +40,16 @@ export function setSessionToken(token: string) {
 export function clearSessionToken() {
   sessionStorage.removeItem(sessionKey);
   sessionListeners.forEach((listener) => listener());
+}
+
+export function getOrCreateVisitorKey() {
+  const stored = localStorage.getItem(visitorKey);
+  if (stored) return stored;
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  localStorage.setItem(visitorKey, value);
+  return value;
 }
 
 export function subscribeToSession(listener: () => void) {

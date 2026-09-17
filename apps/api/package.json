@@ -11,6 +11,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:local-playback": "tsx prisma/seed-local-playback.ts",
     "admin:bootstrap": "node dist/scripts/bootstrap-admin.js",
     "worker": "tsx src/jobs/tiktok-short-drama.worker.ts"
   },

@@ -1,10 +1,10 @@
 import {
   Activity, AlertTriangle, BarChart3, CalendarDays, CheckCircle2, CircleAlert, Database,
-  Film, FileVideo, Gauge, LayoutDashboard, ListVideo, LogIn, MoreHorizontal, RefreshCw,
-  Save, Settings2, Upload, Users, Wifi
+  Film, FileVideo, Gauge, Image, LayoutDashboard, ListVideo, LogIn, Megaphone, MoreHorizontal, Plus,
+  RefreshCw, Save, Settings2, Trash2, Users, Wifi
 } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import './styles.css';
 
 const API = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/api/v1';
@@ -14,15 +14,34 @@ type Album = {
   title: string;
   status: string;
   episodeCount: number;
-  accessConfig?: { freeEpisodeCount?: number; rewardedAdEnabled?: boolean; rewardedPlacementId?: string } | null;
+  accessConfig?: { freeEpisodeCount?: number; rewardedAdEnabled?: boolean; rewardedPlacementId?: string; rewardedAdCount?: number } | null;
 };
 type EpisodeOption = { id: string; albumId: string; episodeNo: number; title: string; status: string; byteplusVid?: string | null; album: { title: string; status: string } };
+type CoverAsset = { id: string; publicUrl: string; status: string; width?: number | null; height?: number | null };
+type DraftEpisode = { localId: string; episodeNo: number; title: string; sortOrder: number; isFree: boolean; file?: File | null; coverFile?: File | null; coverAsset?: CoverAsset | null; coverPreviewUrl?: string; savedEpisodeId?: string; uploadStatus?: string; uploadError?: string };
 type Component = { key: string; page: string; enabled: boolean; config?: unknown; label?: string; updatedAt?: string | null };
+type ComponentResponse = { items: Component[]; draftVersion: number | null; publishedVersion: number; publishedAt?: string | null };
 type UploadJob = { id: string; episodeId: string; sourceType?: string; sourceName?: string | null; status: string; providerJobId?: string | null; errorMessage?: string | null; createdAt: string; completedAt?: string | null; episode?: { title: string; episodeNo: number } };
 type Overview = { albums: number; episodes: number; users: number; likes: number; favorites: number; shares: number; searches: number; rewardedUnlocks: number };
-type Audience = { periodDays: number; activeUsers: number; newUsers: number; watchSessions: number; completedEpisodes: number; favorites: number; shares: number; searches: number; dailyNewUsers: { date: string; count: number }[]; dailyActiveUsers: { date: string; count: number }[] };
-type Playback = { periodDays: number; totalEvents: number; firstFrames: number; errorCount: number; errorRate: number; averageStartupMs: number | null; totalBufferMs: number; eventTypes: { eventType: string; count: number }[]; definitions: { definition: string; count: number }[]; networks: { networkType: string; count: number }[]; recentErrors: { episodeTitle: string; errorCode?: string | null; createdAt: string }[] };
-type Tab = 'overview' | 'albums' | 'uploads' | 'audience' | 'playback' | 'components';
+type Audience = { from: string; to: string; timezone: string; periodDays: number; activeUsers: number; dau: number; wau: number; mau: number; newUsers: number; watchSessions: number; completedEpisodes: number; favorites: number; shares: number; searches: number; dailyNewUsers: { date: string; count: number }[]; dailyActiveUsers: { date: string; count: number }[] };
+type Playback = { from: string; to: string; timezone: string; periodDays: number; totalEvents: number; firstFrames: number; errorCount: number; errorRate: number; averageStartupMs: number | null; totalBufferMs: number; eventTypes: { eventType: string; count: number }[]; definitions: { definition: string; count: number }[]; networks: { networkType: string; count: number }[]; recentErrors: { episodeTitle: string; errorCode?: string | null; createdAt: string }[] };
+type AppEntryAdPolicy = { enabled: boolean; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; requiredCount: number; onUnavailable: 'ALLOW' | 'BLOCK'; version: number };
+type AdminProfile = { id: string; email: string; role: string; status: string; lastLoginAt?: string | null; passwordChangedAt?: string | null };
+type Tab = 'overview' | 'create' | 'albums' | 'ads' | 'audience' | 'playback' | 'components' | 'security';
+const contentDraftStorageKey = 'quickreels_content_draft';
+
+function inputDate(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function rangeStart(days: number) {
+  const value = new Date();
+  value.setDate(value.getDate() - days + 1);
+  return inputDate(value);
+}
 
 async function api<T>(path: string, options: RequestInit = {}) {
   const token = sessionStorage.getItem('quickreels_admin_token');
@@ -78,6 +97,15 @@ function Status({ value }: { value: string }) {
   return <span className={`status ${tone}`}><i />{value}</span>;
 }
 
+function episodeNoFromName(fileName: string) {
+  const patterns = [/第\s*0*(\d+)\s*集/i, /Episode\s*0*(\d+)/i, /\bE0*(\d+)\b/i, /\bS\d+E0*(\d+)\b/i];
+  for (const pattern of patterns) {
+    const match = pattern.exec(fileName);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
 function Panel({ title, description, action, children }: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
   return <section className="panel"><div className="panel-heading"><div><h2>{title}</h2>{description && <p>{description}</p>}</div>{action}</div>{children}</section>;
 }
@@ -88,36 +116,60 @@ function AdminApp() {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [episodes, setEpisodes] = useState<EpisodeOption[]>([]);
   const [components, setComponents] = useState<Component[]>([]);
+  const [componentDraftVersion, setComponentDraftVersion] = useState<number | null>(null);
+  const [componentPublishedVersion, setComponentPublishedVersion] = useState(0);
+  const [currentAdmin, setCurrentAdmin] = useState<AdminProfile | null>(null);
   const [jobs, setJobs] = useState<UploadJob[]>([]);
   const [overview, setOverview] = useState<Overview>({ albums: 0, episodes: 0, users: 0, likes: 0, favorites: 0, shares: 0, searches: 0, rewardedUnlocks: 0 });
   const [audience, setAudience] = useState<Audience | null>(null);
   const [playback, setPlayback] = useState<Playback | null>(null);
-  const [analyticsDays, setAnalyticsDays] = useState(30);
-  const [uploadEpisodeId, setUploadEpisodeId] = useState('');
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ enabled: false, mode: 'INTERSTITIAL', placementId: 'app_entry_interstitial', requiredCount: 1, onUnavailable: 'ALLOW', version: 1 });
+  const [analyticsFrom, setAnalyticsFrom] = useState(() => rangeStart(30));
+  const [analyticsTo, setAnalyticsTo] = useState(() => inputDate(new Date()));
+  const [analyticsTimezone, setAnalyticsTimezone] = useState('Asia/Shanghai');
+  const [createTitle, setCreateTitle] = useState('');
+  const [createDescription, setCreateDescription] = useState('');
+  const [createCoverFile, setCreateCoverFile] = useState<File | null>(null);
+  const [createCover, setCreateCover] = useState<CoverAsset | null>(null);
+  const [createCoverPreviewUrl, setCreateCoverPreviewUrl] = useState('');
+  const [createFreeCount, setCreateFreeCount] = useState(3);
+  const [createRewardedEnabled, setCreateRewardedEnabled] = useState(true);
+  const [createPlacementId, setCreatePlacementId] = useState('rewarded_episode_unlock');
+  const [createRewardedCount, setCreateRewardedCount] = useState(1);
+  const [draftEpisodes, setDraftEpisodes] = useState<DraftEpisode[]>(() => Array.from({ length: 3 }, (_, index) => ({ localId: `draft-${index + 1}`, episodeNo: index + 1, title: `Episode ${index + 1}`, sortOrder: index + 1, isFree: index < 3 })));
+  const [creating, setCreating] = useState(false);
+  const [batchFeedback, setBatchFeedback] = useState('');
+  const [draftReady, setDraftReady] = useState(false);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [albumResult, episodeResult, componentResult, overviewResult, jobResult, audienceResult, playbackResult] = await Promise.all([
+      const [albumResult, episodeResult, componentResult, overviewResult, jobResult, audienceResult, playbackResult, entryAdPolicyResult, adminResult] = await Promise.all([
         api<{ items: Album[] }>('/admin/albums'),
         api<{ items: EpisodeOption[] }>('/admin/episodes'),
-        api<Component[]>('/admin/ui-components'),
+        api<ComponentResponse>('/admin/ui-components'),
         api<Overview>('/admin/analytics/overview'),
         api<{ items: UploadJob[] }>('/admin/upload-jobs'),
-        api<Audience>(`/admin/analytics/audience?days=${analyticsDays}`),
-        api<Playback>(`/admin/analytics/playback-quality?days=${analyticsDays}`)
+        api<Audience>(`/admin/analytics/audience?${new URLSearchParams({ from: analyticsFrom, to: analyticsTo, timezone: analyticsTimezone })}`),
+        api<Playback>(`/admin/analytics/playback-quality?${new URLSearchParams({ from: analyticsFrom, to: analyticsTo, timezone: analyticsTimezone })}`),
+        api<AppEntryAdPolicy>('/admin/app-entry-ad-policy'),
+        api<{ admin: AdminProfile }>('/admin/me')
       ]);
       setAlbums(albumResult.items);
       setEpisodes(episodeResult.items);
-      setComponents(componentResult);
+      setComponents(componentResult.items);
+      setComponentDraftVersion(componentResult.draftVersion);
+      setComponentPublishedVersion(componentResult.publishedVersion);
       setOverview(overviewResult);
       setJobs(jobResult.items);
       setAudience(audienceResult);
       setPlayback(playbackResult);
+      setEntryAdPolicy(entryAdPolicyResult);
+      setCurrentAdmin(adminResult.admin);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '加载失败');
     } finally {
@@ -125,60 +177,282 @@ function AdminApp() {
     }
   };
 
-  useEffect(() => { if (loggedIn) void loadData(); }, [loggedIn, analyticsDays]);
-  const selectedEpisodes = useMemo(() => episodes.filter((episode) => episode.album.status !== 'OFFLINE'), [episodes]);
+  useEffect(() => { if (loggedIn) void loadData(); }, [loggedIn, analyticsFrom, analyticsTo, analyticsTimezone]);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(contentDraftStorageKey) ?? 'null') as { title?: string; description?: string; cover?: CoverAsset | null; freeCount?: number; rewardedEnabled?: boolean; placementId?: string; rewardedCount?: number; episodes?: DraftEpisode[] } | null;
+      if (saved) {
+        setCreateTitle(saved.title ?? '');
+        setCreateDescription(saved.description ?? '');
+        setCreateCover(saved.cover ?? null);
+        setCreateFreeCount(saved.freeCount ?? 3);
+        setCreateRewardedEnabled(saved.rewardedEnabled ?? true);
+        setCreatePlacementId(saved.placementId ?? 'rewarded_episode_unlock');
+        setCreateRewardedCount(saved.rewardedCount ?? 1);
+        if (saved.episodes?.length) setDraftEpisodes(saved.episodes.map((episode) => ({ ...episode, file: null, coverFile: null, coverPreviewUrl: '' })));
+        setMessage('已恢复本地草稿；本地文件需重新选择后再上传。');
+      }
+    } catch {
+      localStorage.removeItem(contentDraftStorageKey);
+    } finally {
+      setDraftReady(true);
+    }
+  }, []);
+  useEffect(() => {
+    if (!draftReady) return;
+    localStorage.setItem(contentDraftStorageKey, JSON.stringify({ title: createTitle, description: createDescription, cover: createCover, freeCount: createFreeCount, rewardedEnabled: createRewardedEnabled, placementId: createPlacementId, rewardedCount: createRewardedCount, episodes: draftEpisodes.map(({ file, coverFile, coverPreviewUrl, ...episode }) => episode) }));
+  }, [createTitle, createDescription, createCover, createFreeCount, createRewardedEnabled, createPlacementId, createRewardedCount, draftEpisodes, draftReady]);
   if (!loggedIn) return <Login onLogin={() => setLoggedIn(true)} />;
 
+  const resetCreateForm = () => {
+    setCreateTitle('');
+    setCreateDescription('');
+    setCreateCoverFile(null);
+    setCreateCover(null);
+    setCreateCoverPreviewUrl('');
+    setCreateFreeCount(3);
+    setCreateRewardedEnabled(true);
+    setCreatePlacementId('rewarded_episode_unlock');
+    setCreateRewardedCount(1);
+    setBatchFeedback('');
+    localStorage.removeItem(contentDraftStorageKey);
+    setDraftEpisodes(Array.from({ length: 3 }, (_, index) => ({ localId: `draft-${Date.now()}-${index + 1}`, episodeNo: index + 1, title: `Episode ${index + 1}`, sortOrder: index + 1, isFree: index < 3 })));
+  };
+
+  const uploadCover = async () => {
+    if (!createCoverFile) throw new Error('请选择专辑封面');
+    const form = new FormData();
+    form.append('file', createCoverFile);
+    const asset = await api<CoverAsset>('/admin/cover-assets', { method: 'POST', body: form });
+    setCreateCover(asset);
+    return asset;
+  };
+
+  const uploadEpisodeCover = async (draft: DraftEpisode) => {
+    if (!draft.coverFile) return draft.coverAsset ?? null;
+    const form = new FormData();
+    form.append('file', draft.coverFile);
+    const asset = await api<CoverAsset>('/admin/cover-assets', { method: 'POST', body: form });
+    patchDraftEpisode(draft.localId, { coverAsset: asset });
+    return asset;
+  };
+
+  const selectAlbumCover = (file: File | null) => {
+    setCreateCoverFile(file);
+    setCreateCover(null);
+    setCreateCoverPreviewUrl(file ? URL.createObjectURL(file) : '');
+  };
+
+  const selectEpisodeCover = (draft: DraftEpisode, file: File | null) => {
+    patchDraftEpisode(draft.localId, { coverFile: file, coverAsset: null, coverPreviewUrl: file ? URL.createObjectURL(file) : '' });
+  };
+
+  const applyEpisodeCount = (count: number) => {
+    const safeCount = Math.max(1, Math.min(count, 500));
+    setDraftEpisodes((current) => Array.from({ length: safeCount }, (_, index) => current[index] ?? { localId: `draft-${Date.now()}-${index + 1}`, episodeNo: index + 1, title: `Episode ${index + 1}`, sortOrder: index + 1, isFree: index < createFreeCount }));
+  };
+
+  const patchDraftEpisode = (localId: string, patch: Partial<DraftEpisode>) => setDraftEpisodes((items) => items.map((item) => item.localId === localId ? { ...item, ...patch } : item));
+
+  const applyBatchFiles = (files: FileList | null) => {
+    const selected = Array.from(files ?? []);
+    if (!selected.length) return;
+    const configuredEpisodeNos = new Set(draftEpisodes.map((episode) => episode.episodeNo));
+    const matchedByEpisode = new Map<number, File[]>();
+    const unmatchedNames: string[] = [];
+    for (const file of selected) {
+      const episodeNo = episodeNoFromName(file.name);
+      if (!episodeNo || !configuredEpisodeNos.has(episodeNo)) {
+        unmatchedNames.push(file.name);
+        continue;
+      }
+      const matches = matchedByEpisode.get(episodeNo) ?? [];
+      matches.push(file);
+      matchedByEpisode.set(episodeNo, matches);
+    }
+    const duplicateEpisodeNos = [...matchedByEpisode.entries()].filter(([, matches]) => matches.length > 1).map(([episodeNo]) => episodeNo);
+    const missingEpisodeNos = draftEpisodes.filter((episode) => !episode.file && !matchedByEpisode.has(episode.episodeNo)).map((episode) => episode.episodeNo);
+    setBatchFeedback([unmatchedNames.length ? `未匹配文件：${unmatchedNames.join('、')}` : '', duplicateEpisodeNos.length ? `重复匹配集数：${duplicateEpisodeNos.join('、')}` : '', missingEpisodeNos.length ? `未选择视频的集数：${missingEpisodeNos.join('、')}` : '所有已选择文件都已按集号匹配。'].filter(Boolean).join('；'));
+    setDraftEpisodes((items) => {
+      const used = new Set<File>();
+      return items.map((episode) => {
+        if (episode.file) return episode;
+        const match = selected.find((file) => !used.has(file) && episodeNoFromName(file.name) === episode.episodeNo);
+        if (!match) return episode;
+        used.add(match);
+        return { ...episode, file: match };
+      });
+    });
+  };
+
+  const uploadDraftVideo = async (draft: DraftEpisode) => {
+    if (!draft.savedEpisodeId || !draft.file) return;
+    patchDraftEpisode(draft.localId, { uploadStatus: '上传中', uploadError: undefined });
+    try {
+      const form = new FormData();
+      form.append('episodeId', draft.savedEpisodeId);
+      form.append('file', draft.file);
+      await api('/admin/upload-jobs/local', { method: 'POST', body: form });
+      patchDraftEpisode(draft.localId, { uploadStatus: '已上传', uploadError: undefined });
+    } catch (error) {
+      const uploadError = error instanceof Error ? error.message : '视频上传失败';
+      patchDraftEpisode(draft.localId, { uploadStatus: '上传失败', uploadError });
+      throw error;
+    }
+  };
+
+  const submitDrama = async (event: FormEvent) => {
+    event.preventDefault();
+    setCreating(true);
+    setMessage('');
+    try {
+      let draftsToUpload = draftEpisodes;
+      if (!draftEpisodes.some((episode) => episode.savedEpisodeId)) {
+        const cover = createCover ?? await uploadCover();
+        const draftsWithCovers = await Promise.all(draftEpisodes.map(async (episode) => ({ ...episode, coverAsset: await uploadEpisodeCover(episode) })));
+        const result = await api<{ album: Album; episodes: { id: string; episodeNo: number }[] }>('/admin/dramas', {
+          method: 'POST',
+          body: JSON.stringify({
+            title: createTitle,
+            description: createDescription,
+            coverAssetId: cover.id,
+            accessConfig: {
+              freeEpisodeCount: createFreeCount,
+              rewardedAdEnabled: createRewardedEnabled,
+              rewardedPlacementId: createPlacementId,
+              rewardedAdCount: createRewardedCount
+            },
+            episodes: draftsWithCovers.map((episode) => ({
+              episodeNo: episode.episodeNo,
+              title: episode.title,
+              sortOrder: episode.sortOrder,
+              isFree: episode.isFree,
+              coverAssetId: episode.coverAsset?.id ?? null
+            }))
+          })
+        });
+        const episodeByNo = new Map(result.episodes.map((episode) => [episode.episodeNo, episode.id]));
+        draftsToUpload = draftsWithCovers.map((draft) => ({ ...draft, savedEpisodeId: episodeByNo.get(draft.episodeNo) }));
+        setDraftEpisodes(draftsToUpload);
+      }
+      const failedUploads: DraftEpisode[] = [];
+      for (const draft of draftsToUpload) {
+        if (!draft.file || draft.uploadStatus === '已上传') continue;
+        try {
+          await uploadDraftVideo(draft);
+        } catch {
+          failedUploads.push(draft);
+        }
+      }
+      if (failedUploads.length) {
+        setMessage(`短剧已创建，但有 ${failedUploads.length} 个视频上传失败，可在对应行单独重试。`);
+      } else {
+        setMessage('短剧草稿已创建，已选择的视频也完成上传。');
+        resetCreateForm();
+      }
+      await loadData();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '内容创建失败');
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const updateAccess = async (album: Album) => {
-    const accessConfig = { freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: 'rewarded_episode_unlock', ...album.accessConfig };
+    const accessConfig = { freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: 'rewarded_episode_unlock', rewardedAdCount: 1, ...album.accessConfig };
     await api(`/admin/albums/${album.id}`, { method: 'PATCH', body: JSON.stringify({ accessConfig }) });
     setMessage('剧集访问配置已保存');
   };
   const updateComponent = async (component: Component) => {
     const next = { ...component, enabled: !component.enabled };
-    await api(`/admin/ui-components/${component.key}`, { method: 'PATCH', body: JSON.stringify({ enabled: next.enabled, page: component.page }) });
-    setComponents((items) => items.map((item) => item.key === component.key ? next : item));
-    setMessage(`${component.label ?? component.key}已${next.enabled ? '开启' : '关闭'}`);
+    const result = await api<{ items: Component[]; draftVersion: number }>('/admin/ui-components/' + component.key, { method: 'PATCH', body: JSON.stringify({ enabled: next.enabled, page: component.page }) });
+    setComponents(result.items.map((item) => ({ ...item, label: components.find((current) => current.key === item.key)?.label })));
+    setComponentDraftVersion(result.draftVersion);
+    setMessage(`${component.label ?? component.key}已保存到草稿，发布后同步到小程序。`);
   };
-  const submitUpload = async (event: FormEvent) => {
+  const publishComponents = async () => {
+    const result = await api<{ items: Component[]; version: number }>('/admin/ui-components/publish', { method: 'POST' });
+    setComponents(result.items.map((item) => ({ ...item, label: components.find((current) => current.key === item.key)?.label })));
+    setComponentDraftVersion(null);
+    setComponentPublishedVersion(result.version);
+    setMessage(`页面组件版本 ${result.version} 已发布，小程序将在下一次配置拉取时同步。`);
+  };
+  const selectAnalyticsPreset = (days: number) => {
+    setAnalyticsFrom(rangeStart(days));
+    setAnalyticsTo(inputDate(new Date()));
+  };
+  const changePassword = async (event: FormEvent) => {
     event.preventDefault();
-    if (!uploadFile || !uploadEpisodeId) {
-      setMessage('请选择剧集和视频文件');
-      return;
-    }
-    setUploading(true);
-    setMessage('');
     try {
-      const form = new FormData();
-      form.append('episodeId', uploadEpisodeId);
-      form.append('file', uploadFile);
-      await api('/admin/upload-jobs/local', { method: 'POST', body: form });
-      setMessage('视频已上传到 BytePlus VOD，Episode 已进入 READY 状态。');
-      setUploadFile(null);
-      setUploadEpisodeId('');
-      const input = document.getElementById('video-file') as HTMLInputElement | null;
-      if (input) input.value = '';
+      await api('/admin/me/password', { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) });
+      sessionStorage.removeItem('quickreels_admin_token');
+      setCurrentPassword('');
+      setNewPassword('');
+      setLoggedIn(false);
+      setMessage('密码已更新，请使用新密码重新登录。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '密码更新失败');
+    }
+  };
+  const saveEntryAdPolicy = async (event: FormEvent) => {
+    event.preventDefault();
+    const next = await api<AppEntryAdPolicy>('/admin/app-entry-ad-policy', { method: 'PUT', body: JSON.stringify(entryAdPolicy) });
+    setEntryAdPolicy(next);
+    setMessage('进入广告策略已保存，将在新的小程序启动会话生效。');
+  };
+  const retryUploadJob = async (job: UploadJob) => {
+    try {
+      await api(`/admin/upload-jobs/${job.id}/retry`, { method: 'POST' });
+      setMessage(`已将“${job.episode?.title ?? job.episodeId}”重新加入上传队列。`);
       await loadData();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '视频上传失败');
-    } finally {
-      setUploading(false);
+      setMessage(error instanceof Error ? error.message : '重新排队失败');
     }
   };
-  const tabLabels: Record<Tab, string> = { overview: '概览', albums: '剧集与解锁', uploads: '上传任务', audience: '观众数据', playback: '播放质量', components: '页面组件开关' };
-  const title = tab === 'overview' ? '内容运营概览' : tab === 'uploads' ? 'BytePlus 媒资上传' : tab === 'audience' ? '观众数据' : tab === 'playback' ? '播放质量' : tab === 'components' ? '页面组件开关' : '剧集与解锁配置';
+  const tabLabels: Record<Tab, string> = { overview: '概览', create: '内容创建', albums: '剧集与解锁', ads: '进入广告', audience: '观众数据', playback: '播放质量', components: '页面组件开关', security: '账号安全' };
+  const title = tab === 'overview' ? '内容运营概览' : tab === 'create' ? '内容创建' : tab === 'ads' ? '进入广告策略' : tab === 'audience' ? '观众数据' : tab === 'playback' ? '播放质量' : tab === 'components' ? '页面组件开关' : tab === 'security' ? '账号安全' : '剧集与解锁配置';
 
   return <div className="admin-layout"><aside className="sidebar"><div className="brand"><span><Film size={17} /></span>QuicK <span>ReeLS</span></div><p className="workspace-label">运营工作区</p><nav>
-    {([['overview', LayoutDashboard, '概览'], ['albums', ListVideo, '剧集与解锁'], ['uploads', Upload, '上传任务'], ['audience', Users, '观众数据'], ['playback', Activity, '播放质量']] as const).map(([key, Icon, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}><Icon size={17} />{label}</button>)}
-  </nav><div className="sidebar-bottom"><button className={tab === 'components' ? 'active' : ''} onClick={() => setTab('components')}><Settings2 size={17} />页面组件开关</button><div className="account"><span className="account-avatar">OP</span><span><strong>运营管理员</strong><small>TK小程序管理后台</small></span><MoreHorizontal size={16} /></div></div></aside>
+    {([['overview', LayoutDashboard, '概览'], ['create', Plus, '内容创建'], ['albums', ListVideo, '剧集与解锁'], ['ads', Megaphone, '进入广告'], ['audience', Users, '观众数据'], ['playback', Activity, '播放质量']] as const).map(([key, Icon, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}><Icon size={17} />{label}</button>)}
+  </nav><div className="sidebar-bottom"><button className={tab === 'components' ? 'active' : ''} onClick={() => setTab('components')}><Settings2 size={17} />页面组件开关</button><button className={tab === 'security' ? 'active' : ''} onClick={() => setTab('security')}><Settings2 size={17} />账号安全</button><div className="account"><span className="account-avatar">{currentAdmin?.email.slice(0, 2).toUpperCase() ?? 'OP'}</span><span><strong>{currentAdmin?.email ?? '运营管理员'}</strong><small>{currentAdmin?.role ?? 'TK小程序管理后台'}</small></span><MoreHorizontal size={16} /></div></div></aside>
     <main className="main"><header className="page-header"><div><p className="eyebrow">运营管理 / {tabLabels[tab]}</p><h1>{title}</h1><p className="subhead">数据和配置通过 API 实时同步到 QuicK ReeLS 小程序。</p></div><div className="header-actions"><button className="secondary" onClick={() => void loadData()} title="刷新数据"><RefreshCw size={15} className={loading ? 'spin' : ''} />刷新</button><button className="secondary" onClick={() => { sessionStorage.removeItem('quickreels_admin_token'); setLoggedIn(false); }}>退出登录</button></div></header>{message && <div className="notice"><CheckCircle2 size={16} />{message}</div>}
-      {(tab === 'audience' || tab === 'playback') && <div className="toolbar"><span><CalendarDays size={15} />统计周期</span><select value={analyticsDays} onChange={(event) => setAnalyticsDays(Number(event.target.value))}><option value={7}>近 7 天</option><option value={30}>近 30 天</option><option value={90}>近 90 天</option></select></div>}
+      {(tab === 'audience' || tab === 'playback') && <div className="toolbar"><span><CalendarDays size={15} />统计周期</span><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(7)}>近 7 天</button><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(30)}>近 30 天</button><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(90)}>近 90 天</button><label>开始<input type="date" value={analyticsFrom} max={analyticsTo} onChange={(event) => setAnalyticsFrom(event.target.value)} /></label><label>结束<input type="date" value={analyticsTo} min={analyticsFrom} max={inputDate(new Date())} onChange={(event) => setAnalyticsTo(event.target.value)} /></label><label>时区<select value={analyticsTimezone} onChange={(event) => setAnalyticsTimezone(event.target.value)}><option value="Asia/Shanghai">Asia/Shanghai</option><option value="UTC">UTC</option></select></label></div>}
       {tab === 'overview' && <><section className="metrics"><Metric label="在线剧集" value={String(overview.albums)} change="实时数据" icon={Film} tone="pink" /><Metric label="在线集数" value={String(overview.episodes)} change="已通过发布条件" icon={ListVideo} tone="cyan" /><Metric label="用户数" value={String(overview.users)} change="累计注册" icon={Users} tone="green" /><Metric label="广告解锁" value={String(overview.rewardedUnlocks)} change="累计完成" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="运营健康度" description="关键业务数据当前状态"><div className="readiness-list"><div><span className="ready-dot done"><CheckCircle2 size={15} /></span><span><strong>剧集元数据与访问策略</strong><small>{overview.albums} 部在线剧集 · {overview.episodes} 集可见</small></span><em>正常</em></div><div><span className="ready-dot done"><Database size={15} /></span><span><strong>观众行为采集</strong><small>{overview.likes} 次点赞 · {overview.favorites} 次收藏 · {overview.searches} 次搜索</small></span><em>正常</em></div><div><span className="ready-dot done"><Gauge size={15} /></span><span><strong>播放质量采集</strong><small>{playback?.totalEvents ?? 0} 条播放器事件已入库</small></span><em>正常</em></div></div></Panel><Panel title="最近上传" description="BytePlus VOD 媒资任务"><div className="compact-list">{jobs.slice(0, 5).map((job) => <div className="compact-row" key={job.id}><FileVideo size={17} /><span><strong>{job.episode?.title ?? job.episodeId}</strong><small>{job.sourceName ?? job.sourceType ?? 'URL'}</small></span><Status value={job.status} /></div>)}{!jobs.length && <p className="empty-copy">还没有上传任务</p>}</div></Panel></div></>}
-      {tab === 'albums' && <Panel title="剧集访问策略" description="免费集数和广告解锁配置会立即影响小程序访问"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>状态</th><th>集数</th><th>免费集数</th><th>广告解锁</th><th>操作</th></tr></thead><tbody>{albums.map((album) => <tr key={album.id}><td><span className="drama-thumb" /><strong>{album.title}</strong></td><td><Status value={album.status} /></td><td>{album.episodeCount}</td><td><input className="inline-number" type="number" min="0" value={album.accessConfig?.freeEpisodeCount ?? 0} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, freeEpisodeCount: Number(event.target.value) } } : item))} /></td><td><input type="checkbox" checked={album.accessConfig?.rewardedAdEnabled ?? true} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, rewardedAdEnabled: event.target.checked } } : item))} /></td><td><button className="save-button" onClick={() => void updateAccess(album)}><Save size={15} />保存</button></td></tr>)}</tbody></table></div></Panel>}
-      {tab === 'uploads' && <><Panel title="上传本地视频到 BytePlus VOD" description="选择本地视频后由后端使用安全凭证上传，密钥不会进入浏览器"><form className="upload-form" onSubmit={submitUpload}><label>目标剧集<select value={uploadEpisodeId} onChange={(event) => setUploadEpisodeId(event.target.value)} required><option value="">选择一个 Episode</option>{selectedEpisodes.map((episode) => <option key={episode.id} value={episode.id}>{episode.album.title} · 第 {episode.episodeNo} 集 · {episode.title} {episode.byteplusVid ? '· 已有媒资' : ''}</option>)}</select></label><label>本地视频文件<input id="video-file" type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} required /></label>{uploadFile && <p className="file-hint"><FileVideo size={15} />{uploadFile.name} · {(uploadFile.size / 1024 / 1024).toFixed(1)} MB</p>}<button className="primary" type="submit" disabled={uploading}><Upload size={17} />{uploading ? '上传中，请勿关闭页面...' : '上传到 BytePlus'}</button></form></Panel><Panel title="上传任务" description="本地上传完成后会直接写入 BytePlus Vid；公网 URL 任务仍由 Worker 继续处理"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>来源</th><th>状态</th><th>BytePlus Job</th><th>创建时间</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td><strong>{job.episode?.title ?? job.episodeId}</strong></td><td>{job.sourceName ?? job.sourceType ?? 'URL'}</td><td><Status value={job.status} />{job.errorMessage && <small className="table-error">{job.errorMessage}</small>}</td><td>{job.providerJobId ?? '本地上传已确认'}</td><td>{new Date(job.createdAt).toLocaleString('zh-CN')}</td></tr>)}</tbody></table>{!jobs.length && <p className="empty-copy table-empty">暂无上传任务</p>}</div></Panel></>}
-      {tab === 'audience' && audience && <><section className="metrics"><Metric label="活跃观众" value={String(audience.activeUsers)} change={`近 ${audience.periodDays} 天`} icon={Users} tone="green" /><Metric label="新增观众" value={String(audience.newUsers)} change="按注册时间" icon={Database} tone="cyan" /><Metric label="观看会话" value={String(audience.watchSessions)} change="进度上报次数" icon={Film} tone="pink" /><Metric label="完播集数" value={String(audience.completedEpisodes)} change="进度完成标记" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="观众趋势" description="按天统计新增和活跃用户"><DailyBars title="新增观众" items={audience.dailyNewUsers} /><DailyBars title="活跃观众事件" items={audience.dailyActiveUsers} /></Panel><Panel title="互动概览" description="帮助判断内容和运营活动表现"><BarList title="互动指标" items={[{ label: '收藏', value: audience.favorites }, { label: '分享', value: audience.shares }, { label: '搜索', value: audience.searches }]} color="cyan" /></Panel></div></>}
+      {tab === 'create' && <>
+        <Panel title="创建短剧草稿" description="一次录入专辑、封面、剧集和本地视频；失败视频可在该行单独重试。">
+          <form className="create-form" onSubmit={submitDrama}>
+            <div className="form-grid">
+              <label>剧名<input value={createTitle} onChange={(event) => setCreateTitle(event.target.value)} required /></label>
+              <label>免费集数<input type="number" min="0" max="10000" value={createFreeCount} onChange={(event) => setCreateFreeCount(Number(event.target.value))} /></label>
+              <label>Rewarded Placement ID<input value={createPlacementId} onChange={(event) => setCreatePlacementId(event.target.value)} /></label>
+              <label>每集解锁所需广告奖励次数<input type="number" min="1" max="10" value={createRewardedCount} onChange={(event) => setCreateRewardedCount(Number(event.target.value))} /></label>
+            </div>
+            <label>简介<textarea value={createDescription} onChange={(event) => setCreateDescription(event.target.value)} rows={4} /></label>
+            <div className="cover-row">
+              <label>专辑封面<input type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" onChange={(event) => selectAlbumCover(event.target.files?.[0] ?? null)} required={!createCover} /></label>
+              {createCoverFile && <span className="file-hint"><Image size={15} />{createCoverFile.name}</span>}
+              {(createCover?.publicUrl ?? createCoverPreviewUrl) && <img className="cover-preview" src={createCover?.publicUrl ?? createCoverPreviewUrl} alt="专辑封面预览" />}
+              {(createCoverFile || createCover) && <button className="text-button" type="button" onClick={() => selectAlbumCover(null)}>移除封面</button>}
+            </div>
+            <label className="check-row"><input type="checkbox" checked={createRewardedEnabled} onChange={(event) => setCreateRewardedEnabled(event.target.checked)} />启用广告解锁</label>
+            <div className="episode-toolbar">
+              <label>总集数<input className="inline-number" type="number" min="1" max="500" value={draftEpisodes.length} onChange={(event) => applyEpisodeCount(Number(event.target.value))} /></label>
+              <label>批量选择视频<input type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm" multiple onChange={(event) => applyBatchFiles(event.target.files)} /></label>
+            </div>
+            {batchFeedback && <p className="batch-feedback"><AlertTriangle size={15} />{batchFeedback}</p>}
+            <div className="table-wrap"><table><thead><tr><th>集号</th><th>标题</th><th>排序</th><th>免费</th><th>独立封面</th><th>视频文件</th><th>状态</th><th></th></tr></thead><tbody>{draftEpisodes.map((episode) => <tr key={episode.localId} className={!episode.file ? 'needs-file' : ''}><td><input className="inline-number" type="number" min="1" value={episode.episodeNo} onChange={(event) => patchDraftEpisode(episode.localId, { episodeNo: Number(event.target.value) })} /></td><td><input className="table-input" value={episode.title} onChange={(event) => patchDraftEpisode(episode.localId, { title: event.target.value })} /></td><td><input className="inline-number" type="number" min="1" value={episode.sortOrder} onChange={(event) => patchDraftEpisode(episode.localId, { sortOrder: Number(event.target.value) })} /></td><td><input type="checkbox" checked={episode.isFree} onChange={(event) => patchDraftEpisode(episode.localId, { isFree: event.target.checked })} /></td><td><div className="episode-cover-cell"><label className="file-cell">{episode.coverFile?.name ?? (episode.coverAsset ? '已保存封面' : '使用专辑封面')}<input type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" onChange={(event) => selectEpisodeCover(episode, event.target.files?.[0] ?? null)} /></label>{(episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl) && <img className="episode-cover-preview" src={episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl} alt={`${episode.title} 封面预览`} />}</div></td><td><label className="file-cell">{episode.file?.name ?? '选择视频'}<input type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm" onChange={(event) => patchDraftEpisode(episode.localId, { file: event.target.files?.[0] ?? null, uploadError: undefined })} /></label></td><td><div className="draft-upload-state"><span>{episode.uploadStatus ?? (episode.file ? '待保存' : '缺少视频')}</span>{episode.uploadError && <small className="table-error" title={episode.uploadError}>{episode.uploadError}</small>}{episode.uploadStatus === '上传失败' && episode.file && episode.savedEpisodeId && <button className="text-button retry-button" type="button" onClick={() => void uploadDraftVideo(episode)}>重试上传</button>}</div></td><td><button className="more" type="button" onClick={() => setDraftEpisodes((items) => items.filter((item) => item.localId !== episode.localId))} title="删除"><Trash2 size={15} /></button></td></tr>)}</tbody></table></div>
+            <button className="secondary" type="button" onClick={() => setDraftEpisodes((items) => [...items, { localId: `draft-${Date.now()}`, episodeNo: items.length + 1, title: `Episode ${items.length + 1}`, sortOrder: items.length + 1, isFree: items.length < createFreeCount }])}><Plus size={15} />添加 Episode</button>
+            <button className="primary" type="submit" disabled={creating}><Save size={17} />{creating ? '处理中...' : draftEpisodes.some((episode) => episode.savedEpisodeId) ? '上传已选择的视频' : '保存草稿并上传视频'}</button>
+          </form>
+        </Panel>
+        <Panel title="上传处理状态" description="所有由内容创建产生的上传记录集中显示；URL 任务失败后可重新加入 Worker 队列。"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>来源</th><th>状态</th><th>处理信息</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td><strong>{job.episode?.title ?? job.episodeId}</strong></td><td>{job.sourceName ?? job.sourceType ?? 'URL'}</td><td><Status value={job.status} /></td><td>{job.errorMessage ? <small className="table-error" title={job.errorMessage}>{job.errorMessage}</small> : job.providerJobId ?? '本地上传已确认'}</td><td>{new Date(job.createdAt).toLocaleString('zh-CN')}</td><td>{job.status === 'FAILED' && job.sourceType !== 'FILE' ? <button className="secondary retry-button" type="button" onClick={() => void retryUploadJob(job)}><RefreshCw size={14} />重新排队</button> : '—'}</td></tr>)}</tbody></table>{!jobs.length && <p className="empty-copy table-empty">暂无上传记录</p>}</div></Panel>
+      </>}
+      {tab === 'albums' && <Panel title="剧集访问策略" description="免费集数和广告解锁配置会立即影响小程序访问"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>状态</th><th>集数</th><th>免费集数</th><th>广告解锁</th><th>每集解锁所需广告奖励次数</th><th>操作</th></tr></thead><tbody>{albums.map((album) => <tr key={album.id}><td><span className="drama-thumb" /><strong>{album.title}</strong></td><td><Status value={album.status} /></td><td>{album.episodeCount}</td><td><input className="inline-number" type="number" min="0" value={album.accessConfig?.freeEpisodeCount ?? 0} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, freeEpisodeCount: Number(event.target.value) } } : item))} /></td><td><input type="checkbox" checked={album.accessConfig?.rewardedAdEnabled ?? true} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, rewardedAdEnabled: event.target.checked } } : item))} /></td><td><input className="inline-number" type="number" min="1" max="10" value={album.accessConfig?.rewardedAdCount ?? 1} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, rewardedAdCount: Number(event.target.value) } } : item))} /></td><td><button className="save-button" onClick={() => void updateAccess(album)}><Save size={15} />保存</button></td></tr>)}</tbody></table></div></Panel>}
+      {tab === 'ads' && <Panel title="进入广告策略" description="配置将在新的小程序启动会话生效。激励门槛模式须先在 TikTok Portal 确认可用。"><form className="policy-form" onSubmit={saveEntryAdPolicy}><label className="check-row"><input type="checkbox" checked={entryAdPolicy.enabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, enabled: event.target.checked }))} />启用进入广告</label><div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, mode: event.target.value as AppEntryAdPolicy['mode'] }))}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>Placement ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required /></label><label>每次进入广告次数<input type="number" min="1" max="3" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入并重试</option></select></label></div><p className="form-help">当前策略版本：{entryAdPolicy.version}。进入广告与剧集解锁广告使用独立会话和广告位。</p><button className="primary" type="submit"><Save size={17} />保存进入广告策略</button></form></Panel>}
+      {tab === 'audience' && audience && <><section className="metrics"><Metric label="活跃观众" value={String(audience.activeUsers)} change={`${audience.from} 至 ${audience.to}`} icon={Users} tone="green" /><Metric label="新增观众" value={String(audience.newUsers)} change={`日活 ${audience.dau} · 周活 ${audience.wau} · 月活 ${audience.mau}`} icon={Database} tone="cyan" /><Metric label="观看会话" value={String(audience.watchSessions)} change="播放器会话开始次数" icon={Film} tone="pink" /><Metric label="完播集数" value={String(audience.completedEpisodes)} change="每用户每集首次完播" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="观众趋势" description="按天统计新增和活跃用户"><DailyBars title="新增观众" items={audience.dailyNewUsers} /><DailyBars title="日活用户" items={audience.dailyActiveUsers} /></Panel><Panel title="互动概览" description="帮助判断内容和运营活动表现"><BarList title="互动指标" items={[{ label: '收藏', value: audience.favorites }, { label: '分享', value: audience.shares }, { label: '搜索', value: audience.searches }]} color="cyan" /></Panel></div></>}
       {tab === 'playback' && playback && <><section className="metrics"><Metric label="播放器事件" value={String(playback.totalEvents)} change={`近 ${playback.periodDays} 天`} icon={Activity} tone="cyan" /><Metric label="首帧事件" value={String(playback.firstFrames)} change="成功启动" icon={Gauge} tone="green" /><Metric label="错误率" value={`${playback.errorRate}%`} change={`${playback.errorCount} 次错误`} icon={CircleAlert} tone="pink" /><Metric label="平均首帧" value={playback.averageStartupMs === null ? '-' : `${playback.averageStartupMs} ms`} change="启动耗时" icon={Wifi} tone="yellow" /></section><div className="content-grid"><Panel title="播放事件分布" description="根据小程序播放器上报聚合"><BarList title="事件类型" items={playback.eventTypes.map((item) => ({ label: item.eventType, value: item.count }))} /><BarList title="清晰度" items={playback.definitions.map((item) => ({ label: item.definition, value: item.count }))} color="cyan" /><BarList title="网络类型" items={playback.networks.map((item) => ({ label: item.networkType, value: item.count }))} color="green" /></Panel><Panel title="最近播放错误" description="优先定位实际影响用户的剧集"><div className="compact-list">{playback.recentErrors.map((error, index) => <div className="compact-row" key={`${error.createdAt}-${index}`}><CircleAlert size={17} /><span><strong>{error.episodeTitle}</strong><small>{error.errorCode ?? 'UNKNOWN'} · {new Date(error.createdAt).toLocaleString('zh-CN')}</small></span></div>)}{!playback.recentErrors.length && <p className="empty-copy">暂无播放错误</p>}</div></Panel></div></>}
-      {tab === 'components' && <Panel title="小程序组件开关" description="开关保存后，小程序下一次拉取配置即可生效" action={<AlertTriangle size={18} className="alert" />}><div className="component-list">{components.map((component) => <div className="component-row" key={component.key}><span><strong>{component.label ?? component.key}</strong><small>{component.key} · {component.page} 页面</small></span><button className={`switch ${component.enabled ? 'on' : ''}`} onClick={() => void updateComponent(component)} aria-label={`${component.label ?? component.key} ${component.enabled ? '关闭' : '开启'}`}><span /></button><em className={component.enabled ? '' : 'disabled-text'}>{component.enabled ? '已开启' : '已关闭'}</em></div>)}</div></Panel>}
+      {tab === 'components' && <Panel title="小程序组件开关" description={`已发布版本 ${componentPublishedVersion}${componentDraftVersion ? `，当前草稿版本 ${componentDraftVersion}` : ''}`} action={<button className="primary" type="button" disabled={!componentDraftVersion} onClick={() => void publishComponents()}><Save size={16} />发布到小程序</button>}><div className="component-list">{components.map((component) => <div className="component-row" key={component.key}><span><strong>{component.label ?? component.key}</strong><small>{component.key} · {component.page} 页面</small></span><button className={`switch ${component.enabled ? 'on' : ''}`} onClick={() => void updateComponent(component)} aria-label={`${component.label ?? component.key} ${component.enabled ? '关闭' : '开启'}`}><span /></button><em className={component.enabled ? '' : 'disabled-text'}>{component.enabled ? '草稿开启' : '草稿关闭'}</em></div>)}</div></Panel>}
+      {tab === 'security' && <div className="content-grid"><Panel title="当前管理员" description="角色和账号状态由服务端实时校验"><div className="readiness-list"><div><span className="ready-dot done"><CheckCircle2 size={15} /></span><span><strong>{currentAdmin?.email ?? '-'}</strong><small>角色：{currentAdmin?.role ?? '-'} · 状态：{currentAdmin?.status ?? '-'}</small></span></div><div><span className="ready-dot done"><CalendarDays size={15} /></span><span><strong>最近登录</strong><small>{currentAdmin?.lastLoginAt ? new Date(currentAdmin.lastLoginAt).toLocaleString('zh-CN') : '暂无记录'}</small></span></div></div></Panel><Panel title="修改密码" description="更新后当前登录令牌会立即失效"><form className="policy-form" onSubmit={changePassword}><label>当前密码<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label><label>新密码<input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label><button className="primary" type="submit"><Save size={17} />更新密码</button></form></Panel></div>}
     </main></div>;
 }
 

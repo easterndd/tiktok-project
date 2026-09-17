@@ -11,11 +11,6 @@ const env: Env = {
   API_CORS_ORIGIN: 'http://localhost:5173',
   TRUST_GEO_COUNTRY_HEADER: false,
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters',
-  TIKTOK_CLIENT_KEY: 'test-client-key',
-  TIKTOK_CLIENT_SECRET: 'test-client-secret',
-  TIKTOK_OAUTH_TOKEN_URL: 'https://example.com/oauth/token',
-  TIKTOK_USER_INFO_URL: 'https://example.com/user/info',
-  TIKTOK_REDIRECT_URI: undefined,
   USER_JWT_EXPIRES_IN: 3_600,
   ADMIN_JWT_EXPIRES_IN: 28_800,
   ADMIN_BOOTSTRAP_EMAIL: undefined,
@@ -26,6 +21,10 @@ const env: Env = {
   BYTEPLUS_ACCESS_KEY: 'test-access-key',
   BYTEPLUS_SECRET_KEY: 'test-secret-key',
   BYTEPLUS_VOD_ENDPOINT: 'https://vod.byteplusapi.com',
+  API_PUBLIC_BASE_URL: undefined,
+  COVER_ASSET_STORAGE_DIR: 'tmp/cover-assets-test',
+  COVER_ASSET_PUBLIC_BASE_URL: undefined,
+  LOCAL_PLAYBACK_ENABLED: false,
   UPLOAD_WORKER_INTERVAL_MS: 30_000,
   UPLOAD_MAX_RETRIES: 5
 };

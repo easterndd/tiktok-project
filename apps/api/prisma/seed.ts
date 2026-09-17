@@ -14,7 +14,7 @@ async function main() {
       coverUrl: 'https://images.unsplash.com/photo-1485846234645-a62644f84728?auto=format&fit=crop&w=800&q=80',
       language: 'en',
       regions: ['AU', 'BR', 'CA', 'ID', 'JP', 'MX', 'NZ', 'KR', 'TH', 'US'],
-      accessConfig: { freeEpisodeCount: 3, rewardedAdEnabled: true, rewardedPlacementId: 'rewarded_episode_unlock' },
+      accessConfig: { freeEpisodeCount: 3, rewardedAdEnabled: true, rewardedPlacementId: 'rewarded_episode_unlock', rewardedAdCount: 1 },
       status: AlbumStatus.ONLINE,
       episodes: {
         create: [1, 2, 3].map((episodeNo) => ({

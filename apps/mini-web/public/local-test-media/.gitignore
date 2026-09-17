@@ -1,0 +1,3 @@
+# Test media is intentionally local-only and must not be committed or deployed.
+*.mp4
+*.png

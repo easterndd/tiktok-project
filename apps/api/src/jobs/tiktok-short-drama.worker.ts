@@ -21,6 +21,7 @@ type JobWithEpisode = UploadJob & {
   episode: {
     title: string;
     status: string;
+    coverAsset: { publicUrl: string; status: string } | null;
   };
 };
 
@@ -181,6 +182,7 @@ async function processJob(
         status: 'READY',
         byteplusVid: result.byteplusVid,
         byteplusCoverUrl: result.coverUrl,
+        coverUrl: job.episode.coverAsset?.status === 'READY' ? job.episode.coverAsset.publicUrl : result.coverUrl,
         durationMs: result.durationMs
       }
     })
@@ -205,7 +207,7 @@ export async function processJobs(
     },
     take: 20,
     orderBy: { createdAt: 'asc' },
-    include: { episode: { select: { title: true, status: true } } }
+    include: { episode: { select: { title: true, status: true, coverAsset: { select: { publicUrl: true, status: true } } } } }
   });
   for (const job of jobs) {
     await processJob(prisma, job, service, env, { maxRetries, now, log: workerOptions.log });

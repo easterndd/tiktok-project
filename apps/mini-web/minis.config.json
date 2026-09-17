@@ -1,7 +1,6 @@
 {
   "appId": "7681547859254429717",
   "dev": {
-    "clientKey": "REPLACE_WITH_TIKTOK_MINI_CLIENT_KEY",
     "name": "QuicK ReeLS",
     "host": "localhost",
     "port": 5173,
