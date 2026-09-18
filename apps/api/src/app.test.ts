@@ -295,7 +295,7 @@ describe('QuicK ReeLS API', () => {
 
   it('allows configured TikTok Mini origins without allowing arbitrary origins', async () => {
     const app = await createTestApp({
-      API_CORS_ORIGIN: 'https://admin.evergreenprosper.com,https://tiktok.com,https://*.tiktok.com'
+      API_CORS_ORIGIN: 'https://admin.evergreenprosper.com,https://tiktok.com,https://*.tiktok.com,https://*.tiktok-minis.us'
     });
     apps.push(app);
 
@@ -315,6 +315,14 @@ describe('QuicK ReeLS API', () => {
         'access-control-request-method': 'POST'
       }
     });
+    const allowedMiniRuntime = await app.inject({
+      method: 'OPTIONS',
+      url: '/api/v1/auth/anonymous/session',
+      headers: {
+        origin: 'https://minis-example-preview.tiktok-minis.us',
+        'access-control-request-method': 'POST'
+      }
+    });
     const denied = await app.inject({
       method: 'OPTIONS',
       url: '/api/v1/auth/anonymous/session',
@@ -328,6 +336,8 @@ describe('QuicK ReeLS API', () => {
     assert.equal(allowed.headers['access-control-allow-origin'], 'https://microapp.tiktok.com');
     assert.equal(allowedRootDomain.statusCode, 204);
     assert.equal(allowedRootDomain.headers['access-control-allow-origin'], 'https://tiktok.com');
+    assert.equal(allowedMiniRuntime.statusCode, 204);
+    assert.equal(allowedMiniRuntime.headers['access-control-allow-origin'], 'https://minis-example-preview.tiktok-minis.us');
     assert.equal(denied.headers['access-control-allow-origin'], undefined);
   });
 
