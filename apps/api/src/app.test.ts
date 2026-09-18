@@ -262,9 +262,9 @@ async function createPrismaStub() {
   return prisma;
 }
 
-async function createTestApp() {
+async function createTestApp(envOverrides: Partial<Env> = {}) {
   const prisma = await createPrismaStub();
-  const app = await buildApp(env, { prisma: prisma as unknown as PrismaClient });
+  const app = await buildApp({ ...env, ...envOverrides }, { prisma: prisma as unknown as PrismaClient });
   await app.ready();
   return app;
 }
@@ -291,6 +291,34 @@ describe('QuicK ReeLS API', () => {
     assert.equal(live.json().status, 'ok');
     assert.equal(ready.statusCode, 200);
     assert.equal(ready.json().database, 'ok');
+  });
+
+  it('allows configured TikTok subdomains for Mini requests without allowing arbitrary origins', async () => {
+    const app = await createTestApp({
+      API_CORS_ORIGIN: 'https://admin.evergreenprosper.com,https://*.tiktok.com'
+    });
+    apps.push(app);
+
+    const allowed = await app.inject({
+      method: 'OPTIONS',
+      url: '/api/v1/auth/anonymous/session',
+      headers: {
+        origin: 'https://microapp.tiktok.com',
+        'access-control-request-method': 'POST'
+      }
+    });
+    const denied = await app.inject({
+      method: 'OPTIONS',
+      url: '/api/v1/auth/anonymous/session',
+      headers: {
+        origin: 'https://microapp.tiktok.evil.example',
+        'access-control-request-method': 'POST'
+      }
+    });
+
+    assert.equal(allowed.statusCode, 204);
+    assert.equal(allowed.headers['access-control-allow-origin'], 'https://microapp.tiktok.com');
+    assert.equal(denied.headers['access-control-allow-origin'], undefined);
   });
 
   it('serves public home and search without authentication', async () => {

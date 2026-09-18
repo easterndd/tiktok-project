@@ -138,7 +138,8 @@ PORT=3000
 
 DATABASE_URL=postgresql://<app_user>:<strong_password>@<private_db_host>:5432/quickreels?schema=public
 JWT_SECRET=<至少32位的随机值>
-API_CORS_ORIGIN=https://admin.evergreenprosper.com
+# 允许后台与 TikTok Mini WebView；仅接受 HTTPS 的 tiktok.com 子域名。
+API_CORS_ORIGIN=https://admin.evergreenprosper.com,https://*.tiktok.com
 TRUST_GEO_COUNTRY_HEADER=false
 
 # 管理后台构建时会使用，属于公开浏览器配置。
@@ -160,7 +161,7 @@ UPLOAD_WORKER_INTERVAL_MS=30000
 UPLOAD_MAX_RETRIES=5
 ```
 
-使用真实 TikTok Preview 请求日志确认 Mini 的 `Origin` 后，才将其精确追加到 `API_CORS_ORIGIN`（逗号分隔）。不要设置为 `*`。`TRUST_GEO_COUNTRY_HEADER` 只有在可信代理会覆盖该请求头时才可设为 `true`。
+`API_CORS_ORIGIN` 是逗号分隔的白名单。TikTok Mini 预览会从 `*.tiktok.com` 的 HTTPS WebView 发起请求，因此生产环境应保留 `https://*.tiktok.com`；它只匹配 `tiktok.com` 的子域名，不匹配任意站点或伪造域名。不要设置为 `*`。`TRUST_GEO_COUNTRY_HEADER` 只有在可信代理会覆盖该请求头时才可设为 `true`。
 
 `JWT_SECRET`、数据库密码、BytePlus 密钥不得进入 Git、`VITE_*` 变量、Mini ZIP、截图或日志。`VITE_TIKTOK_CLIENT_KEY` 仅在本机/CI Mini 构建时设置，不属于服务器 API 密钥文件。
 
@@ -514,7 +515,7 @@ curl -IL https://evergreenprosper.com/quickreels/terms
 
 只有 Caddyfile 本身发生改动时，才备份、校验并 reload Caddy；普通 API、后台或法律页更新都不需要重启官网 Caddy 容器。
 
-Mini 前端有改动时，回到 Windows 本机或 CI，使用第 8 节生成 `apps/mini-web/dist` 产物并上传 TikTok Developer Portal。先发布服务器 API，再上传 Mini Preview，最后用真机验证匿名首开、进入广告、剧集解锁、播放进度、历史记录和继续观看。
+Mini 前端有改动时，回到 Windows 本机或 CI，使用第 8 节生成 `apps/mini-web/dist/minis.config.zip` 并上传 TikTok Developer Portal。先发布服务器 API，再上传 Mini Preview，最后用真机验证匿名首开、进入广告、剧集解锁、播放进度、历史记录和继续观看。
 
 ### 7.8 回滚
 
@@ -551,7 +552,7 @@ pnpm --filter mini-web build:minis:release
 pnpm --filter mini-web check:minis:output
 ```
 
-`build:minis:release` 会构建 Web、生成生产 Mini 包并验证以下约束：API 地址必须是非 localhost 的 HTTPS URL；Client Key 不可为空或占位符；构建产物必须包含两项公开配置。实际上传目录以命令生成的 `apps/mini-web/dist` 内容为准，不要手工压缩源代码目录替代 CLI 产物。
+`build:minis:release` 会构建 Web、生成生产 Mini 配置、验证以下约束，并生成唯一可上传文件 `apps/mini-web/dist/minis.config.zip`：API 地址必须是非 localhost 的 HTTPS URL；Client Key 不可为空或占位符；构建产物必须包含两项公开配置。不要上传 `dist` 目录、`index.html`，也不要手工压缩源代码目录替代该 ZIP。
 
 生产 Mini 构建变量只能包含公开值，例如 API 地址、Client Key 和已获批准的广告 Placement ID。服务端密钥、数据库连接串和 JWT Secret 不得进入 Mini 构建。
 
@@ -562,8 +563,8 @@ pnpm --filter mini-web check:minis:output
 1. 填写公开可访问的隐私政策和服务条款：
    `https://evergreenprosper.com/quickreels/privacy`、`https://evergreenprosper.com/quickreels/terms`。
 2. 在 Trusted Domains 添加 `https://api.evergreenprosper.com`。不要填 API path、端口、通配符或 `http` URL。
-3. 上传第 8 节 CLI 产生的生产 Mini 产物，创建 Preview 并配置测试用户。
-4. 用真机 TikTok 扫 Preview 二维码，查看 API 日志并把真实必要 Origin 精确写入 `API_CORS_ORIGIN` 后重新发布 API。
+3. 上传第 8 节 CLI 产生的 `apps/mini-web/dist/minis.config.zip`，创建 Preview 并配置测试用户。
+4. 用真机 TikTok 扫 Preview 二维码，确认匿名会话请求返回 200；服务器的 `API_CORS_ORIGIN` 必须包含 `https://*.tiktok.com`，修改后重新发布 API。
 5. 完成匿名访客首开、进入广告（开关与观看次数）、剧集广告、播放、继续观看、历史记录、前后台切换、弱网与错误提示的验收。
 
 进入广告如使用 `REWARDED_GATED`，需先确认 Portal 广告政策和 Placement 已获批准，并与剧集解锁广告使用不同的 Placement。
@@ -603,7 +604,7 @@ pnpm --filter mini-web check:minis:output
 | 证书签发失败 | DNS 是否已生效，安全组/UFW 是否放行 TCP 80、443，Caddy 日志是否有挑战失败信息 |
 | API 502 | `sudo docker compose ... ps`、API healthcheck、`quickreels-proxy` 是否有 `api` 容器 |
 | 后台空白或 API 请求失败 | `VITE_API_BASE_URL` 是否为 HTTPS API 地址，浏览器 Console 与 CORS 白名单是否一致 |
-| Mini 不能请求 API | Trusted Domains 是否填写根域名而非 path，生产包是否真的使用 HTTPS API 地址 |
+| Mini 无法打开或不能请求 API | 先确认上传的是 `dist/minis.config.zip`，不是 `dist` 目录或 `index.html`；Trusted Domains 填写 `https://api.evergreenprosper.com`（不带 path）；服务器 `.env.production` 的 `API_CORS_ORIGIN` 应包含 `https://*.tiktok.com`，修改后重建并重启 API |
 | 法律页 404 | Caddy `root` 是否和复制目录一致，rewrite 规则是否位于 `file_server` 之前 |
 | `docker.sock: permission denied` | 当前 SSH 用户不在 Docker 用户组；将每条 Docker 命令改为 `sudo docker ...`，而不是只给管道末尾的 `tee` 加 sudo |
 | `VITE_API_BASE_URL is missing` | Compose 未使用生产 env 文件；确认 `ENV_FILE=/opt/quickreels/.env.production`，并加 `--env-file "$ENV_FILE"` |

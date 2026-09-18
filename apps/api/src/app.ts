@@ -44,12 +44,31 @@ function resolveCoverPath(root: string, fileName: string) {
   return targetPath;
 }
 
+function isAllowedCorsOrigin(origin: string | undefined, configuredOrigins: string[]) {
+  if (!origin) return true;
+
+  return configuredOrigins.some((configuredOrigin) => {
+    const allowedOrigin = configuredOrigin.trim();
+    if (!allowedOrigin) return false;
+    if (!allowedOrigin.startsWith('https://*.')) return origin === allowedOrigin;
+
+    try {
+      const candidate = new URL(origin);
+      const suffix = allowedOrigin.slice('https://*.'.length).toLowerCase();
+      return candidate.protocol === 'https:' && candidate.hostname.toLowerCase().endsWith(`.${suffix}`);
+    } catch {
+      return false;
+    }
+  });
+}
+
 export async function buildApp(env: Env, options: { prisma?: PrismaClient } = {}) {
   const app = Fastify({ logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' } });
   app.decorate('config', env);
   registerErrorHandler(app);
+  const configuredCorsOrigins = env.API_CORS_ORIGIN.split(',');
   await app.register(cors, {
-    origin: env.API_CORS_ORIGIN.split(','),
+    origin: (origin, callback) => callback(null, isAllowedCorsOrigin(origin, configuredCorsOrigins)),
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
   });
