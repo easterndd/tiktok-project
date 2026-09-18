@@ -142,13 +142,26 @@ function AdminApp() {
   const [draftReady, setDraftReady] = useState(false);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [savingEntryAdPolicy, setSavingEntryAdPolicy] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
+  const loadEntryAdPolicy = async () => {
+    try {
+      const policy = await api<AppEntryAdPolicy>('/admin/app-entry-ad-policy');
+      setEntryAdPolicy(policy);
+      return true;
+    } catch (error) {
+      setMessage(error instanceof Error ? `进入广告策略加载失败：${error.message}` : '进入广告策略加载失败');
+      return false;
+    }
+  };
+
   const loadData = async () => {
     setLoading(true);
+    const entryAdPolicyRequest = loadEntryAdPolicy();
     try {
-      const [albumResult, episodeResult, componentResult, overviewResult, jobResult, audienceResult, playbackResult, entryAdPolicyResult, adminResult] = await Promise.all([
+      const [albumResult, episodeResult, componentResult, overviewResult, jobResult, audienceResult, playbackResult, adminResult] = await Promise.all([
         api<{ items: Album[] }>('/admin/albums'),
         api<{ items: EpisodeOption[] }>('/admin/episodes'),
         api<ComponentResponse>('/admin/ui-components'),
@@ -156,7 +169,6 @@ function AdminApp() {
         api<{ items: UploadJob[] }>('/admin/upload-jobs'),
         api<Audience>(`/admin/analytics/audience?${new URLSearchParams({ from: analyticsFrom, to: analyticsTo, timezone: analyticsTimezone })}`),
         api<Playback>(`/admin/analytics/playback-quality?${new URLSearchParams({ from: analyticsFrom, to: analyticsTo, timezone: analyticsTimezone })}`),
-        api<AppEntryAdPolicy>('/admin/app-entry-ad-policy'),
         api<{ admin: AdminProfile }>('/admin/me')
       ]);
       setAlbums(albumResult.items);
@@ -168,11 +180,11 @@ function AdminApp() {
       setJobs(jobResult.items);
       setAudience(audienceResult);
       setPlayback(playbackResult);
-      setEntryAdPolicy(entryAdPolicyResult);
       setCurrentAdmin(adminResult.admin);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '加载失败');
     } finally {
+      await entryAdPolicyRequest;
       setLoading(false);
     }
   };
@@ -396,9 +408,16 @@ function AdminApp() {
   };
   const saveEntryAdPolicy = async (event: FormEvent) => {
     event.preventDefault();
-    const next = await api<AppEntryAdPolicy>('/admin/app-entry-ad-policy', { method: 'PUT', body: JSON.stringify(entryAdPolicy) });
-    setEntryAdPolicy(next);
-    setMessage('进入广告策略已保存，将在新的小程序启动会话生效。');
+    setSavingEntryAdPolicy(true);
+    try {
+      const next = await api<AppEntryAdPolicy>('/admin/app-entry-ad-policy', { method: 'PUT', body: JSON.stringify(entryAdPolicy) });
+      setEntryAdPolicy(next);
+      setMessage(`进入广告策略已保存（版本 ${next.version}），将在新的小程序启动会话生效。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `进入广告策略保存失败：${error.message}` : '进入广告策略保存失败');
+    } finally {
+      setSavingEntryAdPolicy(false);
+    }
   };
   const retryUploadJob = async (job: UploadJob) => {
     try {
@@ -448,7 +467,7 @@ function AdminApp() {
         <Panel title="上传处理状态" description="所有由内容创建产生的上传记录集中显示；URL 任务失败后可重新加入 Worker 队列。"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>来源</th><th>状态</th><th>处理信息</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td><strong>{job.episode?.title ?? job.episodeId}</strong></td><td>{job.sourceName ?? job.sourceType ?? 'URL'}</td><td><Status value={job.status} /></td><td>{job.errorMessage ? <small className="table-error" title={job.errorMessage}>{job.errorMessage}</small> : job.providerJobId ?? '本地上传已确认'}</td><td>{new Date(job.createdAt).toLocaleString('zh-CN')}</td><td>{job.status === 'FAILED' && job.sourceType !== 'FILE' ? <button className="secondary retry-button" type="button" onClick={() => void retryUploadJob(job)}><RefreshCw size={14} />重新排队</button> : '—'}</td></tr>)}</tbody></table>{!jobs.length && <p className="empty-copy table-empty">暂无上传记录</p>}</div></Panel>
       </>}
       {tab === 'albums' && <Panel title="剧集访问策略" description="免费集数和广告解锁配置会立即影响小程序访问"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>状态</th><th>集数</th><th>免费集数</th><th>广告解锁</th><th>每集解锁所需广告奖励次数</th><th>操作</th></tr></thead><tbody>{albums.map((album) => <tr key={album.id}><td><span className="drama-thumb" /><strong>{album.title}</strong></td><td><Status value={album.status} /></td><td>{album.episodeCount}</td><td><input className="inline-number" type="number" min="0" value={album.accessConfig?.freeEpisodeCount ?? 0} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, freeEpisodeCount: Number(event.target.value) } } : item))} /></td><td><input type="checkbox" checked={album.accessConfig?.rewardedAdEnabled ?? true} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, rewardedAdEnabled: event.target.checked } } : item))} /></td><td><input className="inline-number" type="number" min="1" max="10" value={album.accessConfig?.rewardedAdCount ?? 1} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, rewardedAdCount: Number(event.target.value) } } : item))} /></td><td><button className="save-button" onClick={() => void updateAccess(album)}><Save size={15} />保存</button></td></tr>)}</tbody></table></div></Panel>}
-      {tab === 'ads' && <Panel title="进入广告策略" description="配置将在新的小程序启动会话生效。激励门槛模式须先在 TikTok Portal 确认可用。"><form className="policy-form" onSubmit={saveEntryAdPolicy}><label className="check-row"><input type="checkbox" checked={entryAdPolicy.enabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, enabled: event.target.checked }))} />启用进入广告</label><div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, mode: event.target.value as AppEntryAdPolicy['mode'] }))}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>Placement ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required /></label><label>每次进入广告次数<input type="number" min="1" max="3" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入并重试</option></select></label></div><p className="form-help">当前策略版本：{entryAdPolicy.version}。进入广告与剧集解锁广告使用独立会话和广告位。</p><button className="primary" type="submit"><Save size={17} />保存进入广告策略</button></form></Panel>}
+      {tab === 'ads' && <Panel title="进入广告策略" description="配置将在新的小程序启动会话生效。激励门槛模式须先在 TikTok Portal 确认可用。"><form className="policy-form" onSubmit={saveEntryAdPolicy}><label className="check-row"><input type="checkbox" checked={entryAdPolicy.enabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, enabled: event.target.checked }))} />启用进入广告</label><div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, mode: event.target.value as AppEntryAdPolicy['mode'] }))}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>Placement ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required /></label><label>每次进入广告次数<input type="number" min="1" max="3" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入并重试</option></select></label></div><p className="form-help">当前策略版本：{entryAdPolicy.version}。进入广告与剧集解锁广告使用独立会话和广告位。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存进入广告策略</>}</button></form></Panel>}
       {tab === 'audience' && audience && <><section className="metrics"><Metric label="活跃观众" value={String(audience.activeUsers)} change={`${audience.from} 至 ${audience.to}`} icon={Users} tone="green" /><Metric label="新增观众" value={String(audience.newUsers)} change={`日活 ${audience.dau} · 周活 ${audience.wau} · 月活 ${audience.mau}`} icon={Database} tone="cyan" /><Metric label="观看会话" value={String(audience.watchSessions)} change="播放器会话开始次数" icon={Film} tone="pink" /><Metric label="完播集数" value={String(audience.completedEpisodes)} change="每用户每集首次完播" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="观众趋势" description="按天统计新增和活跃用户"><DailyBars title="新增观众" items={audience.dailyNewUsers} /><DailyBars title="日活用户" items={audience.dailyActiveUsers} /></Panel><Panel title="互动概览" description="帮助判断内容和运营活动表现"><BarList title="互动指标" items={[{ label: '收藏', value: audience.favorites }, { label: '分享', value: audience.shares }, { label: '搜索', value: audience.searches }]} color="cyan" /></Panel></div></>}
       {tab === 'playback' && playback && <><section className="metrics"><Metric label="播放器事件" value={String(playback.totalEvents)} change={`近 ${playback.periodDays} 天`} icon={Activity} tone="cyan" /><Metric label="首帧事件" value={String(playback.firstFrames)} change="成功启动" icon={Gauge} tone="green" /><Metric label="错误率" value={`${playback.errorRate}%`} change={`${playback.errorCount} 次错误`} icon={CircleAlert} tone="pink" /><Metric label="平均首帧" value={playback.averageStartupMs === null ? '-' : `${playback.averageStartupMs} ms`} change="启动耗时" icon={Wifi} tone="yellow" /></section><div className="content-grid"><Panel title="播放事件分布" description="根据小程序播放器上报聚合"><BarList title="事件类型" items={playback.eventTypes.map((item) => ({ label: item.eventType, value: item.count }))} /><BarList title="清晰度" items={playback.definitions.map((item) => ({ label: item.definition, value: item.count }))} color="cyan" /><BarList title="网络类型" items={playback.networks.map((item) => ({ label: item.networkType, value: item.count }))} color="green" /></Panel><Panel title="最近播放错误" description="优先定位实际影响用户的剧集"><div className="compact-list">{playback.recentErrors.map((error, index) => <div className="compact-row" key={`${error.createdAt}-${index}`}><CircleAlert size={17} /><span><strong>{error.episodeTitle}</strong><small>{error.errorCode ?? 'UNKNOWN'} · {new Date(error.createdAt).toLocaleString('zh-CN')}</small></span></div>)}{!playback.recentErrors.length && <p className="empty-copy">暂无播放错误</p>}</div></Panel></div></>}
       {tab === 'components' && <Panel title="小程序组件开关" description={`已发布版本 ${componentPublishedVersion}${componentDraftVersion ? `，当前草稿版本 ${componentDraftVersion}` : ''}`} action={<button className="primary" type="button" disabled={!componentDraftVersion} onClick={() => void publishComponents()}><Save size={16} />发布到小程序</button>}><div className="component-list">{components.map((component) => <div className="component-row" key={component.key}><span><strong>{component.label ?? component.key}</strong><small>{component.key} · {component.page} 页面</small></span><button className={`switch ${component.enabled ? 'on' : ''}`} onClick={() => void updateComponent(component)} aria-label={`${component.label ?? component.key} ${component.enabled ? '关闭' : '开启'}`}><span /></button><em className={component.enabled ? '' : 'disabled-text'}>{component.enabled ? '草稿开启' : '草稿关闭'}</em></div>)}</div></Panel>}
