@@ -13,7 +13,7 @@ const disabledPolicy = {
   id: policyId,
   enabled: false,
   mode: 'INTERSTITIAL' as const,
-  placementId: 'app_entry_interstitial',
+  placementId: 'ad7686459458972829697',
   requiredCount: 1,
   onUnavailable: 'ALLOW' as const,
   version: 1

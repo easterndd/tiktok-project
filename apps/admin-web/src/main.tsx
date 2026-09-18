@@ -123,7 +123,7 @@ function AdminApp() {
   const [overview, setOverview] = useState<Overview>({ albums: 0, episodes: 0, users: 0, likes: 0, favorites: 0, shares: 0, searches: 0, rewardedUnlocks: 0 });
   const [audience, setAudience] = useState<Audience | null>(null);
   const [playback, setPlayback] = useState<Playback | null>(null);
-  const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ enabled: false, mode: 'INTERSTITIAL', placementId: 'app_entry_interstitial', requiredCount: 1, onUnavailable: 'ALLOW', version: 1 });
+  const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ enabled: false, mode: 'REWARDED_GATED', placementId: 'ad7686459458972829697', requiredCount: 1, onUnavailable: 'ALLOW', version: 1 });
   const [analyticsFrom, setAnalyticsFrom] = useState(() => rangeStart(30));
   const [analyticsTo, setAnalyticsTo] = useState(() => inputDate(new Date()));
   const [analyticsTimezone, setAnalyticsTimezone] = useState('Asia/Shanghai');
@@ -134,7 +134,7 @@ function AdminApp() {
   const [createCoverPreviewUrl, setCreateCoverPreviewUrl] = useState('');
   const [createFreeCount, setCreateFreeCount] = useState(3);
   const [createRewardedEnabled, setCreateRewardedEnabled] = useState(true);
-  const [createPlacementId, setCreatePlacementId] = useState('rewarded_episode_unlock');
+  const [createPlacementId, setCreatePlacementId] = useState('ad7686459458972829697');
   const [createRewardedCount, setCreateRewardedCount] = useState(1);
   const [draftEpisodes, setDraftEpisodes] = useState<DraftEpisode[]>(() => Array.from({ length: 3 }, (_, index) => ({ localId: `draft-${index + 1}`, episodeNo: index + 1, title: `Episode ${index + 1}`, sortOrder: index + 1, isFree: index < 3 })));
   const [creating, setCreating] = useState(false);
@@ -187,7 +187,7 @@ function AdminApp() {
         setCreateCover(saved.cover ?? null);
         setCreateFreeCount(saved.freeCount ?? 3);
         setCreateRewardedEnabled(saved.rewardedEnabled ?? true);
-        setCreatePlacementId(saved.placementId ?? 'rewarded_episode_unlock');
+        setCreatePlacementId(saved.placementId ?? 'ad7686459458972829697');
         setCreateRewardedCount(saved.rewardedCount ?? 1);
         if (saved.episodes?.length) setDraftEpisodes(saved.episodes.map((episode) => ({ ...episode, file: null, coverFile: null, coverPreviewUrl: '' })));
         setMessage('已恢复本地草稿；本地文件需重新选择后再上传。');
@@ -212,7 +212,7 @@ function AdminApp() {
     setCreateCoverPreviewUrl('');
     setCreateFreeCount(3);
     setCreateRewardedEnabled(true);
-    setCreatePlacementId('rewarded_episode_unlock');
+    setCreatePlacementId('ad7686459458972829697');
     setCreateRewardedCount(1);
     setBatchFeedback('');
     localStorage.removeItem(contentDraftStorageKey);
@@ -359,7 +359,7 @@ function AdminApp() {
   };
 
   const updateAccess = async (album: Album) => {
-    const accessConfig = { freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: 'rewarded_episode_unlock', rewardedAdCount: 1, ...album.accessConfig };
+    const accessConfig = { freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: 'ad7686459458972829697', rewardedAdCount: 1, ...album.accessConfig };
     await api(`/admin/albums/${album.id}`, { method: 'PATCH', body: JSON.stringify({ accessConfig }) });
     setMessage('剧集访问配置已保存');
   };

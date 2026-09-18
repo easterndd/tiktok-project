@@ -420,7 +420,7 @@ model AppEntryAdPolicy {
   id            String             @id @default("default")
   enabled       Boolean            @default(false)
   mode          AppEntryAdMode     @default(INTERSTITIAL)
-  placementId   String             @default("app_entry_interstitial")
+  placementId   String             @default("ad7686459458972829697")
   requiredCount Int                @default(1)
   onUnavailable AppEntryAdFallback @default(ALLOW)
   version       Int                @default(1)

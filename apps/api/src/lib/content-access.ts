@@ -3,9 +3,9 @@ import { z } from 'zod';
 export const accessConfigSchema = z.object({
   freeEpisodeCount: z.number().int().min(0).max(10_000).default(0),
   rewardedAdEnabled: z.boolean().default(true),
-  rewardedPlacementId: z.string().trim().min(1).max(128).default('rewarded_episode_unlock'),
+  rewardedPlacementId: z.string().trim().min(1).max(128).default('ad7686459458972829697'),
   rewardedAdCount: z.number().int().min(1).max(10).default(1)
-}).default({ freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: 'rewarded_episode_unlock', rewardedAdCount: 1 });
+}).default({ freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: 'ad7686459458972829697', rewardedAdCount: 1 });
 
 export type AccessConfig = z.infer<typeof accessConfigSchema>;
 
