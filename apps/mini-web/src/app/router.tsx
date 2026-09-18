@@ -1,5 +1,6 @@
 import { createBrowserRouter } from 'react-router-dom';
 import { AlbumPage } from '../pages/AlbumPage';
+import { FavoritesPage } from '../pages/FavoritesPage';
 import { HomePage } from '../pages/HomePage';
 import { LegalPage } from '../pages/LegalPage';
 import { WatchPage } from '../pages/WatchPage';
@@ -11,6 +12,7 @@ export const router = createBrowserRouter([{ path: '/', element: <App />, childr
   { index: true, element: <HomePage /> },
   { path: 'search', element: <SearchPage /> },
   { path: 'profile', element: <ProfilePage /> },
+  { path: 'favorites', element: <FavoritesPage /> },
   { path: 'album/:albumId', element: <AlbumPage /> },
   { path: 'watch/:albumId/:episodeId', element: <WatchPage /> },
   { path: 'privacy', element: <LegalPage type="privacy" /> },

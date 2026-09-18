@@ -26,14 +26,13 @@ function errorCodeFromEvent(event: unknown) {
 
 const createPlaybackSessionId = () => typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `play-${Date.now()}`;
 
-export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [], onEpisodeEnded, reducedData = false }: {
+export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [], onEpisodeEnded }: {
   message?: string;
   coverUrl?: string | null;
   title?: string;
   playInfo?: PlayInfo;
   playlist?: PlayInfo[];
   onEpisodeEnded?: () => void;
-  reducedData?: boolean;
 }) {
   const locale = useLocale();
   const mount = useRef<HTMLDivElement>(null);
@@ -48,8 +47,8 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
 
   const playlistKey = playlist.map((item) => `${item.albumId}:${item.episodeId}:${item.vid}`).join('|');
   useEffect(() => {
-    void controller.current?.updatePreload(playlistRef.current, !reducedData);
-  }, [playlistKey, reducedData]);
+    void controller.current?.updatePreload(playlistRef.current);
+  }, [playlistKey]);
 
   useEffect(() => {
     if (!playInfo || (isLocalPlayback ? !localVideo.current : !mount.current)) return;
@@ -159,10 +158,9 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       try {
         const playerController = controller.current ?? new DramaPlayerController(mount.current!);
         controller.current = playerController;
-        const preloadPlaylist = reducedData ? [playInfo] : playlistRef.current;
         instance = playerController.instance
-          ? await playerController.switchTo(playInfo, preloadPlaylist, !reducedData)
-          : await playerController.start(playInfo, preloadPlaylist, !reducedData);
+          ? await playerController.switchTo(playInfo, playlistRef.current)
+          : await playerController.start(playInfo, playlistRef.current);
         if (disposed) return;
         const events = playerController.events;
         if (!events) throw new Error('The official drama player events are unavailable.');
@@ -191,7 +189,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       else detach();
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [playInfo?.localEpisodeId, isLocalPlayback, reducedData]);
+  }, [playInfo?.localEpisodeId, isLocalPlayback]);
 
   useEffect(() => () => controller.current?.destroy(), []);
 
@@ -200,7 +198,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     {coverUrl && <img src={coverUrl} alt="" className={styles.poster} onError={(event) => { event.currentTarget.src = '/fallback-cover.svg'; }} />}
     <div className={styles.scrim} />
     {playInfo && !visibleMessage && (isLocalPlayback
-      ? <video ref={localVideo} className={styles.localVideo} src={playInfo.sourceUrl ?? undefined} poster={coverUrl ?? undefined} controls playsInline autoPlay preload={reducedData ? 'metadata' : 'auto'} />
+      ? <video ref={localVideo} className={styles.localVideo} src={playInfo.sourceUrl ?? undefined} poster={coverUrl ?? undefined} controls playsInline autoPlay preload="auto" />
       : <div className={styles.playerMount} ref={mount} />)}
     {visibleMessage ? <div className={styles.message}><AlertCircle size={20} aria-hidden="true" /><strong>{title}</strong><span>{visibleMessage}</span></div> : !playInfo ? <div className={styles.message}><Play size={24} aria-hidden="true" /><strong>{title}</strong><span>{t(locale, 'preparingPlayer')}</span></div> : null}
   </section>;

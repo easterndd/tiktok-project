@@ -1,0 +1,12 @@
+.page { display: grid; gap: 22px; }
+.header, .heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.backLink { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; color: var(--muted); font-size: 13px; font-weight: 700; text-decoration: none; }
+.header :global(.eyebrow) { display: inline-flex; align-items: center; gap: 6px; }
+.heading { align-items: baseline; }
+.heading h1 { margin: 0; font-size: 28px; }
+.heading span { color: var(--muted); font-size: 12px; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.empty { display: grid; min-height: 220px; place-content: center; justify-items: center; gap: 10px; color: var(--muted); text-align: center; }
+.empty svg { color: var(--pink-soft); }
+.empty p { margin: 0; font-size: 13px; }
+@media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }

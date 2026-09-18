@@ -48,8 +48,8 @@ Caddy 容器：evergreenprosper-website-web-1
 
 ```bash
 sudo ss -lntup | grep -E ':80|:443|:3000|:5432'
-docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}'
-docker network ls
+sudo docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}'
+sudo docker network ls
 sudo sed -n '1,240p' /opt/evergreenprosper-website/Caddyfile
 df -h
 free -h
@@ -103,7 +103,7 @@ Resolve-DnsName admin.evergreenprosper.com
 sudo install -d -m 700 /root/pre-quickreels-backup
 sudo cp -a /opt/evergreenprosper-website/Caddyfile \
   /root/pre-quickreels-backup/Caddyfile.$(date +%F-%H%M%S)
-docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' \
+sudo docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' \
   | sudo tee /root/pre-quickreels-backup/docker-ps.$(date +%F-%H%M%S).txt
 ```
 
@@ -122,15 +122,14 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' \
 
 ### 3.2 密钥文件
 
-在服务器建立一个不随代码发布覆盖的配置目录：
+标准部署将真实生产变量保存在项目根目录的 `/opt/quickreels/.env.production`，该文件已被 Git 忽略，代码更新不会覆盖它。新服务器创建该文件后限制权限：
 
 ```bash
-sudo install -d -m 750 -o "$USER" -g "$USER" /opt/quickreels/shared
-sudo touch /opt/quickreels/shared/api.production.env
-sudo chmod 600 /opt/quickreels/shared/api.production.env
+sudo touch /opt/quickreels/.env.production
+sudo chmod 600 /opt/quickreels/.env.production
 ```
 
-`/opt/quickreels/shared/api.production.env` 示例：
+`/opt/quickreels/.env.production` 示例：
 
 ```env
 NODE_ENV=production
@@ -167,38 +166,38 @@ UPLOAD_MAX_RETRIES=5
 
 ## 4. 首次服务器部署
 
-以下示例使用 `/opt/quickreels/current`。也可以采用带 Git commit 的不可变 release 目录并用符号链接切换；无论哪种方式，配置文件必须位于 release 目录之外。
+以下示例使用当前服务器已验证的 `/opt/quickreels` 目录。也可以采用带 Git commit 的不可变 release 目录并用符号链接切换，但必须同步调整第 7 节的 `APP_DIR` 与 `ENV_FILE`。
 
 ```bash
-sudo install -d -m 755 -o "$USER" -g "$USER" /opt/quickreels
+sudo install -d -m 755 -o "$USER" -g "$USER" /opt
+cd /opt
+git clone <你的Git仓库SSH或HTTPS地址> quickreels
 cd /opt/quickreels
-git clone <你的Git仓库SSH或HTTPS地址> current
-cd current
 ```
 
 仅在 `docker network inspect quickreels-proxy` 确认网络不存在时创建共享网络：
 
 ```bash
-docker network inspect quickreels-proxy >/dev/null 2>&1 || docker network create quickreels-proxy
+sudo docker network inspect quickreels-proxy >/dev/null 2>&1 || sudo docker network create quickreels-proxy
 ```
 
 设定 env 文件位置并在启动前校验 Compose 展开结果：
 
 ```bash
-export QUICKREELS_ENV_FILE=/opt/quickreels/shared/api.production.env
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml config
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml build
+export ENV_FILE=/opt/quickreels/.env.production
+sudo docker compose --env-file "$ENV_FILE" -f compose.production.yml config
+sudo docker compose --env-file "$ENV_FILE" -f compose.production.yml build
 ```
 
 数据库迁移只执行生产安全命令，且必须在备份完成后执行：
 
 ```bash
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml \
+sudo docker compose --env-file "$ENV_FILE" -f compose.production.yml \
   run --rm api npx prisma migrate deploy
 
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml \
+sudo docker compose --env-file "$ENV_FILE" -f compose.production.yml \
   up -d api worker admin
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml ps
+sudo docker compose --env-file "$ENV_FILE" -f compose.production.yml ps
 ```
 
 生产环境不要执行开发迁移或演示数据 seed。若选用自建数据库，将所有上述 `compose.production.yml` 替换为 `compose.production.self-hosted.yml`，并在首次 `up -d` 后再执行迁移。
@@ -206,8 +205,8 @@ docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml ps
 检查容器及共享网络：
 
 ```bash
-docker network inspect quickreels-proxy --format '{{range .Containers}}{{println .Name}}{{end}}'
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f compose.production.yml logs --tail=100 api worker admin
+sudo docker network inspect quickreels-proxy --format '{{range .Containers}}{{println .Name}}{{end}}'
+sudo docker compose --env-file "$ENV_FILE" -f compose.production.yml logs --tail=100 api worker admin
 ```
 
 ## 5. Caddy、HTTPS 与运营后台
@@ -243,7 +242,7 @@ sudo docker logs --tail=150 "$CADDY_CONTAINER"
 Caddy 在 DNS 正确且 80/443 可达时自动签发和续期证书。不要再为这两个子域名安装 Certbot。验证入口：
 
 ```bash
-curl -fsS https://api.evergreenprosper.com/health
+curl -fsS https://api.evergreenprosper.com/ready
 curl -I https://admin.evergreenprosper.com
 curl -I https://evergreenprosper.com
 ```
@@ -268,7 +267,7 @@ deploy/website/quickreels/terms/index.html
 建议在本机或 CI 导出、复核后随发布包上传。也可以在有依赖的服务器 release 目录执行。部署前先根据实际 Caddyfile 核对官网 `root` 指向；以下以 `/opt/evergreenprosper-website` 为静态根目录示例：
 
 ```bash
-cd /opt/quickreels/current
+cd /opt/quickreels
 pnpm --filter mini-web export:legal
 sudo install -d -m 755 /opt/evergreenprosper-website/quickreels
 sudo cp -a deploy/website/quickreels/. /opt/evergreenprosper-website/quickreels/
@@ -283,38 +282,51 @@ curl -IL https://evergreenprosper.com/quickreels/terms
 
 两条命令最终都应返回 `200`。法律页内容与实际匿名观看记录、广告、数据存储位置和支持渠道必须保持一致，正式审核前应由合规人员确认。
 
-## 7. 将本机更新同步到服务器
+## 7. 可复用的更新发布流程
 
-服务器不会自动感知本机代码变化。一次完整同步遵循以下链路：
+服务器不会自动感知本机代码变化。每次发布必须将本机改动提交到 Git，并让服务器拉取一个明确的 tag 或 commit。当前腾讯云服务器已验证的运行环境如下：
+
+```text
+SSH 用户：ubuntu（Docker 命令必须使用 sudo）
+项目目录：/opt/quickreels
+生产 env：/opt/quickreels/.env.production
+数据库：Docker 自建 PostgreSQL（容器 quickreels-postgres-1）
+Compose：compose.production.self-hosted.yml
+Caddy 容器：evergreenprosper-website-web-1
+官网静态目录：/opt/evergreenprosper-website
+```
+
+如果未来切换到腾讯云托管 PostgreSQL，才将 `COMPOSE_FILE` 改为 `compose.production.yml`；两种方案不能混用。
 
 ```text
 本机修改并验证
-        -> Git 提交并推送到 origin
-        -> 服务器拉取指定 commit
-        -> 构建新镜像
-        -> 执行生产迁移（如有）
+        -> Git 提交、推送并创建 release tag
+        -> 备份 Caddy、容器清单和数据库
+        -> 服务器拉取并 checkout 固定 tag
+        -> 检查真实生产 env，再构建镜像
+        -> 执行 prisma migrate deploy（仅有 migration 时）
         -> 重建 api / worker / admin
-        -> 健康检查、日志检查、真机验证
+        -> 健康检查、日志、法律页、Mini 真机验证
 ```
 
-不要把本机整个项目目录直接复制到正在运行的 `/opt/quickreels/current`，也不要用 `git reset --hard`、`git clean -fd`、`rm -rf` 来“同步”。前者会造成代码和运行镜像不一致，后者可能删除服务器上尚未处理的文件或配置。
+不要把本机整个项目目录直接复制到服务器，不要使用 `git reset --hard`、`git clean -fd`、`rm -rf`、`docker compose down -v` 来“同步”。它们会删除未知文件、配置或数据卷。
 
-### 7.1 先判断本次需要同步什么
+### 7.1 先判断本次需要发布什么
 
-| 本次改动 | 需要在服务器发布 | 需要在 TikTok Portal 重新上传 Mini |
+| 本次改动 | 服务器更新 | Portal 重新上传 Mini |
 | --- | --- | --- |
-| `apps/api/`、`packages/`、Prisma migration、生产 Compose | 是 | 若 Mini API 合同/用户行为改变，建议一并上传 |
-| `apps/admin-web/` 或后台 API 地址 | 是 | 否 |
-| `apps/mini-web/` 的页面、广告、播放器、匿名会话 | API 支持变化时是 | 是 |
-| `deploy/website/quickreels/` 或法律文本 | 是，复制法律静态页并重载 Caddy | 否 |
+| `apps/api/`、`packages/`、Prisma migration、生产 Compose | 是 | 若影响 Mini API 合同或用户流程，建议同时上传 |
+| `apps/admin-web/` | 是 | 否 |
+| `apps/mini-web/` 的页面、广告、播放器、匿名会话 | API 有配套改动时是 | 是 |
+| `deploy/website/quickreels/` 或法律文本 | 是，复制静态页 | 否 |
 | 仅文档、测试或本地工具 | 否 | 否 |
-| `.env.production.example` | 仅检查是否需要手工补充真实服务器 env | 否 |
+| `.env.production.example` | 检查服务器真实 env 是否需手工新增变量 | 否 |
 
-Mini 包和服务器镜像是两份独立产物：发布 API 后，已安装的 Mini 包仍然是旧前端；仅上传 Mini 后，旧 API 也仍会继续运行。改动涉及两端时必须分别完成两次发布。
+Mini 包和服务器镜像是两份独立产物。服务器发布不会更新用户手机上的 Mini 前端；只上传 Mini 也不会更新 API。
 
-### 7.2 本机发布前准备
+### 7.2 本机发布前准备与 Git 版本
 
-在 Windows PowerShell 的项目根目录执行。先检查改动，确认没有把真实密钥、临时文件或意外删除的文件混入提交：
+在 Windows PowerShell 执行。确认提交中不含真实密钥、构建产物、`tmp/` 或本地测试媒体：
 
 ```powershell
 Set-Location 'D:\my project\tiktok-project'
@@ -322,9 +334,10 @@ git status --short
 git diff --check
 pnpm lint
 pnpm test
+pnpm build
 ```
 
-有数据库结构改动时，还需确认 Prisma migration 已在 `apps/api/prisma/migrations/` 中，并检查生成的 SQL；不要只修改 `schema.prisma` 就发布。需要发布 Mini 时，再运行：
+有数据库结构改动时，必须确认 `apps/api/prisma/migrations/` 包含新 migration，并审阅 SQL；不能只改 `schema.prisma`。需要发布 Mini 时，再运行：
 
 ```powershell
 $env:VITE_API_BASE_URL = 'https://api.evergreenprosper.com/api/v1'
@@ -335,7 +348,7 @@ pnpm --filter mini-web build:minis:release
 pnpm --filter mini-web check:minis:output
 ```
 
-将本次改动作为一个可追溯版本提交。下面的 `<文件或目录>` 必须替换为本次实际要发布的内容；不要对不明文件直接执行 `git add .`：
+提交并创建可回滚版本。`<文件或目录>` 仅填本次确认要发布的内容：
 
 ```powershell
 git add <文件或目录>
@@ -343,161 +356,182 @@ git commit -m 'feat: <本次更新说明>'
 git push origin main
 
 $releaseCommit = git rev-parse HEAD
-git tag -a "release-$(Get-Date -Format yyyyMMdd-HHmm)" -m "Release $releaseCommit"
-git push origin --tags
-Write-Host "本次服务器发布版本：$releaseCommit"
+$releaseTag = "release-$(Get-Date -Format yyyyMMdd-HHmmss)"
+git tag -a $releaseTag -m "Release $releaseCommit"
+git push origin $releaseTag
+Write-Host "服务器应发布：$releaseTag ($releaseCommit)"
 ```
 
-服务器应发布该输出的 commit 或 tag，而不是“当时 main 最新的内容”。在多人协作或自动化部署中，这一点能避免把其他未验收提交带入生产。
+### 7.3 发布前备份
 
-### 7.3 登录服务器并建立发布上下文
-
-在本机连接服务器：
-
-```powershell
-ssh <服务器用户>@<服务器公网IP>
-```
-
-登录后执行下列命令。`COMPOSE_FILE` 二选一：托管 PostgreSQL 使用 `compose.production.yml`；自建 PostgreSQL 使用 `compose.production.self-hosted.yml`。后续同一终端都使用这四个变量：
+登录服务器并建立本次终端上下文：
 
 ```bash
-export APP_DIR=/opt/quickreels/current
-export QUICKREELS_ENV_FILE=/opt/quickreels/shared/api.production.env
-export COMPOSE_FILE=compose.production.yml
-export CADDY_CONTAINER=evergreenprosper-website-web-1
+ssh ubuntu@<服务器公网IP>
 
+export APP_DIR=/opt/quickreels
+export ENV_FILE=/opt/quickreels/.env.production
+export COMPOSE_FILE=compose.production.self-hosted.yml
+export CADDY_CONTAINER=evergreenprosper-website-web-1
+export POSTGRES_CONTAINER=quickreels-postgres-1
 cd "$APP_DIR"
+```
+
+先确认服务器代码目录干净、env 文件存在；如 `git status --short` 有输出，停止发布，不要强制清理：
+
+```bash
 git status --short
 git rev-parse --short HEAD
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" ps
+sudo test -f "$ENV_FILE" && echo '生产环境文件存在'
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
 ```
 
-若 `git status --short` 有输出，先停止发布并确认原因。服务器代码目录原则上不应手工修改；生产密钥必须保留在 `/opt/quickreels/shared/api.production.env`，不应放在 Git 工作区。不要用强制 Git 命令消除未知改动。
+创建 Caddy、容器和数据库备份。数据库备份文件必须大于 `0B`：
 
-### 7.4 备份、记录当前可回滚版本并拉取代码
+```bash
+sudo install -d -m 700 /root/pre-quickreels-backup
+sudo cp -a /opt/evergreenprosper-website/Caddyfile \
+  "/root/pre-quickreels-backup/Caddyfile.$(date +%F-%H%M%S)"
+sudo docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' \
+  | sudo tee "/root/pre-quickreels-backup/docker-ps.$(date +%F-%H%M%S).txt"
 
-每次准备更新前保存旧版本值并创建数据库备份。托管数据库使用腾讯云控制台的即时备份或已验证的逻辑备份；自建数据库请按实际容器/卷备份流程操作。
+set -o pipefail
+DB_BACKUP="/root/pre-quickreels-backup/quickreels-db-$(date +%F-%H%M%S).sql.gz"
+sudo docker exec "$POSTGRES_CONTAINER" sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' \
+  | gzip \
+  | sudo tee "$DB_BACKUP" > /dev/null
+sudo ls -lh "$DB_BACKUP"
+```
+
+托管 PostgreSQL 不使用上面的容器备份命令，应改用腾讯云控制台即时备份或已验证的逻辑备份。
+
+### 7.4 拉取固定版本并检查环境变量
+
+将 `<release-tag>` 换成第 7.2 节创建的值。使用 `--no-pager` 防止 `git show` 进入分页器；若已进入并看到 `(END)` 或 `:`，按 `q` 返回终端。
 
 ```bash
 cd "$APP_DIR"
-export PREVIOUS_COMMIT=$(git rev-parse HEAD)
-export TARGET_COMMIT=<第7.2节输出的commit或tag>
+PREVIOUS_COMMIT=$(git rev-parse HEAD)
+TARGET_RELEASE=<release-tag>
 printf 'previous=%s\ntarget=%s\nstarted=%s\n' \
-  "$PREVIOUS_COMMIT" "$TARGET_COMMIT" "$(date -Is)" \
-  | sudo tee /opt/quickreels/shared/last-release.txt >/dev/null
+  "$PREVIOUS_COMMIT" "$TARGET_RELEASE" "$(date -Is)" \
+  | sudo tee /root/pre-quickreels-backup/last-release.txt >/dev/null
 
 git fetch --tags origin
-git show --stat --oneline "$TARGET_COMMIT"
-```
-
-在 `git show` 中确认改动确实是准备上线的内容，再切换：
-
-```bash
-git checkout --detach "$TARGET_COMMIT"
-git rev-parse HEAD
+git --no-pager show --stat --oneline "$TARGET_RELEASE"
+git checkout --detach "$TARGET_RELEASE"
+git rev-parse --short HEAD
 git status --short
 ```
 
-如果团队约定服务器始终跟随 `main`，可改为 `git switch main && git pull --ff-only origin main`；仍需先记录 `PREVIOUS_COMMIT`，并且只在服务器工作区干净时执行。固定 commit/tag 更适合生产回滚。
+代码更新不会自动更新服务器真实 env 文件。只显示变量名以确认配置，不要将完整 env 内容发给任何人：
 
-### 7.5 检查生产配置并构建镜像
+```bash
+sudo awk -F= '/^(VITE_API_BASE_URL|API_PUBLIC_BASE_URL|COVER_ASSET_STORAGE_DIR)=/ {print $1 "=<已配置>"}' "$ENV_FILE"
+```
 
-代码更新不会自动修改服务器密钥文件。对照当前 checkout 的 `.env.production.example` 检查是否增加了必须变量；只用编辑器手工补充真实值，绝不使用示例文件覆盖 `/opt/quickreels/shared/api.production.env`。
+如发布版本的 `.env.production.example` 有新增必填项，使用编辑器在真实 env 文件中补充，不要用示例文件覆盖它。当前版本需要以下两项用于公开封面地址和持久化封面目录：
+
+```bash
+sudo nano "$ENV_FILE"
+```
+
+```env
+API_PUBLIC_BASE_URL=https://api.evergreenprosper.com
+COVER_ASSET_STORAGE_DIR=/var/lib/quickreels/cover-assets
+```
+
+### 7.5 校验、构建、迁移和重建
+
+先让 Compose 使用真实 env 展开配置。出现缺变量、网络不存在或语法错误时停止，不要继续：
 
 ```bash
 cd "$APP_DIR"
-sudo stat -c '%a %U:%G %n' "$QUICKREELS_ENV_FILE"
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" config >/tmp/quickreels-compose.rendered.yml
-sed -n '1,260p' /tmp/quickreels-compose.rendered.yml
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" build --pull api worker admin
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" \
+  config >/tmp/quickreels-compose.yml
+echo 'Compose 配置校验成功'
 ```
 
-预期密钥文件权限为 `600`。`config` 失败、缺变量、服务名/网络不正确时不要继续。默认使用 Docker 缓存是正常的：发生 Dockerfile、依赖锁文件或构建异常时，才针对受影响服务追加 `--no-cache` 重新构建，而不是每次全量无缓存构建。
-
-### 7.6 迁移数据库并更新服务
-
-只有本次包含新的 Prisma migration 时才执行迁移；迁移必须在数据库备份完成后进行。生产只允许使用：
+构建 API、Worker、后台镜像。Docker 使用缓存是正常现象；仅在 Dockerfile、依赖或构建异常排查时才对受影响服务增加 `--no-cache`：
 
 ```bash
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" \
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" \
+  build --pull api worker admin
+```
+
+仅在本次 release 含有新的 Prisma migration 时执行迁移。确认备份存在后，生产只允许使用 `migrate deploy`：
+
+```bash
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" \
   run --rm api npx prisma migrate deploy
 ```
 
-随后重建服务。`--no-deps` 不会停止或重建托管数据库；自建数据库方案中也不会在普通应用发布时触碰 `postgres`：
+然后重建应用服务。`--no-deps` 不会停止、删除或重建 PostgreSQL；新增的命名卷会由 Compose 自动创建：
 
 ```bash
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" \
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" \
   up -d --no-deps --force-recreate api worker admin
-
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" ps
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" logs --tail=150 api worker admin
 ```
 
-不要执行 `prisma migrate dev`，不要在生产执行 seed，也不要在常规更新中使用 `docker compose down -v`。
+不要在生产执行 `prisma migrate dev`、seed 脚本或 `docker compose down -v`。
 
-### 7.7 验证新版本
+### 7.6 发布后验证
 
-容器显示 `Up` 不代表接口和数据库已经可用。依次验证容器健康、内部服务、Caddy 公网入口和日志：
+服务刚启动时 API 可能短暂显示 `health: starting`；等待健康检查周期后应转为 `healthy`。公网 `/ready` 返回 `database: ok` 才表示 API 和数据库都可用：
 
 ```bash
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" ps
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" logs --tail=200 api worker admin
-curl -fsS https://api.evergreenprosper.com/health
+sleep 35
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" \
+  logs --tail=150 api worker admin
+
+curl -fsS https://api.evergreenprosper.com/ready
 curl -I https://admin.evergreenprosper.com
 curl -I https://evergreenprosper.com
 ```
 
-注意：当前 API 没有向主机发布 `3000`；健康检查应通过 Caddy 的公网 HTTPS 入口完成。检查 `quickreels-proxy` 网络：
+API 没有向宿主机发布 `3000`，因此不要用 `http://127.0.0.1:3000` 作为服务器验收地址。需要检查反向代理时：
 
 ```bash
-docker network inspect quickreels-proxy --format '{{range .Containers}}{{println .Name}}{{end}}'
+sudo docker network inspect quickreels-proxy \
+  --format '{{range .Containers}}{{println .Name}}{{end}}'
 sudo docker logs --tail=150 "$CADDY_CONTAINER"
 ```
 
-最后用浏览器验证后台，并用 TikTok Preview 真机验证受本次改动影响的匿名首开、进入广告、剧集解锁、播放器、历史记录和继续观看。发布日志出现持续报错、health 失败或核心验收失败时，不要继续发布 Mini 正式版本。
+### 7.7 同步法律页与 Mini 包
 
-### 7.8 法律页、Caddyfile 与 Mini 包的同步
-
-**法律页有改动时**，先在本机构建并确认 Git 提交中包含 `deploy/website/quickreels/`；然后从 Windows 上传该目录，而不是覆盖官网根目录：
-
-```powershell
-$server = '<服务器用户>@<服务器公网IP>'
-$releaseCommit = git rev-parse HEAD
-scp -r '.\deploy\website\quickreels' "${server}:/tmp/quickreels-legal-$releaseCommit"
-```
-
-在服务器检查内容后再复制到已核对的官网静态根目录：
+本次 `deploy/website/quickreels/` 有改动时，代码已随 Git 拉取到服务器。确认官网静态根目录后直接复制，不必重新 clone 或覆盖官网根目录；只更新静态文件时无需重启 Caddy：
 
 ```bash
-export RELEASE_COMMIT=<第7.2节输出的commit>
-sudo find "/tmp/quickreels-legal-$RELEASE_COMMIT" -maxdepth 3 -type f -print
+cd "$APP_DIR"
 sudo install -d -m 755 /opt/evergreenprosper-website/quickreels
-sudo cp -a "/tmp/quickreels-legal-$RELEASE_COMMIT/." \
+sudo cp -a deploy/website/quickreels/. \
   /opt/evergreenprosper-website/quickreels/
+
 curl -IL https://evergreenprosper.com/quickreels/privacy
 curl -IL https://evergreenprosper.com/quickreels/terms
 ```
 
-**Caddyfile 有改动时**，先备份，再执行 `caddy validate` 成功后才 reload，命令见第 5 节。不要重启或重建已有官网 Caddy 容器来应用普通 API 更新。
+只有 Caddyfile 本身发生改动时，才备份、校验并 reload Caddy；普通 API、后台或法律页更新都不需要重启官网 Caddy 容器。
 
-**Mini 前端有改动时**，按第 8 节在本机/CI 重新构建，将 `apps/mini-web/dist` 的实际 CLI 产物上传 TikTok Developer Portal，生成新的 Preview 后再真机验证。仅发布服务器不会更新用户手机上的 Mini 前端。
+Mini 前端有改动时，回到 Windows 本机或 CI，使用第 8 节生成 `apps/mini-web/dist` 产物并上传 TikTok Developer Portal。先发布服务器 API，再上传 Mini Preview，最后用真机验证匿名首开、进入广告、剧集解锁、播放进度、历史记录和继续观看。
 
-### 7.9 回滚
+### 7.8 回滚
 
-应用代码或镜像出问题且数据库没有不兼容迁移时，先回到第 7.4 节记录的旧版本：
+应用异常且数据库 schema 仍兼容旧版本时，读取备份目录中的旧 commit 并重建旧版本应用：
 
 ```bash
 cd "$APP_DIR"
-export ROLLBACK_COMMIT=$(sed -n 's/^previous=//p' /opt/quickreels/shared/last-release.txt)
+ROLLBACK_COMMIT=$(sudo sed -n 's/^previous=//p' /root/pre-quickreels-backup/last-release.txt)
 test -n "$ROLLBACK_COMMIT"
 git checkout --detach "$ROLLBACK_COMMIT"
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" build api worker admin
-docker compose --env-file "$QUICKREELS_ENV_FILE" -f "$COMPOSE_FILE" \
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build api worker admin
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" \
   up -d --no-deps --force-recreate api worker admin
-curl -fsS https://api.evergreenprosper.com/health
+curl -fsS https://api.evergreenprosper.com/ready
 ```
 
-若已经执行了数据库迁移，不要假定仅回退应用就完全安全。先停止进一步写入，评估旧版本是否兼容新 schema；不兼容时按已演练的数据库恢复计划处理。Caddyfile 回滚则恢复第 2.3 节备份文件，先校验再 reload。Mini 回滚需要在 Portal 选择或重新上传上一份已验证的 Mini 版本。
+已执行数据库迁移时，不要假定应用回滚即可恢复。先停止继续写入，评估旧版本是否兼容新 schema；不兼容则根据第 7.3 节的数据库备份恢复。Caddyfile 回滚应恢复备份文件，先 `caddy validate` 再 reload；Mini 回滚则在 Portal 选择或重新上传上一份已验证的版本。
 
 ## 8. Windows 本机或 CI 构建 TikTok Mini
 
@@ -548,7 +582,7 @@ pnpm --filter mini-web check:minis:output
 
 ### 应用与 Mini
 
-- [ ] `https://api.evergreenprosper.com/health` 健康检查成功。
+- [ ] `https://api.evergreenprosper.com/ready` 返回 `database: ok`。
 - [ ] 管理员可登录后台，匿名用户不会获得管理员权限。
 - [ ] 生产 API 使用精确 CORS 白名单，未启用不可信地理请求头。
 - [ ] 所有真实密钥均在服务器 Secret 文件或 CI Secret 中，不在仓库和 Mini 产物中。
@@ -567,10 +601,15 @@ pnpm --filter mini-web check:minis:output
 | 现象 | 优先检查 |
 | --- | --- |
 | 证书签发失败 | DNS 是否已生效，安全组/UFW 是否放行 TCP 80、443，Caddy 日志是否有挑战失败信息 |
-| API 502 | `docker compose ... ps`、API healthcheck、`quickreels-proxy` 是否有 `api` 容器 |
+| API 502 | `sudo docker compose ... ps`、API healthcheck、`quickreels-proxy` 是否有 `api` 容器 |
 | 后台空白或 API 请求失败 | `VITE_API_BASE_URL` 是否为 HTTPS API 地址，浏览器 Console 与 CORS 白名单是否一致 |
 | Mini 不能请求 API | Trusted Domains 是否填写根域名而非 path，生产包是否真的使用 HTTPS API 地址 |
 | 法律页 404 | Caddy `root` 是否和复制目录一致，rewrite 规则是否位于 `file_server` 之前 |
+| `docker.sock: permission denied` | 当前 SSH 用户不在 Docker 用户组；将每条 Docker 命令改为 `sudo docker ...`，而不是只给管道末尾的 `tee` 加 sudo |
+| `VITE_API_BASE_URL is missing` | Compose 未使用生产 env 文件；确认 `ENV_FILE=/opt/quickreels/.env.production`，并加 `--env-file "$ENV_FILE"` |
+| `git show` 停在 `(END)` 或 `:` | Git 正在 `less` 分页器中，按 `q` 返回 shell；后续使用 `git --no-pager show --stat --oneline <tag>` |
+| API 显示 `health: starting` | 刚重建后的正常短暂状态；等待约 35 秒，使用公网 `/ready` 检查数据库是否为 `ok` |
+| `migrate deploy` 失败 | 立即停止后续 `up` 操作；保留错误输出，使用发布前数据库备份和旧 commit 评估恢复，绝不改用 `migrate dev` |
 | 发布后功能异常 | 比对发布 commit、环境变量和迁移结果；先回退应用，再按备份计划处理数据库 |
 
 ## 12. 官方资料

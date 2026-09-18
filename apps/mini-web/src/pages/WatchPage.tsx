@@ -11,22 +11,16 @@ import { useLocale } from '../lib/storage';
 import { hasTikTokMinis } from '../lib/ttminis';
 import styles from './WatchPage.module.css';
 
-type PlaybackPreferences = { autoplay: boolean; reducedData: boolean };
-
 export function WatchPage() {
   const { albumId = '', episodeId = '' } = useParams();
   const navigate = useNavigate();
   const locale = useLocale();
-  const token = sessionStorage.getItem('quickreels_access_token');
   const album = useQuery({ queryKey: ['album', albumId, locale], queryFn: () => apiClient.get<AlbumDetail>(`/albums/${albumId}?locale=${locale}`) });
   const episodes = useQuery({ queryKey: ['episodes', albumId, locale], queryFn: () => apiClient.get<{ items: EpisodeSummary[] }>(`/albums/${albumId}/episodes?locale=${encodeURIComponent(locale)}`) });
   const playInfo = useQuery({ queryKey: ['play', episodeId, locale], queryFn: () => apiClient.get<PlayInfo>(`/episodes/${episodeId}/play?locale=${encodeURIComponent(locale)}`), enabled: Boolean(episodeId) });
-  const preferences = useQuery({ queryKey: ['preferences', token], queryFn: () => apiClient.get<PlaybackPreferences>('/me/preferences'), enabled: Boolean(token) });
-  const autoplay = preferences.data?.autoplay ?? true;
-  const reducedData = preferences.data?.reducedData ?? false;
   const currentIndex = episodes.data?.items.findIndex((episode) => episode.id === episodeId) ?? -1;
   const nextEpisode = currentIndex >= 0 ? episodes.data?.items[currentIndex + 1] : undefined;
-  const preloadEpisodeIds = [episodeId, !reducedData && nextEpisode?.access === 'PLAYABLE' ? nextEpisode.id : undefined].filter((id): id is string => Boolean(id));
+  const preloadEpisodeIds = [episodeId, nextEpisode?.access === 'PLAYABLE' ? nextEpisode.id : undefined].filter((id): id is string => Boolean(id));
   const preloadQueries = useQueries({
     queries: preloadEpisodeIds.map((id) => ({
       queryKey: ['play', id, locale],
@@ -49,8 +43,7 @@ export function WatchPage() {
       message={message}
       playInfo={playInfo.data}
       playlist={playerPlaylist}
-      onEpisodeEnded={autoplay && nextEpisode?.access === 'PLAYABLE' ? () => navigate(`/watch/${albumId}/${nextEpisode.id}`) : undefined}
-      reducedData={reducedData}
+      onEpisodeEnded={nextEpisode?.access === 'PLAYABLE' ? () => navigate(`/watch/${albumId}/${nextEpisode.id}`) : undefined}
       coverUrl={playInfo.data?.coverUrl ?? album.data.backdropUrl ?? album.data.coverUrl}
       title={playInfo.data?.title ?? currentEpisode?.title ?? album.data.title}
     />
