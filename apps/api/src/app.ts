@@ -62,6 +62,15 @@ function isAllowedCorsOrigin(origin: string | undefined, configuredOrigins: stri
   });
 }
 
+const miniBootstrapPaths = new Set([
+  '/api/v1/auth/anonymous/session',
+  '/api/v1/app-entry-ad-sessions'
+]);
+
+function isMiniBootstrapRequest(url: string) {
+  return miniBootstrapPaths.has(url.split('?', 1)[0]);
+}
+
 export async function buildApp(env: Env, options: { prisma?: PrismaClient } = {}) {
   const app = Fastify({ logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' } });
   app.decorate('config', env);
@@ -71,6 +80,29 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient } = {}
     origin: (origin, callback) => callback(null, isAllowedCorsOrigin(origin, configuredCorsOrigins)),
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
+  });
+  app.addHook('onRequest', (request, _reply, done) => {
+    if (isMiniBootstrapRequest(request.url)) {
+      request.log.info({
+        method: request.method,
+        origin: request.headers.origin ?? null,
+        referer: request.headers.referer ?? null,
+        requestedMethod: request.headers['access-control-request-method'] ?? null,
+        requestedHeaders: request.headers['access-control-request-headers'] ?? null
+      }, 'Mini bootstrap request');
+    }
+    done();
+  });
+  app.addHook('onResponse', (request, reply, done) => {
+    if (isMiniBootstrapRequest(request.url)) {
+      request.log.info({
+        method: request.method,
+        statusCode: reply.statusCode,
+        origin: request.headers.origin ?? null,
+        accessControlAllowOrigin: reply.getHeader('access-control-allow-origin') ?? null
+      }, 'Mini bootstrap response');
+    }
+    done();
   });
   await app.register(multipart, { limits: { files: 1, fileSize: 2 * 1024 * 1024 * 1024 } });
   await app.register(jwt, { secret: env.JWT_SECRET });

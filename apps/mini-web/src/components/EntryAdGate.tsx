@@ -5,6 +5,18 @@ import { ensureAnonymousSession } from '../features/auth/anonymous-session';
 import styles from './EntryAdGate.module.css';
 
 type GateState = 'LOADING' | 'BLOCKED' | 'READY';
+type GateStep = 'ANONYMOUS_SESSION' | 'ENTRY_AD_POLICY' | 'ENTRY_AD_PLAYBACK';
+
+function formatGateError(step: GateStep, cause: unknown) {
+  const detail = cause instanceof Error && cause.message ? `: ${cause.message}` : '';
+  if (step === 'ANONYMOUS_SESSION') {
+    return `SESSION_BOOTSTRAP_FAILED${detail}`;
+  }
+  if (step === 'ENTRY_AD_POLICY') {
+    return `ENTRY_AD_POLICY_FAILED${detail}`;
+  }
+  return `ENTRY_AD_PLAYBACK_FAILED${detail}`;
+}
 
 export function EntryAdGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GateState>('LOADING');
@@ -31,13 +43,19 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
   const run = async () => {
     setState('LOADING');
     setError('');
+    let step: GateStep = 'ANONYMOUS_SESSION';
     try {
       await ensureAnonymousSession();
+      step = 'ENTRY_AD_POLICY';
       const session = await startAppEntryAdSession();
-      if (session.required) await completeGate(session);
+      if (session.required) {
+        step = 'ENTRY_AD_PLAYBACK';
+        await completeGate(session);
+      }
       setState('READY');
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Unable to prepare this session.');
+      console.error(`[EntryAdGate] ${step} failed`, cause);
+      setError(formatGateError(step, cause));
       setState('BLOCKED');
     }
   };
