@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const appRoot = fileURLToPath(new URL('..', import.meta.url));
 const outputRoot = join(appRoot, 'dist');
 const archivePath = join(outputRoot, 'minis.config.zip');
-const releaseEntries = ['assets', 'local-test-media', 'fallback-cover.svg', 'index.html', 'minis.config.json', 'minis.manifest.json'];
+const releaseEntries = ['assets', 'fallback-cover.svg', 'index.html', 'minis.config.json', 'minis.manifest.json'];
 
 function crc32(buffer) {
   let value = 0xffffffff;

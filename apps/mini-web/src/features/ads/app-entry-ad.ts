@@ -11,7 +11,15 @@ export type AppEntryAdSession = {
   onUnavailable?: 'ALLOW' | 'BLOCK';
 };
 
-const eventId = () => crypto.randomUUID();
+function eventId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+
+  // TikTok WebView versions without randomUUID still need IDs accepted by API validation.
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const value = Math.floor(Math.random() * 16);
+    return (character === 'x' ? value : (value & 0x3) | 0x8).toString(16);
+  });
+}
 
 export function getLaunchId() {
   const key = 'quickreels_launch_id';
