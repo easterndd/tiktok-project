@@ -425,6 +425,24 @@ describe('QuicK ReeLS API', () => {
     assert.equal(afterPublish.json().version, 1);
   });
 
+  it('repairs legacy component draft fields while preserving recognized component switches', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const headers = { authorization: `Bearer ${await token(app, 'admin')}` };
+    await app.prisma.uiConfigVersion.create({
+      data: {
+        content: [{ key: 'HOME_FEED', page: 'LEGACY_HOME', enabled: false, config: ['obsolete'] }]
+      }
+    });
+
+    const publish = await app.inject({ method: 'POST', url: '/api/v1/admin/ui-components/publish', headers });
+
+    assert.equal(publish.statusCode, 200);
+    assert.equal(publish.json().repairedLegacyContent, true);
+    const feed = publish.json().items.find((item: { key: string }) => item.key === 'HOME_FEED');
+    assert.deepEqual(feed, { key: 'HOME_FEED', page: 'HOME', enabled: false, config: null });
+  });
+
   it('invalidates an administrator token after a password change', async () => {
     const app = await createTestApp();
     apps.push(app);

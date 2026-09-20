@@ -76,11 +76,13 @@ const jobParams = z.object({ jobId: z.string().min(1).max(128) });
 const blockParams = z.object({ blockId: z.string().min(1).max(128) });
 const blockItemParams = z.object({ blockId: z.string().min(1).max(128), itemId: z.string().min(1).max(128) });
 const componentParams = z.object({ key: z.enum(['APP_TOPBAR', 'APP_BOTTOM_NAV', 'HOME_INTRO', 'HOME_FEED', 'ALBUM_DESCRIPTION', 'PROFILE_HISTORY', 'PROFILE_FAVORITES']) });
+const uiComponentPageInput = z.enum(['APP', 'HOME', 'ALBUM', 'PROFILE']);
+const uiComponentConfigInput = z.record(z.string(), z.unknown()).nullable().optional();
 const uiComponentSnapshotInput = z.array(z.object({
   key: componentParams.shape.key,
-  page: z.enum(['APP', 'HOME', 'ALBUM', 'PROFILE']),
+  page: uiComponentPageInput,
   enabled: z.boolean(),
-  config: z.record(z.string(), z.unknown()).nullable().optional()
+  config: uiComponentConfigInput
 })).min(1).max(20);
 const adminRoleInput = z.enum(['OWNER', 'EDITOR', 'ANALYST', 'SUPPORT']);
 const adminStatusInput = z.enum(['ACTIVE', 'DISABLED']);
@@ -254,20 +256,47 @@ function mergeUiComponents(items: UiComponentSnapshot): UiComponentSnapshot {
   });
 }
 
+function normalizeUiComponentSnapshot(content: unknown) {
+  const parsed = uiComponentSnapshotInput.safeParse(content);
+  if (parsed.success) return { items: mergeUiComponents(parsed.data), repaired: false };
+
+  const legacyItems = Array.isArray(content) ? content : [];
+  const repairedItems: UiComponentSnapshot = [];
+  for (const value of legacyItems) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const candidate = value as Record<string, unknown>;
+    const key = componentParams.shape.key.safeParse(candidate.key);
+    if (!key.success) continue;
+    const fallback = defaultUiComponents.find((component) => component.key === key.data)!;
+    const page = uiComponentPageInput.safeParse(candidate.page);
+    const config = uiComponentConfigInput.safeParse(candidate.config);
+    repairedItems.push({
+      key: key.data,
+      page: page.success ? page.data : fallback.page,
+      enabled: typeof candidate.enabled === 'boolean' ? candidate.enabled : fallback.enabled,
+      config: config.success ? config.data ?? null : null
+    });
+  }
+  return { items: mergeUiComponents(repairedItems), repaired: true };
+}
+
 async function uiSnapshotFromRows(app: FastifyInstance): Promise<UiComponentSnapshot> {
   const stored = await app.prisma.uiComponent.findMany({ orderBy: [{ page: 'asc' }, { key: 'asc' }] });
-  return mergeUiComponents(stored.map((component) => ({
+  return normalizeUiComponentSnapshot(stored.map((component) => ({
     key: component.key as UiComponentSnapshot[number]['key'],
     page: component.page as UiComponentSnapshot[number]['page'],
     enabled: component.enabled,
     config: component.config as Record<string, unknown> | null
-  })));
+  }))).items;
 }
 
 async function currentUiDraft(app: FastifyInstance) {
   const draft = await app.prisma.uiConfigVersion.findFirst({ where: { status: 'DRAFT' }, orderBy: { version: 'desc' } });
-  if (draft) return { version: draft.version, items: mergeUiComponents(uiComponentSnapshotInput.parse(draft.content)) };
-  return { version: null, items: await uiSnapshotFromRows(app) };
+  if (draft) {
+    const snapshot = normalizeUiComponentSnapshot(draft.content);
+    return { version: draft.version, ...snapshot };
+  }
+  return { version: null, items: await uiSnapshotFromRows(app), repaired: false };
 }
 
 async function syncUiComponentRows(tx: Prisma.TransactionClient, items: UiComponentSnapshot) {
@@ -614,7 +643,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   });
   app.patch('/admin/ui-components/:key', { preHandler: requireAdmin }, async (request) => {
     const { key } = componentParams.parse(request.params);
-    const input = z.object({ page: z.enum(['APP', 'HOME', 'ALBUM', 'PROFILE']).optional(), enabled: z.boolean().optional(), config: z.record(z.string(), z.unknown()).nullable().optional() }).parse(request.body);
+    const input = z.object({ page: uiComponentPageInput.optional(), enabled: z.boolean().optional(), config: uiComponentConfigInput }).parse(request.body);
     const draft = await currentUiDraft(app);
     const items = draft.items.map((component) => component.key === key ? { ...component, ...input, config: input.config === undefined ? component.config ?? null : input.config } : component);
     const saved = draft.version
@@ -638,7 +667,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.post('/admin/ui-components/publish', { preHandler: requireAdmin }, async (request) => {
     const draft = await app.prisma.uiConfigVersion.findFirst({ where: { status: 'DRAFT' }, orderBy: { version: 'desc' } });
     if (!draft) throw Object.assign(new Error('No UI component draft is available to publish.'), { statusCode: 409 });
-    const items = mergeUiComponents(uiComponentSnapshotInput.parse(draft.content));
+    const { items, repaired } = normalizeUiComponentSnapshot(draft.content);
     const published = await app.prisma.$transaction(async (tx) => {
       await tx.uiConfigVersion.updateMany({ where: { status: 'PUBLISHED' }, data: { status: 'SUPERSEDED' } });
       const result = await tx.uiConfigVersion.update({
@@ -648,15 +677,15 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       await syncUiComponentRows(tx, items);
       return result;
     });
-    await audit(app, request.user.sub, 'PUBLISH', 'UiConfigVersion', String(published.version), { componentCount: items.length });
-    return { items, version: published.version, publishedAt: published.publishedAt };
+    await audit(app, request.user.sub, 'PUBLISH', 'UiConfigVersion', String(published.version), { componentCount: items.length, repairedLegacyContent: repaired });
+    return { items, version: published.version, publishedAt: published.publishedAt, repairedLegacyContent: repaired };
   });
 
   app.post('/admin/ui-components/rollback', { preHandler: requireAdmin }, async (request) => {
     const { version } = z.object({ version: z.number().int().positive() }).parse(request.body);
     const target = await app.prisma.uiConfigVersion.findUnique({ where: { version } });
     if (!target) throw Object.assign(new Error('UI configuration version not found.'), { statusCode: 404 });
-    const items = mergeUiComponents(uiComponentSnapshotInput.parse(target.content));
+    const { items, repaired } = normalizeUiComponentSnapshot(target.content);
     const restored = await app.prisma.$transaction(async (tx) => {
       await tx.uiConfigVersion.updateMany({ where: { status: 'PUBLISHED' }, data: { status: 'SUPERSEDED' } });
       const result = await tx.uiConfigVersion.create({
@@ -665,8 +694,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       await syncUiComponentRows(tx, items);
       return result;
     });
-    await audit(app, request.user.sub, 'ROLLBACK', 'UiConfigVersion', String(restored.version), { sourceVersion: version });
-    return { items, version: restored.version, publishedAt: restored.publishedAt };
+    await audit(app, request.user.sub, 'ROLLBACK', 'UiConfigVersion', String(restored.version), { sourceVersion: version, repairedLegacyContent: repaired });
+    return { items, version: restored.version, publishedAt: restored.publishedAt, repairedLegacyContent: repaired };
   });
 
   app.get('/admin/upload-jobs', { preHandler: requireAdmin }, async () => {
