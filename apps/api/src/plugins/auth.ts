@@ -44,7 +44,12 @@ export async function requireAdmin(request: FastifyRequest) {
     select: { role: true, status: true, tokenVersion: true }
   });
   if (!admin || admin.status !== 'ACTIVE' || admin.tokenVersion !== request.user.tokenVersion) throw forbidden();
-  if (!permissionsByRole[admin.role].has('*') && !permissionsByRole[admin.role].has(permissionForRequest(request))) throw forbidden();
+  // Every active administrator may rotate their own password. This endpoint is
+  // intentionally not gated by content/settings permissions, otherwise the
+  // ANALYST and SUPPORT roles would be unable to recover their own accounts.
+  const path = request.routeOptions.url ?? request.url.split('?')[0];
+  const isOwnPasswordChange = path === '/admin/me/password' || path.endsWith('/admin/me/password');
+  if (!isOwnPasswordChange && !permissionsByRole[admin.role].has('*') && !permissionsByRole[admin.role].has(permissionForRequest(request))) throw forbidden();
   request.user.role = admin.role;
 }
 
