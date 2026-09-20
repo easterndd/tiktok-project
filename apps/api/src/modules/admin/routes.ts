@@ -53,7 +53,7 @@ const mediaBindingInput = z.object({
 });
 const uploadInput = z.object({
   episodeId: z.string().min(1).max(128),
-  sourceUrl: z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'Only HTTP(S) source URLs are supported.'),
+  sourceUrl: z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), '来源地址必须使用 HTTP 或 HTTPS。'),
   sourceExpiresAt: z.string().datetime().optional()
 });
 const dramaInput = z.object({
@@ -108,12 +108,12 @@ const analyticsQuery = z.object({
   to: dateKeySchema.optional(),
   timezone: z.string().trim().min(1).max(64).default('Asia/Shanghai'),
   days: z.coerce.number().int().min(1).max(90).optional()
-}).refine((value) => Boolean(value.from) === Boolean(value.to), { message: 'from and to must be provided together.' });
+}).refine((value) => Boolean(value.from) === Boolean(value.to), { message: '开始日期和结束日期必须同时填写。' });
 const appEntryAdPolicyInput = z.object({
   enabled: z.boolean(),
   mode: z.enum(['INTERSTITIAL', 'REWARDED_GATED']),
   placementId: z.string().trim().min(1).max(128),
-  requiredCount: z.number().int().min(1).max(3),
+  requiredCount: z.number().int().min(1),
   onUnavailable: z.enum(['ALLOW', 'BLOCK'])
 });
 
@@ -170,13 +170,13 @@ function resolveAnalyticsRange(input: z.infer<typeof analyticsQuery>) {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: input.timezone }).format();
   } catch {
-    throw Object.assign(new Error('Invalid analytics timezone.'), { statusCode: 400 });
+    throw Object.assign(new Error('统计时区不正确。'), { statusCode: 400 });
   }
   const to = input.to ?? dateKey(new Date(), input.timezone);
   const from = input.from ?? addDateKeyDays(to, -(input.days ?? 30) + 1);
-  if (from > to) throw Object.assign(new Error('Analytics from date must not be after to date.'), { statusCode: 400 });
+  if (from > to) throw Object.assign(new Error('统计开始日期不能晚于结束日期。'), { statusCode: 400 });
   const periodDays = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
-  if (periodDays > 366) throw Object.assign(new Error('Analytics date range cannot exceed 366 days.'), { statusCode: 400 });
+  if (periodDays > 366) throw Object.assign(new Error('统计日期范围不能超过 366 天。'), { statusCode: 400 });
   return {
     from,
     to,
@@ -229,7 +229,7 @@ function detectImage(buffer: Buffer): { mimeType: string; width?: number; height
 async function validateReadyCover(app: FastifyInstance, coverAssetId?: string | null) {
   if (!coverAssetId) return null;
   const asset = await app.prisma.coverAsset.findUnique({ where: { id: coverAssetId } });
-  if (!asset || asset.status !== 'READY') throw Object.assign(new Error('Cover asset is not ready.'), { statusCode: 400 });
+  if (!asset || asset.status !== 'READY') throw Object.assign(new Error('封面资源尚未准备就绪。'), { statusCode: 400 });
   return asset;
 }
 
@@ -341,7 +341,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const input = passwordChangeInput.parse(request.body);
     const admin = await app.prisma.adminUser.findUniqueOrThrow({ where: { id: request.user.sub } });
     if (!(await verifyPassword(input.currentPassword, admin.passwordHash))) {
-      throw Object.assign(new Error('Current password is incorrect.'), { statusCode: 400 });
+      throw Object.assign(new Error('当前密码不正确。'), { statusCode: 400 });
     }
     const updated = await app.prisma.adminUser.update({
       where: { id: admin.id },
@@ -374,7 +374,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const { adminUserId } = z.object({ adminUserId: z.string().min(1).max(128) }).parse(request.params);
     const input = adminPatchInput.parse(request.body);
     if (adminUserId === request.user.sub && input.status === 'DISABLED') {
-      throw Object.assign(new Error('You cannot disable your own administrator account.'), { statusCode: 400 });
+      throw Object.assign(new Error('不能禁用当前管理员账号。'), { statusCode: 400 });
     }
     const data: Prisma.AdminUserUpdateInput = {
       email: input.email?.toLowerCase(),
@@ -441,37 +441,37 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       where: { id: albumId },
       include: { episodes: { orderBy: { sortOrder: 'asc' }, include: { translations: true } }, translations: true, genres: { include: { genre: true } } }
     });
-    if (!album) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Album not found.', requestId: request.id } });
+    if (!album) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '剧集不存在。', requestId: request.id } });
     return album;
   });
 
   app.post('/admin/cover-assets', { preHandler: requireAdmin }, async (request, reply) => {
     const upload = await request.file();
-    if (!upload) return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Select one cover image to upload.', requestId: request.id } });
+    if (!upload) return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '请选择一张封面图片上传。', requestId: request.id } });
     const fileName = upload.filename.trim();
     const extension = fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.')).toLowerCase() : '';
     const expectedMime = extensionMime(extension);
-    if (!expectedMime) return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Supported cover formats are JPEG, PNG, and WebP.', requestId: request.id } });
+    if (!expectedMime) return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '支持 JPEG、PNG 和 WebP 封面格式。', requestId: request.id } });
 
     const tempDirectory = join(tmpdir(), 'quickreels-covers');
     const tempPath = join(tempDirectory, `${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`);
     await mkdir(tempDirectory, { recursive: true });
     try {
       await pipeline(upload.file, createWriteStream(tempPath));
-      if (upload.file.truncated) throw Object.assign(new Error('The selected image exceeds the 10 MB upload limit.'), { statusCode: 413 });
+      if (upload.file.truncated) throw Object.assign(new Error('所选图片超过 10 MB 大小限制。'), { statusCode: 413 });
       const buffer = await readFile(tempPath);
       if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
-        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Cover image must be between 1 byte and 10 MB.', requestId: request.id } });
+        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '封面图片大小必须在 1 字节至 10 MB 之间。', requestId: request.id } });
       }
       const image = detectImage(buffer);
       if (!image || image.mimeType !== expectedMime || (upload.mimetype && upload.mimetype !== expectedMime)) {
-        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Cover file extension and image type do not match.', requestId: request.id } });
+        return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '封面文件扩展名与图片类型不匹配。', requestId: request.id } });
       }
       if (image.width && image.height) {
         const pixels = image.width * image.height;
         const ratio = image.width / image.height;
         if (pixels > 24_000_000 || ratio < 0.4 || ratio > 2.5) {
-          return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Cover dimensions are outside the allowed range.', requestId: request.id } });
+          return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '封面尺寸超出允许范围。', requestId: request.id } });
         }
       }
       const sha256 = createHash('sha256').update(buffer).digest('hex');
@@ -517,7 +517,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const albumCover = await validateReadyCover(app, input.coverAssetId);
     const episodeCoverIds = Array.from(new Set(input.episodes.flatMap((episode) => episode.coverAssetId ? [episode.coverAssetId] : [])));
     const episodeCovers = episodeCoverIds.length ? await app.prisma.coverAsset.findMany({ where: { id: { in: episodeCoverIds }, status: 'READY' } }) : [];
-    if (episodeCovers.length !== episodeCoverIds.length) throw Object.assign(new Error('One or more episode cover assets are not ready.'), { statusCode: 400 });
+    if (episodeCovers.length !== episodeCoverIds.length) throw Object.assign(new Error('一个或多个分集封面资源尚未准备就绪。'), { statusCode: 400 });
     const coverById = new Map(episodeCovers.map((cover) => [cover.id, cover]));
 
     const result = await app.prisma.$transaction(async (tx) => {
@@ -558,7 +558,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.post('/admin/albums', { preHandler: requireAdmin }, async (request) => {
     const input = albumInput.parse(request.body);
     const cover = await validateReadyCover(app, input.coverAssetId);
-    if (!cover && !input.coverUrl) throw Object.assign(new Error('coverUrl or coverAssetId is required.'), { statusCode: 400 });
+    if (!cover && !input.coverUrl) throw Object.assign(new Error('必须提供封面地址或封面资源 ID。'), { statusCode: 400 });
     const album = await app.prisma.album.create({ data: { ...albumDataWithAccess(input), coverUrl: cover?.publicUrl ?? input.coverUrl!, coverAssetId: cover?.id ?? input.coverAssetId, regions: input.regions } });
     await audit(app, request.user.sub, 'CREATE', 'Album', album.id);
     return album;
@@ -594,12 +594,12 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const { episodeId } = episodeParams.parse(request.params);
     const input = mediaBindingInput.parse(request.body);
     if (input.status === 'ONLINE' && !input.tiktokEpisodeId) {
-      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'An ONLINE episode requires a TikTok Episode ID.', requestId: request.id } });
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '上线分集必须填写 TikTok 分集 ID。', requestId: request.id } });
     }
     const mediaService = new BytePlusVodService(app.config);
     const [media] = await mediaService.getMediaInfos({ vids: [input.byteplusVid] });
     if (!media) {
-      return reply.code(404).send({ error: { code: 'BYTEPLUS_MEDIA_NOT_FOUND', message: 'BytePlus Vid not found in the configured space.', requestId: request.id } });
+      return reply.code(404).send({ error: { code: 'BYTEPLUS_MEDIA_NOT_FOUND', message: '在配置的媒体空间中找不到 BytePlus 视频 ID。', requestId: request.id } });
     }
     const currentEpisode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { coverAsset: { select: { publicUrl: true, status: true } } } });
     const providerCoverUrl = input.byteplusCoverUrl ?? media.coverUrl;
@@ -666,7 +666,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.post('/admin/ui-components/publish', { preHandler: requireAdmin }, async (request) => {
     const draft = await app.prisma.uiConfigVersion.findFirst({ where: { status: 'DRAFT' }, orderBy: { version: 'desc' } });
-    if (!draft) throw Object.assign(new Error('No UI component draft is available to publish.'), { statusCode: 409 });
+    if (!draft) throw Object.assign(new Error('没有可发布的页面组件草稿。'), { statusCode: 409 });
     const { items, repaired } = normalizeUiComponentSnapshot(draft.content);
     const published = await app.prisma.$transaction(async (tx) => {
       await tx.uiConfigVersion.updateMany({ where: { status: 'PUBLISHED' }, data: { status: 'SUPERSEDED' } });
@@ -684,7 +684,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.post('/admin/ui-components/rollback', { preHandler: requireAdmin }, async (request) => {
     const { version } = z.object({ version: z.number().int().positive() }).parse(request.body);
     const target = await app.prisma.uiConfigVersion.findUnique({ where: { version } });
-    if (!target) throw Object.assign(new Error('UI configuration version not found.'), { statusCode: 404 });
+    if (!target) throw Object.assign(new Error('找不到页面配置版本。'), { statusCode: 404 });
     const { items, repaired } = normalizeUiComponentSnapshot(target.content);
     const restored = await app.prisma.$transaction(async (tx) => {
       await tx.uiConfigVersion.updateMany({ where: { status: 'PUBLISHED' }, data: { status: 'SUPERSEDED' } });
@@ -706,10 +706,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.post('/admin/upload-jobs', { preHandler: requireAdmin }, async (request) => {
     const input = uploadInput.parse(request.body);
     const episode = await app.prisma.episode.findFirst({ where: { id: input.episodeId }, select: { id: true, album: { select: { status: true } } } });
-    if (!episode) throw Object.assign(new Error('Episode not found.'), { statusCode: 404 });
-    if (episode.album.status === 'OFFLINE') throw Object.assign(new Error('Cannot upload an offline album episode.'), { statusCode: 409 });
+    if (!episode) throw Object.assign(new Error('分集不存在。'), { statusCode: 404 });
+    if (episode.album.status === 'OFFLINE') throw Object.assign(new Error('下线剧集的分集不能上传。'), { statusCode: 409 });
     if (input.sourceExpiresAt && new Date(input.sourceExpiresAt) <= new Date()) {
-      throw Object.assign(new Error('sourceExpiresAt must be in the future.'), { statusCode: 400 });
+      throw Object.assign(new Error('来源过期时间必须晚于当前时间。'), { statusCode: 400 });
     }
     const job = await app.prisma.uploadJob.create({ data: { episodeId: input.episodeId, sourceUrl: input.sourceUrl, sourceExpiresAt: input.sourceExpiresAt ? new Date(input.sourceExpiresAt) : undefined } });
     await audit(app, request.user.sub, 'CREATE', 'UploadJob', job.id, { episodeId: input.episodeId });
@@ -727,25 +727,25 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.post('/admin/upload-jobs/local', { preHandler: requireAdmin }, async (request, reply) => {
     const upload = await request.file();
-    if (!upload) return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Select a video file to upload.', requestId: request.id } });
+    if (!upload) return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '请选择视频文件上传。', requestId: request.id } });
     const episodeField = upload.fields.episodeId;
     const episodeId = episodeField && !Array.isArray(episodeField) && 'value' in episodeField && typeof episodeField.value === 'string' ? episodeField.value.trim() : '';
     if (!episodeId) return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'episodeId is required.', requestId: request.id } });
     const fileName = upload.filename.trim();
     const extension = fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.')).toLowerCase() : '';
     if (!['.mp4', '.mov', '.m4v', '.webm'].includes(extension)) {
-      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Supported video formats are MP4, MOV, M4V, and WebM.', requestId: request.id } });
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '支持 MP4、MOV、M4V 和 WebM 视频格式。', requestId: request.id } });
     }
     const episode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { id: true, title: true, coverAsset: { select: { publicUrl: true, status: true } }, album: { select: { status: true } } } });
-    if (!episode) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Episode not found.', requestId: request.id } });
-    if (episode.album.status === 'OFFLINE') return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Cannot upload an offline album episode.', requestId: request.id } });
+    if (!episode) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '分集不存在。', requestId: request.id } });
+    if (episode.album.status === 'OFFLINE') return reply.code(409).send({ error: { code: 'CONFLICT', message: '下线剧集的分集不能上传。', requestId: request.id } });
 
     const tempDirectory = join(tmpdir(), 'quickreels-vod');
     const tempPath = join(tempDirectory, `${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`);
     await mkdir(tempDirectory, { recursive: true });
     try {
       await pipeline(upload.file, (await import('node:fs')).createWriteStream(tempPath));
-      if (upload.file.truncated) throw Object.assign(new Error('The selected file exceeds the 2 GB upload limit.'), { statusCode: 413 });
+      if (upload.file.truncated) throw Object.assign(new Error('所选文件超过 2 GB 大小限制。'), { statusCode: 413 });
       const service = new BytePlusVodService(app.config);
       const result = await service.uploadLocalVideo({
         filePath: tempPath,
@@ -776,13 +776,13 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const job = await app.prisma.uploadJob.findUnique({ where: { id: jobId } });
     if (!job) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Upload job not found.', requestId: request.id } });
     if (job.sourceType === 'FILE') {
-      return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Local uploads must be retried by selecting the video file again.', requestId: request.id } });
+      return reply.code(409).send({ error: { code: 'CONFLICT', message: '本地上传任务需要重新选择视频文件后再试。', requestId: request.id } });
     }
     if (job.status !== 'FAILED') {
       return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Only failed upload jobs can be retried.', requestId: request.id } });
     }
     if (job.sourceExpiresAt && job.sourceExpiresAt <= new Date()) {
-      return reply.code(409).send({ error: { code: 'CONFLICT', message: 'The upload source URL has expired and cannot be retried.', requestId: request.id } });
+      return reply.code(409).send({ error: { code: 'CONFLICT', message: '上传来源地址已过期，无法重试。', requestId: request.id } });
     }
     const retriedJob = await app.prisma.$transaction(async (tx) => {
       const next = await tx.uploadJob.update({
@@ -838,7 +838,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const { blockId, itemId } = blockItemParams.parse(request.params);
     const input = z.object({ imageUrl: z.string().url().nullable().optional(), linkPath: z.string().regex(/^\/(album|watch)\//).nullable().optional(), sortOrder: z.number().int().nonnegative().optional(), startsAt: z.string().datetime().nullable().optional(), endsAt: z.string().datetime().nullable().optional() }).parse(request.body);
     const result = await app.prisma.homeBlockItem.updateMany({ where: { id: itemId, blockId }, data: { ...input, startsAt: input.startsAt === undefined ? undefined : input.startsAt ? new Date(input.startsAt) : null, endsAt: input.endsAt === undefined ? undefined : input.endsAt ? new Date(input.endsAt) : null } });
-    if (!result.count) throw Object.assign(new Error('Home block item not found.'), { statusCode: 404 });
+    if (!result.count) throw Object.assign(new Error('首页区块内容不存在。'), { statusCode: 404 });
     const item = await app.prisma.homeBlockItem.findUniqueOrThrow({ where: { id: itemId } });
     await audit(app, request.user.sub, 'UPDATE', 'HomeBlockItem', item.id, input);
     return item;
