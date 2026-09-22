@@ -71,7 +71,7 @@ type QueryUploadTaskInfoResponse = BytePlusError & {
   };
 };
 
-class BytePlusVodError extends Error {
+export class BytePlusVodError extends Error {
   readonly retryable: boolean;
 
   constructor(message: string, retryable: boolean) {
@@ -222,18 +222,34 @@ export class BytePlusVodService implements TikTokShortDramaService {
   async uploadLocalVideo(input: LocalUploadInput) {
     const service = this.createSdkService();
     const extension = input.fileName.includes('.') ? input.fileName.slice(input.fileName.lastIndexOf('.')) : '.mp4';
-    const response = await service.UploadMedia({
-      SpaceName: input.spaceName,
-      FilePath: input.filePath,
-      FileName: input.fileName,
-      FileExtension: extension,
-      CallbackArgs: JSON.stringify({ byteplusAccountId: input.byteplusAccountId }),
-      Functions: JSON.stringify([{ Name: 'GetMeta' }])
-    });
+    let response: Awaited<ReturnType<typeof service.UploadMedia>>;
+    try {
+      response = await service.UploadMedia({
+        SpaceName: input.spaceName,
+        FilePath: input.filePath,
+        FileName: input.fileName,
+        FileExtension: extension,
+        CallbackArgs: JSON.stringify({ byteplusAccountId: input.byteplusAccountId }),
+        Functions: JSON.stringify([{ Name: 'GetMeta' }])
+      });
+    } catch (error) {
+      if (error instanceof BytePlusVodError) throw error;
+      // SDK transport errors can include request details; keep the client message
+      // free of credentials while still distinguishing this from a provider rejection.
+      throw Object.assign(new BytePlusVodError(
+        'BytePlus VOD 未能完成上传请求。请检查服务器网络、BYTEPLUS_REGION、空间名称及访问密钥权限。',
+        true
+      ), { cause: error });
+    }
     const providerError = response.ResponseMetadata?.Error;
-    if (providerError) throw new Error(`${providerError.Code ?? 'BytePlusError'}: ${providerError.Message ?? 'Local upload failed.'}`);
+    if (providerError) {
+      throw new BytePlusVodError(
+        safeProviderMessage({ ResponseMetadata: { Error: providerError } }, 'BytePlus VOD 拒绝本地上传。'),
+        false
+      );
+    }
     const data = response.Result?.Data;
-    if (!data?.Vid) throw new Error('BytePlus local upload completed without a video id.');
+    if (!data?.Vid) throw new BytePlusVodError('BytePlus VOD 上传后没有返回视频 VID。', true);
     return {
       byteplusVid: data.Vid,
       coverUrl: data.PosterUri,
