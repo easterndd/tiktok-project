@@ -73,7 +73,12 @@ function asString(value: unknown) {
 }
 
 function asNumber(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function tokenFailure(body: Record<string, unknown> | null, status: number) {
@@ -137,7 +142,9 @@ export class TikTokShortDramaApiService {
       return { status: 'PROCESSING' as const, jobId, byteplusVid, requestId };
     }
     if (resultType === 3) throw new TikTokShortDramaApiError('TikTok rejected video registration.', undefined, requestId, false);
-    throw new TikTokShortDramaApiError('TikTok video registration returned an unknown result_type.', undefined, requestId, true);
+    const rawResultType = asString(data.result_type) ?? 'missing';
+    const responseKeys = Object.keys(data).sort().join(',') || 'none';
+    throw new TikTokShortDramaApiError(`TikTok video registration returned an unknown result_type (${rawResultType}; response keys: ${responseKeys}).`, undefined, requestId, true);
   }
 
   async getVideo(input: { jobId?: string; vid?: string }) {
