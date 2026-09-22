@@ -99,16 +99,16 @@ export async function buildAlbumSnapshot(prisma: Db, albumId: string): Promise<A
       episodes: { orderBy: { sortOrder: 'asc' }, include: { coverAsset: true } }
     }
   });
-  if (!album) throw new Error('剧目不存在。');
-  if (!album.coverAsset?.providerImageId) throw new Error('专辑封面尚未同步到 TikTok。');
+  if (!album) throw Object.assign(new Error('剧目不存在。'), { statusCode: 404 });
+  if (!album.coverAsset?.providerImageId) throw workflowConflict('专辑封面尚未同步到 TikTok。');
   if (!album.releaseYear || !album.dramaType || tags(album.tagList).length < 1 || tags(album.tagList).length > 3) {
-    throw new Error('剧目缺少 TikTok 所需的年份、剧目类型或 1 至 3 个标签。');
+    throw workflowConflict('剧目缺少 TikTok 所需的年份、剧目类型或 1 至 3 个标签。');
   }
   const albumCoverPicId = album.coverAsset.providerImageId;
   const episodes = album.episodes.map((episode: any) => {
-    if (!episode.byteplusVid || episode.tiktokVideoStatus !== 'READY') throw new Error(`第 ${episode.episodeNo} 集视频尚未完成 TikTok 登记。`);
+    if (!episode.byteplusVid || episode.tiktokVideoStatus !== 'READY') throw workflowConflict(`第 ${episode.episodeNo} 集视频尚未完成 TikTok 登记。`);
     const coverPicId = episode.coverAsset?.providerImageId ?? albumCoverPicId;
-    if (!coverPicId) throw new Error(`第 ${episode.episodeNo} 集封面尚未同步到 TikTok。`);
+    if (!coverPicId) throw workflowConflict(`第 ${episode.episodeNo} 集封面尚未同步到 TikTok。`);
     return {
       localEpisodeId: episode.id,
       ...(episode.tiktokEpisodeId ? { episode_id: episode.tiktokEpisodeId } : {}),
