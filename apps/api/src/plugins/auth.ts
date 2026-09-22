@@ -1,11 +1,11 @@
 import type { FastifyRequest } from 'fastify';
 import type { AdminRole } from '@prisma/client';
 
-export type AdminPermission = 'admin.manage' | 'ads.read' | 'ads.write' | 'analytics.read' | 'audit.read' | 'content.read' | 'content.write' | 'settings.read' | 'settings.write';
+export type AdminPermission = 'admin.manage' | 'ads.read' | 'ads.write' | 'analytics.read' | 'audit.read' | 'content.read' | 'content.write' | 'content.sync' | 'content.review' | 'content.publish' | 'settings.read' | 'settings.write';
 
 const permissionsByRole: Record<AdminRole, ReadonlySet<AdminPermission | '*'> > = {
   OWNER: new Set(['*']),
-  EDITOR: new Set(['content.read', 'content.write', 'ads.read', 'ads.write', 'analytics.read', 'settings.read', 'settings.write']),
+  EDITOR: new Set(['content.read', 'content.write', 'content.sync', 'ads.read', 'ads.write', 'analytics.read', 'settings.read', 'settings.write']),
   ANALYST: new Set(['content.read', 'ads.read', 'analytics.read', 'audit.read', 'settings.read']),
   SUPPORT: new Set(['content.read', 'ads.read', 'analytics.read'])
 };

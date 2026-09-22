@@ -1,7 +1,9 @@
-.card { display: grid; grid-template-columns: 118px minmax(0, 1fr); gap: 16px; min-width: 0; padding: 12px; color: inherit; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); text-decoration: none; transition: transform 180ms ease, border-color 180ms ease, background-color 180ms ease; }
-.card:hover, .card:focus-visible { transform: translateY(-2px); border-color: rgba(255, 85, 117, .6); background: var(--surface-2); outline: 0; }
-.coverWrap { position: relative; overflow: hidden; align-self: start; border-radius: 10px; }
-.cover { width: 118px; aspect-ratio: 3 / 4; object-fit: cover; background: #252e3d; }
+.card { position: relative; display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; min-width: 0; padding: 11px; color: inherit; border: 1px solid rgba(194, 206, 255, .12); border-radius: 18px; background: linear-gradient(145deg, rgba(33, 40, 66, .88), rgba(15, 18, 32, .96)); box-shadow: inset 0 1px rgba(255, 255, 255, .035), 0 8px 24px rgba(0, 0, 0, .12); text-decoration: none; transition: transform 200ms ease, border-color 200ms ease, box-shadow 200ms ease; }
+.card:hover, .card:focus-visible { transform: translateY(-3px); border-color: rgba(255, 123, 151, .62); box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 16px 32px rgba(0, 0, 0, .24), 0 0 0 1px rgba(255, 88, 120, .1); outline: 0; }
+.coverWrap { position: relative; overflow: hidden; align-self: stretch; min-height: 154px; border-radius: 12px; background: var(--surface-3); }
+.cover { width: 120px; height: 100%; aspect-ratio: 3 / 4; object-fit: cover; background: var(--surface-3); transition: transform 300ms ease; }
+.card:hover .cover { transform: scale(1.045); }
+.playAffordance { position: absolute; right: 8px; bottom: 8px; display: grid; width: 28px; height: 28px; place-items: center; color: #1a1016; border: 1px solid rgba(255, 255, 255, .42); border-radius: 50%; background: rgba(255, 239, 243, .94); box-shadow: 0 4px 12px rgba(0, 0, 0, .3); }
 .progress { position: absolute; right: 8px; bottom: 8px; left: 8px; height: 4px; overflow: hidden; border-radius: 99px; background: rgba(0, 0, 0, .55); }
 .progress span { display: block; height: 100%; background: var(--pink); }
 .copy { display: flex; min-width: 0; flex-direction: column; justify-content: center; }
@@ -11,4 +13,14 @@
 .copy h2 { overflow: hidden; margin: 9px 0 6px; color: var(--text); font-size: 18px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .copy p { display: -webkit-box; overflow: hidden; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .footer { justify-content: space-between; margin-top: 12px; color: var(--pink-soft); }
-@media (max-width: 430px) { .card { grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 10px; } .cover { width: 96px; } .copy h2 { font-size: 16px; } }
+@media (max-width: 430px) { .card { grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 10px; border-radius: 16px; } .coverWrap { min-height: 132px; } .cover { width: 96px; } .copy h2 { font-size: 16px; } }
+.poster { display: grid; grid-template-columns: 1fr; gap: 0; overflow: hidden; padding: 0; border-radius: 18px; }
+.poster .coverWrap { min-height: 0; border-radius: 0; }
+.poster .cover { width: 100%; height: auto; aspect-ratio: 3 / 4; }
+.poster .copy { min-height: 110px; justify-content: space-between; padding: 12px; }
+.poster .copy h2 { display: -webkit-box; min-height: 38px; margin: 7px 0 4px; font-size: 15px; line-height: 1.24; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.poster .copy p { display: none; }
+.poster .footer { margin-top: 5px; font-size: 10px; }
+.poster .footer svg { display: none; }
+.poster .progress { right: 42px; }
+@media (max-width: 430px) { .poster { grid-template-columns: 1fr; } .poster .coverWrap { min-height: 0; } .poster .cover { width: 100%; } }

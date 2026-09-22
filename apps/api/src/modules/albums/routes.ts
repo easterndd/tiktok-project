@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { optionalUser } from '../../plugins/optional-auth';
 import { isEpisodeFree } from '../../lib/content-access';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
-import { isAlbumVisibleInCountry, requestCountry } from '../../lib/content-visibility';
+import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
 
 const params = z.object({ albumId: z.string().min(1).max(128) });
 const localeQuery = z.object({ locale: publicLocaleSchema.default(defaultLocale) });
@@ -29,7 +29,7 @@ export async function registerAlbumRoutes(app: FastifyInstance) {
     const { locale } = localeQuery.parse(request.query);
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const albums = await app.prisma.album.findMany({
-      where: { status: 'ONLINE' },
+      where: publicAlbumWhere(app.config),
       orderBy: { updatedAt: 'desc' },
       take: 20,
       include: {
@@ -47,7 +47,7 @@ export async function registerAlbumRoutes(app: FastifyInstance) {
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const user = await optionalUser(request);
     const album = await app.prisma.album.findFirst({
-      where: { id: albumId, status: 'ONLINE' },
+      where: { id: albumId, ...publicAlbumWhere(app.config) },
       include: {
         _count: { select: { episodes: { where: { status: 'ONLINE' } } } },
         likes: user ? { where: { userId: user.sub }, select: { id: true } } : undefined,
@@ -74,9 +74,9 @@ export async function registerAlbumRoutes(app: FastifyInstance) {
     const { locale } = localeQuery.parse(request.query);
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const user = await optionalUser(request);
-    const exists = await app.prisma.album.findFirst({ where: { id: albumId, status: 'ONLINE' }, select: { id: true, regions: true } });
+    const exists = await app.prisma.album.findFirst({ where: { id: albumId, ...publicAlbumWhere(app.config) }, select: { id: true, regions: true } });
     if (!exists || !isAlbumVisibleInCountry(exists.regions, country)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Album not found.', requestId: request.id } }) as never;
-    const album = await app.prisma.album.findFirst({ where: { id: albumId, status: 'ONLINE' }, select: { accessConfig: true } });
+    const album = await app.prisma.album.findFirst({ where: { id: albumId, ...publicAlbumWhere(app.config) }, select: { accessConfig: true } });
     const episodes = await app.prisma.episode.findMany({
       where: { albumId, status: 'ONLINE' },
       orderBy: { sortOrder: 'asc' },

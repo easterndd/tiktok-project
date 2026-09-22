@@ -38,6 +38,42 @@ Docker 私网
 Caddyfile：/opt/evergreenprosper-website/Caddyfile
 Caddy 容器：evergreenprosper-website-web-1
 共享网络：quickreels-proxy
+
+服务器项目更新命令
+cd /opt/quickreels
+export ENV_FILE=/opt/quickreels/.env.production
+export COMPOSE_FILE=compose.production.self-hosted.yml
+
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build api worker admin
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm api npx prisma migrate deploy
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d api worker admin
+
+sleep 20
+sudo docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
+curl -fsS https://api.evergreenprosper.com/ready
+curl -I https://admin.evergreenprosper.com
+
+
+
+tiktok minis打包命令
+Set-Location 'D:\my project\tiktok-project'
+$env:VITE_API_BASE_URL = 'https://api.evergreenprosper.com/api/v1'
+$env:VITE_TIKTOK_CLIENT_KEY = 'mn9k04qq5usaguvm'
+$env:VITE_DEMO_MODE = 'false'
+$env:VITE_USE_MOCK_API = 'false'
+$env:VITE_ENABLE_MOCK_FALLBACK = 'false'
+$env:VITE_API_BASE_URL
+pnpm --filter mini-web build:minis:release
+tar -tf 'apps/mini-web/dist/minis.config.zip'
+
+
+Get-ChildItem Env:VITE_*
+
+pnpm --filter mini-web build:minis:release
 ```
 
 ## 2. 上线前检查

@@ -1,15 +1,16 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
-:root { font-family: 'DM Sans', ui-sans-serif, system-ui, sans-serif; color: #f8fafc; background: #0a0d14; --bg: #0a0d14; --surface: #151a25; --surface-2: #1d2432; --surface-3: #252e3d; --text: #f8fafc; --muted: #94a0b4; --faint: #697589; --line: rgba(255, 255, 255, .1); --pink: #ff5575; --pink-soft: #ffb4c1; --cyan: #6fe7ee; --yellow: #f8c15a; }
+:root { font-family: 'DM Sans', ui-sans-serif, system-ui, sans-serif; color: #f8fafc; background: #090a13; --bg: #090a13; --bg-deep: #060710; --surface: rgba(21, 25, 43, .82); --surface-2: #1a2036; --surface-3: #242c47; --text: #f8fafc; --muted: #a2abc0; --faint: #737e98; --line: rgba(194, 206, 255, .12); --pink: #ff5878; --pink-strong: #ff3f67; --pink-soft: #ffc0cd; --cyan: #7de4e4; --yellow: #f7cb6c; --violet: #8980ff; }
 * { box-sizing: border-box; }
-html { background: var(--bg); }
-body { min-width: 320px; min-height: 100dvh; margin: 0; overflow-x: hidden; background: radial-gradient(circle at 82% 0%, rgba(255, 85, 117, .12), transparent 26rem), var(--bg); }
+html { background: var(--bg); scroll-behavior: smooth; }
+body { min-width: 320px; min-height: 100dvh; margin: 0; overflow-x: hidden; background: radial-gradient(ellipse 56rem 38rem at 100% -10%, rgba(117, 91, 255, .18), transparent 65%), radial-gradient(ellipse 38rem 32rem at -10% 38%, rgba(255, 75, 116, .08), transparent 70%), var(--bg); }
 button, input { font: inherit; }
-button, a { -webkit-tap-highlight-color: transparent; }
+button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 button { min-height: 44px; cursor: pointer; }
 button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 h1, h2, h3, p { margin-top: 0; }
 h1, h2, h3 { font-family: Manrope, 'DM Sans', sans-serif; letter-spacing: -.035em; }
 img { display: block; max-width: 100%; }
+::selection { color: #090a13; background: var(--cyan); }
 .eyebrow { margin: 0; color: var(--pink); font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
 .state, .loading-state { display: grid; justify-items: center; gap: 14px; min-height: 260px; padding: 48px 20px; color: var(--muted); text-align: center; }
 .state button, .state a { color: #0a0d14; background: var(--pink); border: 0; border-radius: 10px; padding: 0 16px; text-decoration: none; font-weight: 800; }

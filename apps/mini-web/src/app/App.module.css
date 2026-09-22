@@ -1,21 +1,22 @@
-.appShell { min-height: 100dvh; background: #0a0d14; }
-.topbar { position: sticky; z-index: 20; top: 0; display: flex; align-items: center; justify-content: space-between; width: min(100%, 1180px); min-height: 72px; margin: 0 auto; padding: max(12px, env(safe-area-inset-top)) 28px 12px; background: rgba(10, 13, 20, .9); border-bottom: 1px solid rgba(255, 255, 255, .08); backdrop-filter: blur(18px); }
+.appShell { min-height: 100dvh; background: linear-gradient(180deg, rgba(26, 28, 62, .2), transparent 18rem), var(--bg); }
+.topbar { position: sticky; z-index: 20; top: 0; display: flex; align-items: center; justify-content: space-between; width: min(100%, 1180px); min-height: 80px; margin: 0 auto; padding: max(14px, env(safe-area-inset-top)) 28px 14px; background: linear-gradient(180deg, rgba(9, 10, 19, .96), rgba(9, 10, 19, .72)); border-bottom: 1px solid rgba(194, 206, 255, .08); backdrop-filter: blur(22px) saturate(150%); }
 .brandButton, .topIcon, .profileButton { border: 0; background: transparent; color: inherit; cursor: pointer; }
 .brandButton { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; padding: 0; color: #f8fafc; font-size: 18px; font-weight: 800; letter-spacing: -.02em; }
-.brandButton span span { color: #ff5575; }
-.brandMark { display: grid; width: 32px; height: 32px; place-items: center; color: #0a0d14; background: #ff5575; border-radius: 10px; }
+.brandButton span span { color: var(--pink); }
+.brandMark { display: grid; width: 36px; height: 36px; place-items: center; color: #100b18; border: 1px solid rgba(255, 255, 255, .38); border-radius: 12px; background: linear-gradient(145deg, #ff93aa, var(--pink) 56%, #b943ff); box-shadow: 0 8px 20px rgba(255, 69, 111, .26); }
 .topbarActions { display: flex; align-items: center; gap: 8px; }
-.topIcon, .profileButton { display: grid; width: 44px; height: 44px; place-items: center; color: #bac2d0; border-radius: 50%; transition: color 180ms ease, background-color 180ms ease; }
-.profileButton { color: #0a0d14; background: #f8fafc; }
-.topIcon:hover, .topIcon:focus-visible { color: #f8fafc; background: #1a202d; outline: 0; }
-.profileButton:hover, .profileButton:focus-visible { background: #ffb4c1; outline: 0; }
-.main { width: min(100%, 1180px); margin: 0 auto; padding: 28px 28px 52px; }
-.watchMain { max-width: 760px; }
+.topIcon, .profileButton { display: grid; width: 44px; height: 44px; place-items: center; color: #c7cfdf; border: 1px solid transparent; border-radius: 14px; transition: color 180ms ease, border-color 180ms ease, background-color 180ms ease, transform 180ms ease; }
+.profileButton { color: #150a10; background: linear-gradient(145deg, #fff, #dce6f5); }
+.topIcon:hover, .topIcon:focus-visible { color: #f8fafc; border-color: var(--line); background: rgba(255, 255, 255, .07); outline: 0; transform: translateY(-1px); }
+.profileButton:hover, .profileButton:focus-visible { background: var(--pink-soft); outline: 0; transform: translateY(-1px); }
+.main { width: min(100%, 1180px); margin: 0 auto; padding: 32px 28px 64px; }
+.watchMain { width: 100%; max-width: none; min-height: 100dvh; padding: 0; }
 .bottomNav { display: none; }
 @media (max-width: 680px) {
-  .topbar { min-height: 64px; padding: max(8px, env(safe-area-inset-top)) 16px 8px; }
+  .topbar { min-height: 68px; padding: max(8px, env(safe-area-inset-top)) 16px 8px; }
   .main { padding: 18px 16px calc(92px + env(safe-area-inset-bottom)); }
-  .bottomNav { position: fixed; z-index: 30; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; display: grid; grid-template-columns: repeat(3, 1fr); min-height: 64px; padding: 6px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 20px; background: rgba(22, 27, 38, .94); box-shadow: 0 12px 40px rgba(0, 0, 0, .3); backdrop-filter: blur(18px); }
-  .navItem { display: grid; min-height: 52px; place-items: center; gap: 3px; color: #778194; border-radius: 15px; font-size: 10px; font-weight: 700; text-decoration: none; }
-  .navActive { color: #fff; background: #2b3241; }
+  .watchMain { padding: 0; }
+  .bottomNav { position: fixed; z-index: 30; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; display: grid; grid-template-columns: repeat(2, 1fr); min-height: 66px; padding: 6px; border: 1px solid rgba(194, 206, 255, .15); border-radius: 22px; background: rgba(18, 22, 39, .86); box-shadow: 0 18px 48px rgba(0, 0, 0, .42), inset 0 1px rgba(255, 255, 255, .08); backdrop-filter: blur(24px) saturate(145%); }
+  .navItem { display: grid; min-height: 52px; place-items: center; gap: 3px; color: #818ca5; border-radius: 16px; font-size: 10px; font-weight: 700; text-decoration: none; transition: color 180ms ease, background-color 180ms ease; }
+  .navActive { color: #fff; background: linear-gradient(135deg, rgba(255, 88, 120, .9), rgba(143, 108, 255, .82)); box-shadow: 0 4px 15px rgba(111, 79, 222, .2); }
 }

@@ -26,13 +26,14 @@ function errorCodeFromEvent(event: unknown) {
 
 const createPlaybackSessionId = () => typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `play-${Date.now()}`;
 
-export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [], onEpisodeEnded }: {
+export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [], onEpisodeEnded, immersive = false }: {
   message?: string;
   coverUrl?: string | null;
   title?: string;
   playInfo?: PlayInfo;
   playlist?: PlayInfo[];
   onEpisodeEnded?: () => void;
+  immersive?: boolean;
 }) {
   const locale = useLocale();
   const mount = useRef<HTMLDivElement>(null);
@@ -194,7 +195,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
   useEffect(() => () => controller.current?.destroy(), []);
 
   const visibleMessage = playerError || message;
-  return <section className={styles.shell} aria-label={t(locale, 'watchEpisode')}>
+  return <section className={`${styles.shell} ${immersive ? styles.immersive : ''}`} aria-label={t(locale, 'watchEpisode')}>
     {coverUrl && <img src={coverUrl} alt="" className={styles.poster} onError={(event) => { event.currentTarget.src = '/fallback-cover.svg'; }} />}
     <div className={styles.scrim} />
     {playInfo && !visibleMessage && (isLocalPlayback

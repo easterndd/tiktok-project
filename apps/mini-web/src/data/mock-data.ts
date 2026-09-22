@@ -99,13 +99,16 @@ export function getMockAlbum(albumId: string, locale: Locale = 'en'): AlbumDetai
 
 export function getMockHome(locale: Locale): HomeResponse {
   const albums = localizedAlbums(locale);
+  const previewUrls = import.meta.env.DEV
+    ? ['/local-test-media/while-my-fiance-knocked-episode-1.mp4', '/local-test-media/while-my-fiance-knocked-episode-2.mp4', '/local-test-media/while-my-fiance-knocked-episode-3.mp4']
+    : [];
   return {
     locale,
     cacheVersion: 'home_2026-09-10T12:00:00Z',
     components: defaultUiComponents,
     blocks: [
       { type: 'CONTINUE_WATCHING', title: locale === 'en' ? 'Continue watching' : locale === 'pt' ? 'Continuar assistindo' : locale === 'fr' ? 'Continuer a regarder' : locale === 'ja' ? '視聴を続ける' : locale === 'ko' ? '이어서 보기' : locale === 'th' ? 'ดูต่อ' : locale === 'es' ? 'Continuar viendo' : 'Lanjut menonton', items: [{ albumId: 'album-midnight', episodeId: 'album-midnight-episode-4', episodeNo: 4, title: albums[0].title, coverUrl: albums[0].coverUrl, progress: 0.42, resumePositionMs: 38_000, durationMs: 90_000 }] },
-      { type: 'CAROUSEL', title: locale === 'en' ? 'Featured' : locale === 'pt' ? 'Em destaque' : locale === 'fr' ? 'A la une' : locale === 'ja' ? 'おすすめ' : locale === 'ko' ? '추천' : locale === 'th' ? 'แนะนำ' : locale === 'es' ? 'Destacados' : 'Pilihan', items: albums.slice(0, 3).map((album, index) => ({ albumId: album.id, title: album.title, subtitle: album.description, coverUrl: album.coverUrl, backdropUrl: album.backdropUrl ?? album.coverUrl, deepLink: `/album/${album.id}`, badge: index === 0 ? 'NEW EPISODES' : 'EDITOR PICK' })) },
+      { type: 'CAROUSEL', title: locale === 'en' ? 'Featured' : locale === 'pt' ? 'Em destaque' : locale === 'fr' ? 'A la une' : locale === 'ja' ? 'おすすめ' : locale === 'ko' ? '추천' : locale === 'th' ? 'แนะนำ' : locale === 'es' ? 'Destacados' : 'Pilihan', items: albums.slice(0, 3).map((album, index) => ({ albumId: album.id, title: album.title, subtitle: album.description, coverUrl: album.coverUrl, backdropUrl: album.backdropUrl ?? album.coverUrl, previewUrl: previewUrls[index], deepLink: `/album/${album.id}`, badge: index === 0 ? 'NEW EPISODES' : 'EDITOR PICK' })) },
       { type: 'GENRES', title: t(locale, 'browse'), items: localizedGenres(locale) },
       { type: 'TRENDING', title: t(locale, 'trending'), items: albums.slice(0, 5) },
       { type: 'NEW_RELEASES', title: t(locale, 'fresh'), items: albums.slice(3, 8) }

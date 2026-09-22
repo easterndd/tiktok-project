@@ -7,6 +7,8 @@ import {
   type UploadStatusResult
 } from '../services/tiktok-short-drama.service';
 import { BytePlusVodService } from '../services/byteplus-vod.service';
+import { TikTokShortDramaApiService } from '../services/tiktok-short-drama-api.service';
+import { enqueueVideoSync, processPlatformSyncJobs } from '../services/platform-sync.service';
 
 const defaultIntervalMs = 30_000;
 const defaultMaxRetries = 5;
@@ -80,7 +82,7 @@ async function markFailure(
     }),
     prisma.episode.update({
       where: { id: job.episodeId },
-      data: { status: 'ERROR' }
+        data: { status: 'ERROR', byteplusUploadStatus: 'FAILED' }
     })
   ]);
   options.log?.('Upload job permanently failed.', { jobId: job.id, retryCount });
@@ -118,7 +120,7 @@ async function processJob(
         }),
         prisma.episode.update({
           where: { id: job.episodeId },
-          data: { status: 'UPLOADING' }
+          data: { status: 'UPLOADING', byteplusUploadStatus: 'UPLOADING' }
         })
       ]);
     } catch (error) {
@@ -180,6 +182,7 @@ async function processJob(
       where: { id: job.episodeId },
       data: {
         status: 'READY',
+        byteplusUploadStatus: 'READY',
         byteplusVid: result.byteplusVid,
         byteplusCoverUrl: result.coverUrl,
         coverUrl: job.episode.coverAsset?.status === 'READY' ? job.episode.coverAsset.publicUrl : result.coverUrl,
@@ -187,6 +190,11 @@ async function processJob(
       }
     })
   ]);
+  if (env.TIKTOK_CLIENT_KEY && env.TIKTOK_CLIENT_SECRET) {
+    await enqueueVideoSync(prisma as any, job.episodeId).catch((error) => {
+      options.log?.('Could not enqueue TikTok video registration.', { jobId: job.id, error: safeErrorMessage(error) });
+    });
+  }
   options.log?.('Upload job completed.', { jobId: job.id, episodeId: job.episodeId });
 }
 
@@ -221,13 +229,22 @@ export async function startUploadWorker() {
   const service = env.BYTEPLUS_ACCESS_KEY && env.BYTEPLUS_SECRET_KEY
     ? new BytePlusVodService(env)
     : new UnconfiguredTikTokShortDramaService();
-  const run = () => processJobs(prisma, service, {
-    maxRetries: env.UPLOAD_MAX_RETRIES,
-    log: (message, details) => console.info(message, details)
-  }, env).catch((error) => console.error('Upload worker cycle failed.', error));
+  const platformApi = new TikTokShortDramaApiService(env);
+  const run = async () => {
+    await processJobs(prisma, service, {
+      maxRetries: env.UPLOAD_MAX_RETRIES,
+      log: (message, details) => console.info(message, details)
+    }, env);
+    if (platformApi.isConfigured()) {
+      await processPlatformSyncJobs(prisma as any, platformApi, {
+        maxRetries: env.UPLOAD_MAX_RETRIES,
+        log: (message, details) => console.info(message, details)
+      });
+    }
+  };
 
-  await run();
-  const timer = setInterval(run, env.UPLOAD_WORKER_INTERVAL_MS || defaultIntervalMs);
+  await run().catch((error) => console.error('Upload worker cycle failed.', error));
+  const timer = setInterval(() => void run().catch((error) => console.error('Upload worker cycle failed.', error)), env.UPLOAD_WORKER_INTERVAL_MS || defaultIntervalMs);
   const shutdown = async () => {
     clearInterval(timer);
     await prisma.$disconnect();

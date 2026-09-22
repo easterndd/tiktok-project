@@ -2,6 +2,9 @@
 .row, .buttonRow { display: block; width: 100%; min-height: 62px; padding: 0; color: var(--text); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); text-align: left; text-decoration: none; transition: background-color 180ms ease, border-color 180ms ease; }
 .buttonRow { cursor: pointer; }
 .row:hover, .row:focus-visible, .buttonRow:hover, .buttonRow:focus-visible { border-color: rgba(255, 85, 117, .55); background: var(--surface-2); outline: 0; }
+.active { border-color: rgba(255, 146, 170, .75); background: linear-gradient(135deg, rgba(255, 88, 120, .2), rgba(121, 103, 255, .18)); box-shadow: inset 3px 0 var(--pink); }
+.active .number { color: #1a0e16; background: var(--pink-soft); }
+.active .status { color: var(--cyan); }
 .rowInner { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; min-height: 62px; gap: 10px; padding: 0 14px; }
 .number { display: grid; width: 30px; height: 30px; place-items: center; color: var(--faint); border-radius: 50%; background: rgba(255, 255, 255, .05); font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .title { display: grid; min-width: 0; gap: 3px; font-size: 14px; font-weight: 700; }

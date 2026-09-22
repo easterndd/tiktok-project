@@ -7,7 +7,7 @@ import { BytePlusVodService } from '../../services/byteplus-vod.service';
 import { requireUser } from '../../plugins/auth';
 import { isEpisodeFree, readAccessConfig } from '../../lib/content-access';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
-import { isAlbumVisibleInCountry, requestCountry } from '../../lib/content-visibility';
+import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
 
 const params = z.object({ episodeId: z.string().min(1).max(128) });
 const sessionParams = params.extend({ sessionId: z.string().min(1).max(128) });
@@ -40,7 +40,7 @@ type RewardSessionComplete =
 async function createOrResumeRewardSession(app: FastifyInstance, userId: string, episodeId: string, country: string | null): Promise<RewardSessionStart> {
   const now = new Date();
   const episode = await app.prisma.episode.findFirst({
-    where: { id: episodeId, status: 'ONLINE', album: { status: 'ONLINE' } },
+    where: { id: episodeId, status: 'ONLINE', album: publicAlbumWhere(app.config) },
     select: { id: true, isFree: true, episodeNo: true, album: { select: { accessConfig: true, regions: true } } }
   });
   if (!episode || !isAlbumVisibleInCountry(episode.album.regions, country)) return { missing: true };
@@ -86,7 +86,7 @@ async function completeRewardSession(app: FastifyInstance, userId: string, episo
   return app.prisma.$transaction(async (tx) => {
     const now = new Date();
     const episode = await tx.episode.findFirst({
-      where: { id: episodeId, status: 'ONLINE', album: { status: 'ONLINE' } },
+      where: { id: episodeId, status: 'ONLINE', album: publicAlbumWhere(app.config) },
       select: { id: true, isFree: true, episodeNo: true, album: { select: { accessConfig: true, regions: true } } }
     });
     if (!episode || !isAlbumVisibleInCountry(episode.album.regions, country)) return { missing: true as const };
@@ -219,7 +219,7 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
     const user = await optionalUser(request);
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const episode = await app.prisma.episode.findFirst({
-      where: { id: episodeId, status: 'ONLINE', album: { status: 'ONLINE' } },
+      where: { id: episodeId, status: 'ONLINE', album: publicAlbumWhere(app.config) },
       include: { album: { include: { translations: true } }, translations: true }
     });
     if (!episode || !isAlbumVisibleInCountry(episode.album.regions, country)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Episode not found.', requestId: request.id } }) as never;

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
-import { isAlbumVisibleInCountry, requestCountry } from '../../lib/content-visibility';
+import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
 
 export async function registerAdRoutes(app: FastifyInstance) {
   app.post('/ad-events', {
@@ -69,7 +69,7 @@ export async function registerAdRoutes(app: FastifyInstance) {
       clientVersion: z.string().max(64).optional(),
       errorCode: z.string().max(128).optional()
     }).parse(request.body);
-    const episode = await app.prisma.episode.findFirst({ where: { id: body.episodeId, status: 'ONLINE', album: { status: 'ONLINE' } }, select: { id: true, album: { select: { regions: true } } } });
+    const episode = await app.prisma.episode.findFirst({ where: { id: body.episodeId, status: 'ONLINE', album: publicAlbumWhere(app.config) }, select: { id: true, album: { select: { regions: true } } } });
     if (!episode || !isAlbumVisibleInCountry(episode.album.regions, requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER))) throw Object.assign(new Error('Episode not found.'), { statusCode: 404 });
     const now = new Date();
     await app.prisma.$transaction(async (tx) => {

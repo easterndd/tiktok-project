@@ -55,7 +55,7 @@ export function AlbumPage() {
     <Link className={styles.backLink} to="/"><ArrowLeft size={18} aria-hidden="true" /> {t(locale, 'back')}</Link>
     <header className={styles.hero}>
       <div className={styles.backdrop} style={{ backgroundImage: `url("${detail.backdropUrl ?? detail.coverUrl}")` }} />
-      <img className={styles.cover} src={detail.coverUrl} alt={`${detail.title} cover`} onError={(event) => { event.currentTarget.src = '/fallback-cover.svg'; }} />
+      <img className={styles.cover} src={detail.coverUrl} alt={`${detail.title} cover`} decoding="async" onError={(event) => { event.currentTarget.src = '/fallback-cover.svg'; }} />
       <div className={styles.copy}><p className="eyebrow">{t(locale, 'details')}</p><h1>{detail.title}</h1><p>{detail.description}</p><div className={styles.stats}><span><Star size={14} fill="currentColor" aria-hidden="true" /> {detail.rating?.toFixed(1) ?? '9.0'}</span><span>{formatCompactNumber(detail.views ?? 0)} {t(locale, 'views')}</span><span>{detail.episodeCount} {t(locale, 'episodes')}</span></div><div className={styles.actions}>
         {firstPlayable && <button className={styles.primary} onClick={() => firstPlayable.access === 'PLAYABLE' ? navigate(`/watch/${albumId}/${firstPlayable.id}`) : unlock.mutate(firstPlayable)}><Play size={17} fill="currentColor" aria-hidden="true" /> {firstPlayable.access === 'PLAYABLE' ? t(locale, 'watchNow') : t(locale, 'watchAd')}</button>}
         <button className={styles.iconAction} onClick={() => mutateInteraction.mutate({ action: 'favorite', active: !detail.userState?.favorited })} aria-label={detail.userState?.favorited ? t(locale, 'saved') : t(locale, 'save')} title={detail.userState?.favorited ? t(locale, 'saved') : t(locale, 'save')}><Heart size={18} fill={detail.userState?.favorited ? 'currentColor' : 'none'} /></button>
@@ -67,6 +67,6 @@ export function AlbumPage() {
     {mutateInteraction.isError && <div className={styles.errorStatus}>{mutateInteraction.error instanceof Error ? mutateInteraction.error.message : t(locale, 'unavailable')}</div>}
     {detail.tags?.length ? <div className={styles.tags}>{detail.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
     {componentIsEnabled(ui, 'ALBUM_DESCRIPTION') && <section className={styles.about}><h2>{t(locale, 'about')}</h2><p>{detail.description}</p></section>}
-    <section className={styles.episodes}><div className={styles.sectionHeader}><h2>{t(locale, 'episodes')}</h2><span>{episodes.data?.items.length ?? 0} / {detail.episodeCount}</span></div><EpisodeList albumId={albumId} episodes={episodes.data?.items ?? []} onLocked={(episode) => unlock.mutate(episode)} /></section>
+    <section id="episodes" className={styles.episodes}><div className={styles.sectionHeader}><h2>{t(locale, 'episodes')}</h2><span>{episodes.data?.items.length ?? 0} / {detail.episodeCount}</span></div><EpisodeList albumId={albumId} episodes={episodes.data?.items ?? []} onLocked={(episode) => unlock.mutate(episode)} /></section>
   </section>;
 }

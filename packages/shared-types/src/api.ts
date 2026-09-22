@@ -84,6 +84,8 @@ export type HomeHeroItem = {
   subtitle: string;
   coverUrl: string;
   backdropUrl: string;
+  /** Optional muted preview used by discovery surfaces; playback remains episode-scoped. */
+  previewUrl?: string | null;
   deepLink: string;
   badge?: string;
 };

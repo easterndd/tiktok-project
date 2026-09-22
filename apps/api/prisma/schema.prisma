@@ -50,6 +50,40 @@ enum CoverAssetStatus {
   DELETED
 }
 
+enum PlatformSyncJobKind {
+  COVER
+  VIDEO
+  ALBUM_VERSION
+  REVIEW
+  SET_ONLINE_VERSION
+  PUBLISH
+  UNPUBLISH
+  RECONCILE
+}
+
+enum PlatformSyncJobStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  CONFLICT
+}
+
+enum BytePlusUploadStatus {
+  PENDING
+  UPLOADING
+  READY
+  FAILED
+}
+
+enum TikTokVideoStatus {
+  NOT_STARTED
+  PROCESSING
+  READY
+  FAILED
+}
+
 enum RewardedUnlockSessionStatus {
   ACTIVE
   UNLOCKED
@@ -125,77 +159,86 @@ enum UiConfigStatus {
 }
 
 model User {
-  id              String           @id @default(cuid())
-  identityType    UserIdentityType @default(ANONYMOUS)
-  tiktokOpenId    String?          @unique
-  visitorKeyHash  String?          @unique
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  watchProgresses WatchProgress[]
-  episodeUnlocks  EpisodeUnlock[]
-  rewardSessions  RewardedUnlockSession[]
-  adEvents        AdEvent[]
-  albumLikes      AlbumLike[]
-  albumFavorites  AlbumFavorite[]
-  shareEvents     ShareEvent[]
-  searchEvents    SearchEvent[]
-  qualityEvents   PlaybackQualityEvent[]
+  id               String                   @id @default(cuid())
+  identityType     UserIdentityType         @default(ANONYMOUS)
+  tiktokOpenId     String?                  @unique
+  visitorKeyHash   String?                  @unique
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  watchProgresses  WatchProgress[]
+  episodeUnlocks   EpisodeUnlock[]
+  rewardSessions   RewardedUnlockSession[]
+  adEvents         AdEvent[]
+  albumLikes       AlbumLike[]
+  albumFavorites   AlbumFavorite[]
+  shareEvents      ShareEvent[]
+  searchEvents     SearchEvent[]
+  qualityEvents    PlaybackQualityEvent[]
   appEntrySessions AppEntryAdSession[]
-  appSessions     AppSession[]
+  appSessions      AppSession[]
   playbackSessions PlaybackSession[]
   completionEvents EpisodeCompletionEvent[]
-  activityEvents  AudienceActivityEvent[]
-  preference      UserPreference?
+  activityEvents   AudienceActivityEvent[]
+  preference       UserPreference?
 
   @@index([createdAt])
 }
 
 model Album {
-  id            String      @id @default(cuid())
-  tiktokAlbumId String?     @unique
-  tiktokVersion Int?
-  onlineVersion Int?
-  reviewStatus  String?
-  publishStatus String?
-  title         String
-  description   String      @db.Text
-  coverUrl      String
-  coverAssetId  String?
-  language      String      @default("en")
-  regions       Json?
-  accessConfig  Json?
-  status        AlbumStatus @default(DRAFT)
-  coverAsset    CoverAsset? @relation("AlbumCoverAsset", fields: [coverAssetId], references: [id])
-  episodes      Episode[]
-  translations  AlbumTranslation[]
-  genres        AlbumGenre[]
-  homeItems     HomeBlockItem[]
-  likes         AlbumLike[]
-  favorites     AlbumFavorite[]
-  shareEvents   ShareEvent[]
-  adRevenues    AdRevenue[]
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id                       String             @id @default(cuid())
+  tiktokAlbumId            String?            @unique
+  tiktokVersion            Int?
+  onlineVersion            Int?
+  platformPublishedVersion Int?
+  platformPublishedAt      DateTime?
+  reviewStatus             String?
+  publishStatus            String?
+  releaseYear              Int?
+  dramaType                Int?
+  tagList                  Json?
+  title                    String
+  description              String             @db.Text
+  coverUrl                 String
+  coverAssetId             String?
+  language                 String             @default("en")
+  regions                  Json?
+  accessConfig             Json?
+  status                   AlbumStatus        @default(DRAFT)
+  coverAsset               CoverAsset?        @relation("AlbumCoverAsset", fields: [coverAssetId], references: [id])
+  episodes                 Episode[]
+  translations             AlbumTranslation[]
+  genres                   AlbumGenre[]
+  homeItems                HomeBlockItem[]
+  likes                    AlbumLike[]
+  favorites                AlbumFavorite[]
+  shareEvents              ShareEvent[]
+  adRevenues               AdRevenue[]
+  platformSyncJobs         PlatformSyncJob[]
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
 
   @@index([status, updatedAt])
 }
 
 model CoverAsset {
-  id              String           @id @default(cuid())
-  storageKey      String           @unique
-  publicUrl       String
-  providerImageId String?          @unique
-  mimeType        String
-  fileSize        Int
-  width           Int?
-  height          Int?
-  sha256          String           @unique
-  status          CoverAssetStatus @default(UPLOADING)
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  id                String           @id @default(cuid())
+  storageKey        String           @unique
+  publicUrl         String
+  providerImageId   String?          @unique
+  mimeType          String
+  fileSize          Int
+  width             Int?
+  height            Int?
+  sha256            String           @unique
+  status            CoverAssetStatus @default(UPLOADING)
+  platformSyncedAt  DateTime?
+  platformSyncError String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
-  albumCovers     Album[]          @relation("AlbumCoverAsset")
-  episodeCovers   Episode[]        @relation("EpisodeCoverAsset")
+  albumCovers      Album[]           @relation("AlbumCoverAsset")
+  episodeCovers    Episode[]         @relation("EpisodeCoverAsset")
+  platformSyncJobs PlatformSyncJob[]
 }
 
 model UiComponent {
@@ -225,40 +268,79 @@ model UiConfigVersion {
 }
 
 model Episode {
-  id               String        @id @default(cuid())
-  albumId          String
-  tiktokEpisodeId  String?       @unique
-    byteplusVid      String?       @unique
-    localPlaybackUrl String?
-    tiktokCoverPicId String?
-  byteplusCoverUrl String?
-  coverAssetId     String?
-  episodeNo        Int
-  title            String
-  description      String?       @db.Text
-  coverUrl         String?
-  durationMs       Int?
-  isFree           Boolean       @default(false)
-  sortOrder        Int
-  status           EpisodeStatus @default(DRAFT)
-  album            Album         @relation(fields: [albumId], references: [id], onDelete: Cascade)
-  coverAsset       CoverAsset?   @relation("EpisodeCoverAsset", fields: [coverAssetId], references: [id])
-  translations     EpisodeTranslation[]
-  uploadJobs       UploadJob[]
-  watchProgresses  WatchProgress[]
-  unlocks          EpisodeUnlock[]
-  rewardSessions   RewardedUnlockSession[]
-  homeTargetItems  HomeBlockItem[] @relation("HomeTargetEpisode")
-  qualityEvents    PlaybackQualityEvent[]
-  playbackSessions PlaybackSession[]
-  completionEvents EpisodeCompletionEvent[]
-  activityEvents   AudienceActivityEvent[]
-  adRevenues       AdRevenue[]
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  id                   String                   @id @default(cuid())
+  albumId              String
+  tiktokEpisodeId      String?                  @unique
+  byteplusVid          String?                  @unique
+  localPlaybackUrl     String?
+  tiktokCoverPicId     String?
+  tiktokVideoJobId     String?                  @unique
+  tiktokVideoStatus    TikTokVideoStatus        @default(NOT_STARTED)
+  tiktokVideoError     String?
+  byteplusUploadStatus BytePlusUploadStatus     @default(PENDING)
+  platformSyncedAt     DateTime?
+  byteplusCoverUrl     String?
+  coverAssetId         String?
+  episodeNo            Int
+  title                String
+  description          String?                  @db.Text
+  coverUrl             String?
+  durationMs           Int?
+  isFree               Boolean                  @default(false)
+  sortOrder            Int
+  status               EpisodeStatus            @default(DRAFT)
+  album                Album                    @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  coverAsset           CoverAsset?              @relation("EpisodeCoverAsset", fields: [coverAssetId], references: [id])
+  translations         EpisodeTranslation[]
+  uploadJobs           UploadJob[]
+  watchProgresses      WatchProgress[]
+  unlocks              EpisodeUnlock[]
+  rewardSessions       RewardedUnlockSession[]
+  homeTargetItems      HomeBlockItem[]          @relation("HomeTargetEpisode")
+  qualityEvents        PlaybackQualityEvent[]
+  playbackSessions     PlaybackSession[]
+  completionEvents     EpisodeCompletionEvent[]
+  activityEvents       AudienceActivityEvent[]
+  adRevenues           AdRevenue[]
+  platformSyncJobs     PlatformSyncJob[]
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
 
   @@unique([albumId, episodeNo])
   @@index([albumId, status, sortOrder])
+}
+
+model PlatformSyncJob {
+  id                   String                @id @default(cuid())
+  kind                 PlatformSyncJobKind
+  status               PlatformSyncJobStatus @default(PENDING)
+  targetId             String
+  dedupeKey            String                @unique
+  snapshotHash         String?
+  snapshotJson         Json?
+  attemptCount         Int                   @default(0)
+  nextAttemptAt        DateTime?
+  providerJobId        String?
+  providerRequestId    String?
+  providerResponse     Json?
+  errorCode            String?
+  errorMessage         String?
+  createdByAdminUserId String?
+  albumId              String?
+  episodeId            String?
+  coverAssetId         String?
+  createdAt            DateTime              @default(now())
+  startedAt            DateTime?
+  completedAt          DateTime?
+  updatedAt            DateTime              @updatedAt
+  album                Album?                @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  episode              Episode?              @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  coverAsset           CoverAsset?           @relation(fields: [coverAssetId], references: [id], onDelete: Cascade)
+  createdByAdminUser   AdminUser?            @relation(fields: [createdByAdminUserId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextAttemptAt])
+  @@index([kind, targetId, createdAt])
+  @@index([albumId, createdAt])
 }
 
 model WatchProgress {
@@ -277,16 +359,16 @@ model WatchProgress {
 }
 
 model AppSession {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   userId          String
   clientSessionId String
   platform        String?
   clientVersion   String?
   source          String?
-  startedAt       DateTime @default(now())
-  lastSeenAt      DateTime @updatedAt
+  startedAt       DateTime  @default(now())
+  lastSeenAt      DateTime  @updatedAt
   endedAt         DateTime?
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, clientSessionId])
   @@index([startedAt, userId])
@@ -294,18 +376,18 @@ model AppSession {
 }
 
 model PlaybackSession {
-  id             String   @id
+  id             String                   @id
   userId         String
   episodeId      String
-  startedAt      DateTime @default(now())
+  startedAt      DateTime                 @default(now())
   firstFrameAt   DateTime?
-  lastEventAt    DateTime @default(now())
+  lastEventAt    DateTime                 @default(now())
   endedAt        DateTime?
-  completed      Boolean  @default(false)
-  lastPositionMs Int      @default(0)
+  completed      Boolean                  @default(false)
+  lastPositionMs Int                      @default(0)
   durationMs     Int?
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  episode        Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  user           User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode        Episode                  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
   completions    EpisodeCompletionEvent[]
 
   @@index([startedAt, userId])
@@ -368,52 +450,52 @@ model RewardedUnlockSession {
   createdAt      DateTime                    @default(now())
   updatedAt      DateTime                    @updatedAt
 
-  user           User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  episode        Episode                     @relation(fields: [episodeId], references: [id], onDelete: Cascade)
-  rewards        RewardedUnlockReward[]
-  adEvents       AdEvent[]                   @relation("AdEventRewardSession")
+  user     User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode  Episode                @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  rewards  RewardedUnlockReward[]
+  adEvents AdEvent[]              @relation("AdEventRewardSession")
 
   @@index([userId, episodeId, status, expiresAt])
 }
 
 model RewardedUnlockReward {
-  id              String                @id @default(cuid())
-  sessionId       String
-  clientEventId   String
-  adIndex         Int
-  adEventId       String?
-  createdAt       DateTime              @default(now())
+  id            String   @id @default(cuid())
+  sessionId     String
+  clientEventId String
+  adIndex       Int
+  adEventId     String?
+  createdAt     DateTime @default(now())
 
-  session         RewardedUnlockSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session RewardedUnlockSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, clientEventId])
   @@unique([sessionId, adIndex])
 }
 
 model AdEvent {
-  id            String      @id @default(cuid())
-  userId        String
-  clientEventId String?
-  adType      AdType
-  scope       AdScope     @default(EPISODE_UNLOCK)
-  eventType   AdEventType
-  placementId String
-  episodeId   String?
-  sessionId   String?
-  rewardSessionId String?
+  id                String                 @id @default(cuid())
+  userId            String
+  clientEventId     String?
+  adType            AdType
+  scope             AdScope                @default(EPISODE_UNLOCK)
+  eventType         AdEventType
+  placementId       String
+  episodeId         String?
+  sessionId         String?
+  rewardSessionId   String?
   appEntrySessionId String?
-  adIndex     Int?
-  errorCode   String?
-  createdAt   DateTime    @default(now())
-  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  rewardSession RewardedUnlockSession? @relation("AdEventRewardSession", fields: [rewardSessionId], references: [id], onDelete: SetNull)
-  appEntrySession AppEntryAdSession? @relation("AdEventAppEntrySession", fields: [appEntrySessionId], references: [id], onDelete: SetNull)
+  adIndex           Int?
+  errorCode         String?
+  createdAt         DateTime               @default(now())
+  user              User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rewardSession     RewardedUnlockSession? @relation("AdEventRewardSession", fields: [rewardSessionId], references: [id], onDelete: SetNull)
+  appEntrySession   AppEntryAdSession?     @relation("AdEventAppEntrySession", fields: [appEntrySessionId], references: [id], onDelete: SetNull)
 
+  @@unique([userId, clientEventId])
   @@index([userId, adType, createdAt])
   @@index([placementId, eventType, createdAt])
   @@index([rewardSessionId, adIndex])
   @@index([appEntrySessionId, adIndex])
-  @@unique([userId, clientEventId])
 }
 
 model AppEntryAdPolicy {
@@ -443,23 +525,23 @@ model AppEntryAdSession {
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
 
-  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  completions    AppEntryAdCompletion[]
-  adEvents       AdEvent[]               @relation("AdEventAppEntrySession")
+  user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completions AppEntryAdCompletion[]
+  adEvents    AdEvent[]              @relation("AdEventAppEntrySession")
 
   @@unique([userId, launchId])
   @@index([userId, status, expiresAt])
 }
 
 model AppEntryAdCompletion {
-  id            String            @id @default(cuid())
+  id            String   @id @default(cuid())
   sessionId     String
   clientEventId String
   adIndex       Int
   adEventId     String?
-  createdAt     DateTime          @default(now())
+  createdAt     DateTime @default(now())
 
-  session       AppEntryAdSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session AppEntryAdSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, clientEventId])
   @@unique([sessionId, adIndex])
@@ -505,13 +587,13 @@ model ShareEvent {
 }
 
 model SearchEvent {
-  id        String   @id @default(cuid())
-  userId    String?
-  query     String
-  locale    String
-  resultCount Int     @default(0)
-  createdAt DateTime @default(now())
-  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  id          String   @id @default(cuid())
+  userId      String?
+  query       String
+  locale      String
+  resultCount Int      @default(0)
+  createdAt   DateTime @default(now())
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([query, createdAt])
   @@index([locale, createdAt])
@@ -528,27 +610,27 @@ model UserPreference {
 }
 
 model AlbumTranslation {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   albumId     String
   locale      String
   title       String
-  description String   @db.Text
+  description String  @db.Text
   coverUrl    String?
-  album       Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  album       Album   @relation(fields: [albumId], references: [id], onDelete: Cascade)
 
   @@unique([albumId, locale])
   @@index([locale, albumId])
 }
 
 model EpisodeTranslation {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   episodeId   String
   locale      String
   title       String
-  description String?  @db.Text
+  description String? @db.Text
   coverUrl    String?
   subtitleRef String?
-  episode     Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  episode     Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
 
   @@unique([episodeId, locale])
   @@index([locale, episodeId])
@@ -566,35 +648,36 @@ model Genre {
 model AlbumGenre {
   albumId String
   genreId String
-  album   Album @relation(fields: [albumId], references: [id], onDelete: Cascade)
-  genre   Genre @relation(fields: [genreId], references: [id], onDelete: Cascade)
+  album   Album  @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  genre   Genre  @relation(fields: [genreId], references: [id], onDelete: Cascade)
 
   @@id([albumId, genreId])
   @@index([genreId, albumId])
 }
 
 model HomeBlock {
-  id         String          @id @default(cuid())
-  type       HomeBlockType
-  title      String
-  enabled    Boolean         @default(true)
-  sortOrder  Int
-  config     Json?
-  startsAt   DateTime?
-  endsAt     DateTime?
-  items      HomeBlockItem[]
-  updatedAt  DateTime        @updatedAt
+  id        String          @id @default(cuid())
+  type      HomeBlockType
+  title     String
+  enabled   Boolean         @default(true)
+  sortOrder Int
+  config    Json?
+  startsAt  DateTime?
+  endsAt    DateTime?
+  items     HomeBlockItem[]
+  updatedAt DateTime        @updatedAt
 
   @@unique([type])
   @@index([enabled, sortOrder])
 }
 
 model HomeBlockItem {
-  id              String     @id @default(cuid())
+  id              String    @id @default(cuid())
   blockId         String
   albumId         String?
   targetEpisodeId String?
   imageUrl        String?
+  previewUrl      String?
   linkPath        String?
   sortOrder       Int
   startsAt        DateTime?
@@ -653,39 +736,40 @@ model AdRevenue {
 }
 
 model UploadJob {
-  id              String       @id @default(cuid())
+  id              String           @id @default(cuid())
   episodeId       String
-  providerJobId   String?      @unique
+  providerJobId   String?          @unique
   sourceUrl       String
   sourceType      UploadSourceType @default(URL)
   sourceName      String?
   sourceExpiresAt DateTime?
-  status          UploadStatus @default(PENDING)
+  status          UploadStatus     @default(PENDING)
   errorMessage    String?
-  retryCount      Int          @default(0)
+  retryCount      Int              @default(0)
   startedAt       DateTime?
   nextAttemptAt   DateTime?
   completedAt     DateTime?
-  createdAt       DateTime     @default(now())
-  episode         Episode      @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  createdAt       DateTime         @default(now())
+  episode         Episode          @relation(fields: [episodeId], references: [id], onDelete: Cascade)
 
   @@index([status, createdAt])
   @@index([status, nextAttemptAt])
 }
 
 model AdminUser {
-  id                    String          @id @default(cuid())
-  email                 String          @unique
-  passwordHash          String
-  role                  AdminRole       @default(EDITOR)
-  status                AdminStatus     @default(ACTIVE)
-  tokenVersion          Int             @default(0)
-  lastLoginAt           DateTime?
-  passwordChangedAt     DateTime?
-  createdAt             DateTime        @default(now())
-  updatedAt             DateTime        @updatedAt
-  auditLogs             AuditLog[]
-  createdConfigVersions UiConfigVersion[] @relation("UiConfigCreatedBy")
+  id                      String            @id @default(cuid())
+  email                   String            @unique
+  passwordHash            String
+  role                    AdminRole         @default(EDITOR)
+  status                  AdminStatus       @default(ACTIVE)
+  tokenVersion            Int               @default(0)
+  lastLoginAt             DateTime?
+  passwordChangedAt       DateTime?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  auditLogs               AuditLog[]
+  platformSyncJobs        PlatformSyncJob[]
+  createdConfigVersions   UiConfigVersion[] @relation("UiConfigCreatedBy")
   publishedConfigVersions UiConfigVersion[] @relation("UiConfigPublishedBy")
 
   @@index([status, role])

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { optionalUser } from '../../plugins/optional-auth';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { defaultUiComponents } from '../ui/routes';
-import { isAlbumVisibleInCountry, requestCountry } from '../../lib/content-visibility';
+import { isAlbumVisibleInCountry, isPlatformPublished, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
 
 const querySchema = z.object({ locale: publicLocaleSchema.default(defaultLocale) });
 
@@ -23,7 +23,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const components = await app.prisma.uiComponent.findMany({ orderBy: { key: 'asc' } });
     const albums = await app.prisma.album.findMany({
-      where: { status: 'ONLINE' },
+      where: publicAlbumWhere(app.config),
       orderBy: { updatedAt: 'desc' },
       take: 20,
       include: {
@@ -44,7 +44,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
       genres: (album.genres ?? []).map(({ genre }) => genre.slug),
       status: 'ONLINE' as const
     }));
-    const genres = await app.prisma.genre.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { albums: { where: { album: { status: 'ONLINE' } } } } } } });
+    const genres = await app.prisma.genre.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { albums: { where: { album: publicAlbumWhere(app.config) } } } } } });
     const localizedGenres = genres.map((genre) => {
       const translations = genre.translations && typeof genre.translations === 'object' && !Array.isArray(genre.translations)
         ? genre.translations as Record<string, unknown>
@@ -75,14 +75,15 @@ export async function registerHomeRoutes(app: FastifyInstance) {
                 translations: true,
                 genres: { include: { genre: { select: { slug: true } } } }
               }
-            }
+            },
+            targetEpisode: { select: { albumId: true, status: true, localPlaybackUrl: true } }
           }
         }
       }
     });
     const configured: HomeResponse['blocks'] = [];
     for (const block of configuredBlocks) {
-      const onlineItems = block.items.filter((item) => item.album?.status === 'ONLINE' && isAlbumVisibleInCountry(item.album?.regions, country));
+      const onlineItems = block.items.filter((item) => Boolean(item.album) && isPlatformPublished(item.album!, app.config) && isAlbumVisibleInCountry(item.album?.regions, country));
       if (block.type === 'CAROUSEL') {
         configured.push({
           type: 'CAROUSEL',
@@ -91,12 +92,16 @@ export async function registerHomeRoutes(app: FastifyInstance) {
             const album = item.album!;
             const title = translatedText(album.translations, locale, 'title') ?? album.title;
             const coverUrl = translatedText(album.translations, locale, 'coverUrl') ?? album.coverUrl;
+            const localPreviewUrl = app.config.NODE_ENV !== 'production' && app.config.LOCAL_PLAYBACK_ENABLED && item.targetEpisode?.albumId === album.id && item.targetEpisode.status === 'ONLINE'
+              ? item.targetEpisode.localPlaybackUrl
+              : null;
             return {
               albumId: album.id,
               title,
               subtitle: translatedText(album.translations, locale, 'description') ?? album.description,
               coverUrl: item.imageUrl ?? coverUrl,
               backdropUrl: item.imageUrl ?? coverUrl,
+              previewUrl: item.previewUrl ?? localPreviewUrl,
               deepLink: item.linkPath ?? `/album/${album.id}`
             };
           })
@@ -120,7 +125,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
     ];
     if (user) {
       const progress = await app.prisma.watchProgress.findMany({
-        where: { userId: user.sub, completed: false, episode: { status: 'ONLINE', album: { status: 'ONLINE' } } },
+        where: { userId: user.sub, completed: false, episode: { status: 'ONLINE', album: publicAlbumWhere(app.config) } },
         orderBy: { updatedAt: 'desc' },
         take: 6,
         include: { episode: { include: { album: { include: { translations: true } } } } }

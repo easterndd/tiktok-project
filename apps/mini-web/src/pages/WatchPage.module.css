@@ -1,13 +1,39 @@
-.page { display: grid; gap: 18px; }
-.watchHeader { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; }
-.backLink { display: inline-flex; align-items: center; gap: 7px; width: max-content; min-height: 44px; color: var(--muted); font-size: 13px; font-weight: 700; text-decoration: none; }
-.episodeLabel { color: var(--text); font-size: 14px; font-weight: 800; text-align: center; }
-.episodeSelect { display: grid; justify-self: end; width: 44px; min-height: 44px; padding: 0; place-items: center; color: var(--muted); border: 1px solid var(--line); border-radius: 50%; background: var(--surface); }
-.playerNotice { display: flex; align-items: flex-start; gap: 10px; padding: 13px 15px; color: var(--muted); border: 1px solid rgba(111, 231, 238, .14); border-radius: 12px; background: rgba(111, 231, 238, .05); font-size: 12px; line-height: 1.5; }
-.playerNotice svg { flex: 0 0 auto; margin-top: 2px; color: var(--cyan); }
-.playerNotice strong { display: block; margin-bottom: 2px; color: var(--text); }
-.nextUp { display: grid; gap: 12px; }
-.sectionHeader { display: flex; align-items: baseline; justify-content: space-between; }
-.sectionHeader h2 { margin: 0; font-size: 20px; }
-.sectionHeader span { color: var(--faint); font-size: 12px; }
-.sync { display: inline-flex; align-items: center; justify-content: center; gap: 7px; color: var(--cyan); font-size: 12px; }
+.page { position: relative; width: 100%; min-height: 100dvh; overflow: hidden; background: #060710; overscroll-behavior-y: contain; touch-action: pan-y; }
+.resolving { display: grid; min-height: 100dvh; place-items: center; background: radial-gradient(circle at 50% 30%, rgba(129, 112, 255, .16), transparent 42%), #060710; }
+.resolving :global(.loading-state), .resolving :global(.state) { min-height: 100dvh; }
+.watchHeader { position: absolute; z-index: 4; top: max(14px, env(safe-area-inset-top)); right: 16px; left: 16px; display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 12px; pointer-events: none; }
+.backButton, .episodeSelect { display: grid; width: 44px; min-height: 44px; padding: 0; place-items: center; color: #fff; border: 1px solid rgba(255, 255, 255, .25); border-radius: 14px; background: rgba(8, 10, 22, .52); box-shadow: 0 6px 20px rgba(0, 0, 0, .22); backdrop-filter: blur(12px); pointer-events: auto; }
+.episodeSelect { justify-self: end; }
+.backButton:active, .episodeSelect:active, .episodeTrigger:active, .closeSheet:active { transform: scale(.96); }
+.episodeLabel { display: grid; min-width: 0; gap: 2px; color: #fff; text-align: center; text-shadow: 0 2px 12px rgba(0, 0, 0, .5); }
+.episodeLabel strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.episodeLabel span { color: rgba(255, 255, 255, .74); font-size: 11px; font-weight: 700; }
+.playerMeta { position: absolute; z-index: 4; right: 16px; bottom: max(20px, env(safe-area-inset-bottom)); left: 16px; display: grid; gap: 8px; }
+.episodeTrigger { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; width: 100%; min-height: 64px; padding: 10px 14px; color: #fff; border: 1px solid rgba(255, 255, 255, .16); border-radius: 17px; background: linear-gradient(100deg, rgba(13, 16, 33, .86), rgba(24, 24, 51, .74)); box-shadow: 0 12px 28px rgba(0, 0, 0, .25); text-align: left; backdrop-filter: blur(16px); }
+.episodeTrigger span { grid-column: 1; color: var(--pink-soft); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.episodeTrigger strong { grid-column: 1; overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.episodeTrigger svg { grid-column: 2; grid-row: 1 / span 2; color: var(--cyan); }
+.playerNotice, .sync { display: inline-flex; align-items: center; gap: 7px; width: max-content; max-width: 100%; padding: 8px 10px; color: rgba(241, 244, 255, .82); border: 1px solid rgba(255, 255, 255, .1); border-radius: 10px; background: rgba(8, 10, 22, .58); font-size: 11px; line-height: 1.4; backdrop-filter: blur(12px); }
+.playerNotice svg, .sync { color: var(--cyan); }
+.sheetLayer { position: fixed; z-index: 10; inset: 0; display: grid; align-items: end; }
+.sheetBackdrop { position: absolute; inset: 0; width: 100%; min-height: 100%; padding: 0; border: 0; background: rgba(2, 3, 10, .64); backdrop-filter: blur(3px); }
+.episodeSheet { position: relative; z-index: 1; display: grid; max-height: min(76dvh, 660px); gap: 14px; padding: 10px 16px max(20px, env(safe-area-inset-bottom)); overflow: hidden; border: 1px solid rgba(202, 211, 255, .16); border-bottom: 0; border-radius: 26px 26px 0 0; background: linear-gradient(145deg, #1d2340, #101426 52%, #0c0e1d); box-shadow: 0 -22px 60px rgba(0, 0, 0, .38), inset 0 1px rgba(255, 255, 255, .08); animation: sheet-enter 220ms ease-out; }
+.sheetHandle { width: 38px; height: 4px; margin: 0 auto; border-radius: 99px; background: rgba(255, 255, 255, .25); }
+.sheetHeader { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.sheetHeader h2 { margin: 4px 0 3px; font-size: 24px; }
+.sheetHeader p { margin: 0; color: var(--muted); font-size: 12px; }
+.closeSheet { display: grid; flex: 0 0 auto; width: 44px; min-height: 44px; padding: 0; place-items: center; color: var(--text); border: 1px solid rgba(255, 255, 255, .14); border-radius: 14px; background: rgba(255, 255, 255, .06); }
+.sheetList { min-height: 0; padding-bottom: 2px; overflow-y: auto; overscroll-behavior: contain; }
+.sheetStatus, .sheetError { display: inline-flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; }
+.sheetStatus { color: var(--cyan); }
+.sheetError { color: var(--pink-soft); }
+.unlockLayer { position: fixed; z-index: 8; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(3, 4, 12, .42); pointer-events: none; }
+.unlockCard { display: grid; justify-items: center; gap: 8px; max-width: 260px; padding: 22px; color: var(--muted); border: 1px solid rgba(202, 211, 255, .18); border-radius: 20px; background: rgba(18, 22, 43, .9); box-shadow: 0 18px 50px rgba(0, 0, 0, .38); text-align: center; backdrop-filter: blur(18px); }
+.unlockCard svg { color: var(--cyan); animation: spin .9s linear infinite; }
+.unlockCard strong { color: var(--text); font-size: 16px; }
+.unlockCard span { overflow: hidden; max-width: 220px; color: var(--pink-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.unlockCard small { color: var(--faint); font-size: 11px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes sheet-enter { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .episodeSheet { animation: none; } .unlockCard svg { animation: none; } }
+@media (min-width: 681px) { .page { width: min(100%, 480px); margin: 0 auto; box-shadow: 0 0 0 1px rgba(255, 255, 255, .06), 0 0 80px rgba(0, 0, 0, .42); } .sheetLayer { align-items: center; justify-content: center; } .episodeSheet { width: min(100%, 480px); max-height: 76dvh; border-bottom: 1px solid rgba(202, 211, 255, .16); border-radius: 26px; } }

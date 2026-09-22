@@ -1,4 +1,32 @@
 import type { FastifyRequest } from 'fastify';
+import type { Env } from '../config/env';
+
+/**
+ * A local ONLINE flag is not enough to make a drama public in production. The
+ * platform publication version is only written by the successful publish or
+ * reconciliation transaction.
+ */
+export function publicAlbumWhere(env: Env): any {
+  if (env.NODE_ENV !== 'production' && env.LOCAL_PLAYBACK_ENABLED) return { status: 'ONLINE' };
+  return {
+    status: 'ONLINE',
+    platformPublishedVersion: { not: null },
+    onlineVersion: { not: null },
+    reviewStatus: 'PASSED',
+    publishStatus: 'LISTED'
+  };
+}
+
+export function isPlatformPublished(album: any, env: Env): boolean {
+  if (album.status !== 'ONLINE') return false;
+  if (env.NODE_ENV !== 'production' && env.LOCAL_PLAYBACK_ENABLED) return true;
+  return album.platformPublishedVersion !== null
+    && album.platformPublishedVersion !== undefined
+    && album.onlineVersion !== null
+    && album.onlineVersion !== undefined
+    && album.reviewStatus === 'PASSED'
+    && album.publishStatus === 'LISTED';
+}
 
 /**
  * Region metadata is an allow-list. A missing region list means worldwide;

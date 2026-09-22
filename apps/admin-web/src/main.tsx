@@ -16,6 +16,12 @@ type Album = {
   title: string;
   status: string;
   episodeCount: number;
+  tiktokAlbumId?: string | null;
+  tiktokVersion?: number | null;
+  onlineVersion?: number | null;
+  platformPublishedVersion?: number | null;
+  reviewStatus?: string | null;
+  publishStatus?: string | null;
   accessConfig?: { freeEpisodeCount?: number; rewardedAdEnabled?: boolean; rewardedPlacementId?: string; rewardedAdCount?: number } | null;
 };
 type EpisodeOption = { id: string; albumId: string; episodeNo: number; title: string; status: string; byteplusVid?: string | null; album: { title: string; status: string } };
@@ -27,14 +33,14 @@ type Audience = { from: string; to: string; timezone: string; periodDays: number
 type Playback = { from: string; to: string; timezone: string; periodDays: number; totalEvents: number; firstFrames: number; errorCount: number; errorRate: number; averageStartupMs: number | null; totalBufferMs: number; eventTypes: { eventType: string; count: number }[]; definitions: { definition: string; count: number }[]; networks: { networkType: string; count: number }[]; recentErrors: { episodeTitle: string; errorCode?: string | null; createdAt: string }[] };
 type AppEntryAdPolicy = { enabled: boolean; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; requiredCount: number; onUnavailable: 'ALLOW' | 'BLOCK'; version: number };
 type AdminRole = 'OWNER' | 'EDITOR' | 'ANALYST' | 'SUPPORT';
-type AdminPermission = 'content.write' | 'ads.write';
+type AdminPermission = 'content.write' | 'content.sync' | 'content.review' | 'content.publish' | 'ads.write';
 type AdminProfile = { id: string; email: string; role: AdminRole; status: string; lastLoginAt?: string | null; passwordChangedAt?: string | null };
 type Tab = 'overview' | 'create' | 'albums' | 'ads' | 'audience' | 'playback' | 'security';
 const contentDraftStorageKey = 'quickreels_content_draft';
 
 const rolePermissions: Record<AdminRole, readonly AdminPermission[]> = {
-  OWNER: ['content.write', 'ads.write'],
-  EDITOR: ['content.write', 'ads.write'],
+  OWNER: ['content.write', 'content.sync', 'content.review', 'content.publish', 'ads.write'],
+  EDITOR: ['content.write', 'content.sync', 'ads.write'],
   ANALYST: [],
   SUPPORT: []
 };
@@ -162,6 +168,9 @@ function AdminApp() {
   const [analyticsTimezone, setAnalyticsTimezone] = useState('Asia/Shanghai');
   const [createTitle, setCreateTitle] = useState('');
   const [createDescription, setCreateDescription] = useState('');
+  const [createReleaseYear, setCreateReleaseYear] = useState(new Date().getFullYear());
+  const [createDramaType, setCreateDramaType] = useState(2);
+  const [createTagList, setCreateTagList] = useState('1');
   const [createCoverFile, setCreateCoverFile] = useState<File | null>(null);
   const [createCover, setCreateCover] = useState<CoverAsset | null>(null);
   const [createCoverPreviewUrl, setCreateCoverPreviewUrl] = useState('');
@@ -177,7 +186,10 @@ function AdminApp() {
   const [loading, setLoading] = useState(false);
   const [savingEntryAdPolicy, setSavingEntryAdPolicy] = useState(false);
   const [savingAlbumId, setSavingAlbumId] = useState<string | null>(null);
+  const [deletingAlbumId, setDeletingAlbumId] = useState<string | null>(null);
+  const [dirtyAccessAlbumIds, setDirtyAccessAlbumIds] = useState<Set<string>>(() => new Set());
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
+  const [platformWorking, setPlatformWorking] = useState<string | null>(null);
   const [changingPassword, setChangingPassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -236,10 +248,13 @@ function AdminApp() {
   useEffect(() => { if (loggedIn) void loadData(); }, [loggedIn, analyticsFrom, analyticsTo, analyticsTimezone]);
   useEffect(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem(contentDraftStorageKey) ?? 'null') as { title?: string; description?: string; cover?: CoverAsset | null; freeCount?: number; rewardedEnabled?: boolean; placementId?: string; rewardedCount?: number; episodes?: DraftEpisode[] } | null;
+      const saved = JSON.parse(localStorage.getItem(contentDraftStorageKey) ?? 'null') as { title?: string; description?: string; releaseYear?: number; dramaType?: number; tagList?: string; cover?: CoverAsset | null; freeCount?: number; rewardedEnabled?: boolean; placementId?: string; rewardedCount?: number; episodes?: DraftEpisode[] } | null;
       if (saved) {
         setCreateTitle(saved.title ?? '');
         setCreateDescription(saved.description ?? '');
+        setCreateReleaseYear(saved.releaseYear ?? new Date().getFullYear());
+        setCreateDramaType(saved.dramaType ?? 2);
+        setCreateTagList(saved.tagList ?? '1');
         setCreateCover(saved.cover ?? null);
         setCreateFreeCount(saved.freeCount ?? 3);
         setCreateRewardedEnabled(saved.rewardedEnabled ?? true);
@@ -256,13 +271,16 @@ function AdminApp() {
   }, []);
   useEffect(() => {
     if (!draftReady) return;
-    localStorage.setItem(contentDraftStorageKey, JSON.stringify({ title: createTitle, description: createDescription, cover: createCover, freeCount: createFreeCount, rewardedEnabled: createRewardedEnabled, placementId: createPlacementId, rewardedCount: createRewardedCount, episodes: draftEpisodes.map(({ file, coverFile, coverPreviewUrl, ...episode }) => episode) }));
-  }, [createTitle, createDescription, createCover, createFreeCount, createRewardedEnabled, createPlacementId, createRewardedCount, draftEpisodes, draftReady]);
+    localStorage.setItem(contentDraftStorageKey, JSON.stringify({ title: createTitle, description: createDescription, releaseYear: createReleaseYear, dramaType: createDramaType, tagList: createTagList, cover: createCover, freeCount: createFreeCount, rewardedEnabled: createRewardedEnabled, placementId: createPlacementId, rewardedCount: createRewardedCount, episodes: draftEpisodes.map(({ file, coverFile, coverPreviewUrl, ...episode }) => episode) }));
+  }, [createTitle, createDescription, createReleaseYear, createDramaType, createTagList, createCover, createFreeCount, createRewardedEnabled, createPlacementId, createRewardedCount, draftEpisodes, draftReady]);
   if (!loggedIn) return <Login onLogin={() => setLoggedIn(true)} />;
 
   const resetCreateForm = () => {
     setCreateTitle('');
     setCreateDescription('');
+    setCreateReleaseYear(new Date().getFullYear());
+    setCreateDramaType(2);
+    setCreateTagList('1');
     setCreateCoverFile(null);
     setCreateCover(null);
     setCreateCoverPreviewUrl('');
@@ -362,6 +380,8 @@ function AdminApp() {
     setCreating(true);
     setMessage('');
     try {
+      const tagList = createTagList.split(',').map((value) => Number(value.trim())).filter((value) => Number.isInteger(value) && value > 0);
+      if (tagList.length < 1 || tagList.length > 3 || new Set(tagList).size !== tagList.length) throw new Error('TikTok 标签需填写 1 至 3 个不重复的正整数，并以逗号分隔。');
       let draftsToUpload = draftEpisodes;
       if (!draftEpisodes.some((episode) => episode.savedEpisodeId)) {
         const cover = createCover ?? await uploadCover();
@@ -371,6 +391,9 @@ function AdminApp() {
           body: JSON.stringify({
             title: createTitle,
             description: createDescription,
+            releaseYear: createReleaseYear,
+            dramaType: createDramaType,
+            tagList,
             coverAssetId: cover.id,
             accessConfig: {
               freeEpisodeCount: createFreeCount,
@@ -418,12 +441,42 @@ function AdminApp() {
     setSavingAlbumId(album.id);
     const accessConfig = { freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: 'ad7686459794040702993', rewardedAdCount: 1, ...album.accessConfig };
     try {
-      await api(`/admin/albums/${album.id}`, { method: 'PATCH', body: JSON.stringify({ accessConfig }) });
+      const updatedAlbum = await api<Album>(`/admin/albums/${album.id}`, { method: 'PATCH', body: JSON.stringify({ accessConfig }) });
+      setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, ...updatedAlbum, episodeCount: item.episodeCount } : item));
+      setDirtyAccessAlbumIds((current) => {
+        const next = new Set(current);
+        next.delete(album.id);
+        return next;
+      });
       setMessage('剧集访问配置已保存');
     } catch (error) {
       setMessage(error instanceof Error ? `剧集访问配置保存失败：${error.message}` : '剧集访问配置保存失败');
     } finally {
       setSavingAlbumId(null);
+    }
+  };
+  const updateAccessDraft = (albumId: string, patch: NonNullable<Album['accessConfig']>) => {
+    setAlbums((items) => items.map((item) => item.id === albumId ? { ...item, accessConfig: { ...item.accessConfig, ...patch } } : item));
+    setDirtyAccessAlbumIds((current) => new Set(current).add(albumId));
+  };
+  const deleteDraftAlbum = async (album: Album) => {
+    if (!window.confirm(`确定删除草稿剧集“${album.title}”吗？此操作会删除本项目中的全部分集和上传任务，且无法恢复；BytePlus 中已经上传的视频不会被删除。`)) return;
+    setDeletingAlbumId(album.id);
+    try {
+      await api<void>(`/admin/albums/${album.id}`, { method: 'DELETE' });
+      setAlbums((items) => items.filter((item) => item.id !== album.id));
+      setEpisodes((items) => items.filter((item) => item.albumId !== album.id));
+      setDirtyAccessAlbumIds((current) => {
+        const next = new Set(current);
+        next.delete(album.id);
+        return next;
+      });
+      await loadData();
+      setMessage(`草稿剧集“${album.title}”已删除。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `删除剧集失败：${error.message}` : '删除剧集失败');
+    } finally {
+      setDeletingAlbumId(null);
     }
   };
   const selectAnalyticsPreset = (days: number) => {
@@ -471,7 +524,22 @@ function AdminApp() {
       setRetryingJobId(null);
     }
   };
+  const runPlatformAction = async (album: Album, action: 'sync-version' | 'review-submit' | 'online-version' | 'online' | 'offline' | 'reconcile') => {
+    setPlatformWorking(`${album.id}:${action}`);
+    try {
+      await api(`/admin/albums/${album.id}/${action}`, { method: 'POST' });
+      setMessage(`“${album.title}”的平台操作已进入同步队列，请在刷新后查看结果。`);
+      await loadData();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '平台操作提交失败');
+    } finally {
+      setPlatformWorking(null);
+    }
+  };
   const canWriteContent = hasAdminPermission(currentAdmin?.role, 'content.write');
+  const canSyncContent = hasAdminPermission(currentAdmin?.role, 'content.sync');
+  const canReviewContent = hasAdminPermission(currentAdmin?.role, 'content.review');
+  const canPublishContent = hasAdminPermission(currentAdmin?.role, 'content.publish');
   const canWriteAds = hasAdminPermission(currentAdmin?.role, 'ads.write');
   const navItems: Array<[Tab, typeof Activity, string]> = [['overview', LayoutDashboard, '概览'], ['audience', Users, '观众数据'], ['playback', Activity, '播放质量']];
   if (canWriteContent) navItems.splice(1, 0, ['create', Plus, '内容创建'], ['albums', ListVideo, '剧集与解锁']);
@@ -490,6 +558,9 @@ function AdminApp() {
           <form className="create-form" onSubmit={submitDrama}>
             <div className="form-grid">
               <label>剧名<input value={createTitle} onChange={(event) => setCreateTitle(event.target.value)} required /></label>
+              <label>上线年份<input type="number" min="1900" max="2100" value={createReleaseYear} onChange={(event) => setCreateReleaseYear(Number(event.target.value))} required /></label>
+              <label>剧目类型<select value={createDramaType} onChange={(event) => setCreateDramaType(Number(event.target.value))}><option value={1}>AIGC</option><option value={2}>漫剧</option><option value={3}>真人配音</option><option value={4}>真人本地化</option></select></label>
+              <label>TikTok 标签（1–3 个）<input value={createTagList} onChange={(event) => setCreateTagList(event.target.value)} placeholder="例如：1,23" required /></label>
               <label>免费集数<input type="number" min="0" max="10000" value={createFreeCount} onChange={(event) => setCreateFreeCount(Number(event.target.value))} /></label>
               <label>激励广告位 ID<input value={createPlacementId} onChange={(event) => setCreatePlacementId(event.target.value)} /></label>
               <label>每集解锁所需广告观看次数<input type="number" min="1" value={createRewardedCount} onChange={(event) => setCreateRewardedCount(Number(event.target.value))} /></label>
@@ -504,17 +575,18 @@ function AdminApp() {
             <label className="check-row"><input type="checkbox" checked={createRewardedEnabled} onChange={(event) => setCreateRewardedEnabled(event.target.checked)} />启用广告解锁</label>
             <div className="episode-toolbar">
               <label>总集数<input className="inline-number" type="number" min="1" max="500" value={draftEpisodes.length} onChange={(event) => applyEpisodeCount(Number(event.target.value))} /></label>
-              <label>批量选择视频<input type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm" multiple onChange={(event) => applyBatchFiles(event.target.files)} /></label>
+              <label>批量选择视频<input type="file" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" multiple onChange={(event) => applyBatchFiles(event.target.files)} /></label>
             </div>
             {batchFeedback && <p className="batch-feedback"><AlertTriangle size={15} />{batchFeedback}</p>}
-            <div className="table-wrap"><table><thead><tr><th>集号</th><th>标题</th><th>排序</th><th>免费</th><th>独立封面</th><th>视频文件</th><th>状态</th><th></th></tr></thead><tbody>{draftEpisodes.map((episode) => <tr key={episode.localId} className={!episode.file ? 'needs-file' : ''}><td><input className="inline-number" type="number" min="1" value={episode.episodeNo} onChange={(event) => patchDraftEpisode(episode.localId, { episodeNo: Number(event.target.value) })} /></td><td><input className="table-input" value={episode.title} onChange={(event) => patchDraftEpisode(episode.localId, { title: event.target.value })} /></td><td><input className="inline-number" type="number" min="1" value={episode.sortOrder} onChange={(event) => patchDraftEpisode(episode.localId, { sortOrder: Number(event.target.value) })} /></td><td><input type="checkbox" checked={episode.isFree} onChange={(event) => patchDraftEpisode(episode.localId, { isFree: event.target.checked })} /></td><td><div className="episode-cover-cell"><label className="file-cell">{episode.coverFile?.name ?? (episode.coverAsset ? '已保存封面' : '使用专辑封面')}<input type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" onChange={(event) => selectEpisodeCover(episode, event.target.files?.[0] ?? null)} /></label>{(episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl) && <img className="episode-cover-preview" src={episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl} alt={`${episode.title} 封面预览`} />}</div></td><td><label className="file-cell">{episode.file?.name ?? '选择视频'}<input type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm" onChange={(event) => patchDraftEpisode(episode.localId, { file: event.target.files?.[0] ?? null, uploadError: undefined })} /></label></td><td><div className="draft-upload-state"><span>{episode.uploadStatus ?? (episode.file ? '待保存' : '缺少视频')}</span>{episode.uploadError && <small className="table-error" title={episode.uploadError}>{episode.uploadError}</small>}{episode.uploadStatus === '上传失败' && episode.file && episode.savedEpisodeId && <button className="text-button retry-button" type="button" onClick={() => void uploadDraftVideo(episode)}>重试上传</button>}</div></td><td><button className="more" type="button" onClick={() => setDraftEpisodes((items) => items.filter((item) => item.localId !== episode.localId))} title="删除"><Trash2 size={15} /></button></td></tr>)}</tbody></table></div>
+            <div className="table-wrap"><table><thead><tr><th>集号</th><th>标题</th><th>排序</th><th>免费</th><th>独立封面</th><th>视频文件</th><th>状态</th><th></th></tr></thead><tbody>{draftEpisodes.map((episode) => <tr key={episode.localId} className={!episode.file ? 'needs-file' : ''}><td><input className="inline-number" type="number" min="1" value={episode.episodeNo} onChange={(event) => patchDraftEpisode(episode.localId, { episodeNo: Number(event.target.value) })} /></td><td><input className="table-input" value={episode.title} onChange={(event) => patchDraftEpisode(episode.localId, { title: event.target.value })} /></td><td><input className="inline-number" type="number" min="1" value={episode.sortOrder} onChange={(event) => patchDraftEpisode(episode.localId, { sortOrder: Number(event.target.value) })} /></td><td><input type="checkbox" checked={episode.isFree} onChange={(event) => patchDraftEpisode(episode.localId, { isFree: event.target.checked })} /></td><td><div className="episode-cover-cell"><label className="file-cell">{episode.coverFile?.name ?? (episode.coverAsset ? '已保存封面' : '使用专辑封面')}<input type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" onChange={(event) => selectEpisodeCover(episode, event.target.files?.[0] ?? null)} /></label>{(episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl) && <img className="episode-cover-preview" src={episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl} alt={`${episode.title} 封面预览`} />}</div></td><td><label className="file-cell">{episode.file?.name ?? '选择视频'}<input type="file" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" onChange={(event) => patchDraftEpisode(episode.localId, { file: event.target.files?.[0] ?? null, uploadError: undefined })} /></label></td><td><div className="draft-upload-state"><span>{episode.uploadStatus ?? (episode.file ? '待保存' : '缺少视频')}</span>{episode.uploadError && <small className="table-error" title={episode.uploadError}>{episode.uploadError}</small>}{episode.uploadStatus === '上传失败' && episode.file && episode.savedEpisodeId && <button className="text-button retry-button" type="button" onClick={() => void uploadDraftVideo(episode)}>重试上传</button>}</div></td><td><button className="more" type="button" onClick={() => setDraftEpisodes((items) => items.filter((item) => item.localId !== episode.localId))} title="删除"><Trash2 size={15} /></button></td></tr>)}</tbody></table></div>
             <button className="secondary" type="button" onClick={() => setDraftEpisodes((items) => [...items, { localId: `draft-${Date.now()}`, episodeNo: items.length + 1, title: `第 ${items.length + 1} 集`, sortOrder: items.length + 1, isFree: items.length < createFreeCount }])}><Plus size={15} />添加分集</button>
             <button className="primary" type="submit" disabled={creating}><Save size={17} />{creating ? '处理中...' : draftEpisodes.some((episode) => episode.savedEpisodeId) ? '上传已选择的视频' : '保存草稿并上传视频'}</button>
           </form>
         </Panel>
         <Panel title="上传处理状态" description="所有由内容创建产生的上传记录集中显示；链接任务失败后可重新加入处理队列。"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>来源</th><th>状态</th><th>处理信息</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td><strong>{job.episode?.title ?? job.episodeId}</strong></td><td>{job.sourceName ?? job.sourceType ?? '链接'}</td><td><Status value={job.status} /></td><td>{job.errorMessage ? <small className="table-error" title={job.errorMessage}>{job.errorMessage}</small> : job.providerJobId ?? '本地上传已确认'}</td><td>{new Date(job.createdAt).toLocaleString('zh-CN')}</td><td>{job.status === 'FAILED' && job.sourceType !== 'FILE' ? <button className="secondary retry-button" type="button" disabled={retryingJobId === job.id} onClick={() => void retryUploadJob(job)}><RefreshCw size={14} className={retryingJobId === job.id ? 'spin' : ''} />{retryingJobId === job.id ? '排队中...' : '重新排队'}</button> : '—'}</td></tr>)}</tbody></table>{!jobs.length && <p className="empty-copy table-empty">暂无上传记录</p>}</div></Panel>
       </>}
-      {tab === 'albums' && <Panel title="剧集访问策略" description="免费集数和广告解锁配置会立即影响小程序访问"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>状态</th><th>集数</th><th>免费集数</th><th>广告解锁</th><th>每集解锁所需广告观看次数</th><th>操作</th></tr></thead><tbody>{albums.map((album) => <tr key={album.id}><td><span className="drama-thumb" /><strong>{album.title}</strong></td><td><Status value={album.status} /></td><td>{album.episodeCount}</td><td><input className="inline-number" type="number" min="0" value={album.accessConfig?.freeEpisodeCount ?? 0} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, freeEpisodeCount: Number(event.target.value) } } : item))} /></td><td><input type="checkbox" checked={album.accessConfig?.rewardedAdEnabled ?? true} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, rewardedAdEnabled: event.target.checked } } : item))} /></td><td><input className="inline-number" type="number" min="1" value={album.accessConfig?.rewardedAdCount ?? 1} onChange={(event) => setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, accessConfig: { ...item.accessConfig, rewardedAdCount: Number(event.target.value) } } : item))} /></td><td><button className="save-button" disabled={savingAlbumId === album.id} onClick={() => void updateAccess(album)}><Save size={15} />{savingAlbumId === album.id ? '保存中...' : '保存'}</button></td></tr>)}</tbody></table></div></Panel>}
+      {tab === 'albums' && <Panel title="剧集访问策略" description="免费集数和广告解锁配置会立即影响小程序访问"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>发布状态</th><th>解锁配置</th><th>集数</th><th>免费集数</th><th>广告解锁</th><th>每集解锁所需广告观看次数</th><th>操作</th></tr></thead><tbody>{albums.map((album) => { const canDelete = album.status === 'DRAFT' && !album.tiktokAlbumId; const accessDirty = dirtyAccessAlbumIds.has(album.id); return <tr key={album.id}><td><span className="drama-thumb" /><strong>{album.title}</strong></td><td><Status value={album.status} /></td><td><span className={`access-config-state ${accessDirty ? 'pending' : 'saved'}`}>{accessDirty ? '待保存' : '已保存'}</span></td><td>{album.episodeCount}</td><td><input className="inline-number" type="number" min="0" value={album.accessConfig?.freeEpisodeCount ?? 0} onChange={(event) => updateAccessDraft(album.id, { freeEpisodeCount: Number(event.target.value) })} /></td><td><input type="checkbox" checked={album.accessConfig?.rewardedAdEnabled ?? true} onChange={(event) => updateAccessDraft(album.id, { rewardedAdEnabled: event.target.checked })} /></td><td><input className="inline-number" type="number" min="1" value={album.accessConfig?.rewardedAdCount ?? 1} onChange={(event) => updateAccessDraft(album.id, { rewardedAdCount: Number(event.target.value) })} /></td><td><div className="access-actions"><button className="save-button" disabled={savingAlbumId === album.id || deletingAlbumId === album.id || !accessDirty} onClick={() => void updateAccess(album)}><Save size={15} />{savingAlbumId === album.id ? '保存中...' : '保存'}</button>{canDelete && <button className="delete-button" type="button" disabled={deletingAlbumId === album.id || savingAlbumId === album.id} onClick={() => void deleteDraftAlbum(album)} title={`删除草稿剧集 ${album.title}`}><Trash2 size={15} />{deletingAlbumId === album.id ? '删除中...' : '删除'}</button>}</div></td></tr>; })}</tbody></table></div></Panel>}
+      {tab === 'albums' && <Panel title="TikTok 媒资库发布链路" description="所有操作均异步入队；仅平台审核、线上版本与上架成功后才会对用户可见。"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>平台版本</th><th>审核 / 上架</th><th>同步操作</th></tr></thead><tbody>{albums.map((album) => <tr key={`platform-${album.id}`}><td><strong>{album.title}</strong><small>{album.tiktokAlbumId ?? '尚未创建平台剧目'}</small></td><td>草稿 {album.tiktokVersion ?? '-'} · 线上 {album.onlineVersion ?? '-'} · 已发布 {album.platformPublishedVersion ?? '-'}</td><td><Status value={album.status} /><small>{album.reviewStatus ?? '未送审'} / {album.publishStatus ?? '未上架'}</small></td><td><div className="button-row">{canSyncContent && <><button className="secondary" disabled={platformWorking !== null} onClick={() => void runPlatformAction(album, 'sync-version')}>{platformWorking === `${album.id}:sync-version` ? '同步中...' : '同步版本'}</button><button className="secondary" disabled={platformWorking !== null} onClick={() => void runPlatformAction(album, 'reconcile')}>对账</button></>}{canReviewContent && <button className="secondary" disabled={platformWorking !== null} onClick={() => void runPlatformAction(album, 'review-submit')}>送审</button>}{canPublishContent && <><button className="secondary" disabled={platformWorking !== null} onClick={() => void runPlatformAction(album, 'online-version')}>设线上版本</button><button className="save-button" disabled={platformWorking !== null} onClick={() => void runPlatformAction(album, 'online')}>上架</button><button className="secondary" disabled={platformWorking !== null} onClick={() => void runPlatformAction(album, 'offline')}>下架</button></>}</div></td></tr>)}</tbody></table></div></Panel>}
       {tab === 'ads' && <Panel title="进入广告策略" description="配置将在新的小程序启动会话生效。激励门槛模式须先在 TikTok 平台确认可用。"><form className="policy-form" onSubmit={saveEntryAdPolicy}><label className="check-row"><input type="checkbox" checked={entryAdPolicy.enabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, enabled: event.target.checked }))} />启用进入广告</label><div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, mode: event.target.value as AppEntryAdPolicy['mode'] }))}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>广告位 ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required /></label><label>每次进入广告观看次数<input type="number" min="1" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入并重试</option></select></label></div><p className="form-help">当前策略版本：{entryAdPolicy.version}。进入广告与剧集解锁广告使用独立会话和广告位。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存进入广告策略</>}</button></form></Panel>}
       {tab === 'audience' && audience && <><section className="metrics"><Metric label="活跃观众" value={String(audience.activeUsers)} change={`${audience.from} 至 ${audience.to}`} icon={Users} tone="green" /><Metric label="新增观众" value={String(audience.newUsers)} change={`日活 ${audience.dau} · 周活 ${audience.wau} · 月活 ${audience.mau}`} icon={Database} tone="cyan" /><Metric label="观看会话" value={String(audience.watchSessions)} change="播放器会话开始次数" icon={Film} tone="pink" /><Metric label="完播集数" value={String(audience.completedEpisodes)} change="每用户每集首次完播" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="观众趋势" description="按天统计新增和活跃用户"><DailyBars title="新增观众" items={audience.dailyNewUsers} /><DailyBars title="日活用户" items={audience.dailyActiveUsers} /></Panel><Panel title="互动概览" description="帮助判断内容和运营活动表现"><BarList title="互动指标" items={[{ label: '收藏', value: audience.favorites }, { label: '分享', value: audience.shares }, { label: '搜索', value: audience.searches }]} color="cyan" /></Panel></div></>}
       {tab === 'playback' && playback && <><section className="metrics"><Metric label="播放器事件" value={String(playback.totalEvents)} change={`近 ${playback.periodDays} 天`} icon={Activity} tone="cyan" /><Metric label="首帧事件" value={String(playback.firstFrames)} change="成功启动" icon={Gauge} tone="green" /><Metric label="错误率" value={`${playback.errorRate}%`} change={`${playback.errorCount} 次错误`} icon={CircleAlert} tone="pink" /><Metric label="平均首帧" value={playback.averageStartupMs === null ? '-' : `${playback.averageStartupMs} 毫秒`} change="启动耗时" icon={Wifi} tone="yellow" /></section><div className="content-grid"><Panel title="播放事件分布" description="根据小程序播放器上报聚合"><BarList title="事件类型" items={playback.eventTypes.map((item) => ({ label: item.eventType, value: item.count }))} /><BarList title="清晰度" items={playback.definitions.map((item) => ({ label: item.definition, value: item.count }))} color="cyan" /><BarList title="网络类型" items={playback.networks.map((item) => ({ label: item.networkType, value: item.count }))} color="green" /></Panel><Panel title="最近播放错误" description="优先定位实际影响用户的剧集"><div className="compact-list">{playback.recentErrors.map((error, index) => <div className="compact-row" key={`${error.createdAt}-${index}`}><CircleAlert size={17} /><span><strong>{error.episodeTitle}</strong><small>{error.errorCode ?? '未知错误'} · {new Date(error.createdAt).toLocaleString('zh-CN')}</small></span></div>)}{!playback.recentErrors.length && <p className="empty-copy">暂无播放错误</p>}</div></Panel></div></>}

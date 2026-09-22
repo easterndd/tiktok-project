@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
-import { requireAdmin } from '../../plugins/auth';
+import { requireAdmin, requirePermission } from '../../plugins/auth';
 import { hashPassword, verifyPassword } from '../../services/password';
 import { accessConfigSchema } from '../../lib/content-access';
 import { publicLocaleSchema } from '../../lib/locales';
@@ -15,6 +15,12 @@ import { BytePlusVodService } from '../../services/byteplus-vod.service';
 import { LocalObjectStorageService } from '../../services/object-storage.service';
 import { defaultUiComponents } from '../ui/routes';
 import { readAppEntryAdPolicy } from '../app-entry-ads/routes';
+import {
+  enqueueAlbumAction,
+  enqueueAlbumVersionSync,
+  enqueueCoverSync,
+  enqueueVideoSync
+} from '../../services/platform-sync.service';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 const episodeParams = z.object({ episodeId: z.string().min(1).max(128) });
@@ -24,14 +30,13 @@ const albumInput = z.object({
   coverUrl: z.string().url().optional(),
   coverAssetId: z.string().min(1).max(128).optional().nullable(),
   language: z.string().min(2).max(10).default('en'),
+  releaseYear: z.number().int().min(1900).max(2100).optional().nullable(),
+  dramaType: z.number().int().positive().optional().nullable(),
+  tagList: z.array(z.number().int().positive()).min(1).max(3).optional().nullable(),
   regions: z.array(z.string().min(2).max(32)).optional(),
   accessConfig: accessConfigSchema.optional()
 });
-const albumPatch = albumInput.partial().extend({
-  tiktokAlbumId: z.string().trim().min(1).max(256).optional().nullable(),
-  status: z.enum(['DRAFT', 'REVIEWING', 'ONLINE', 'OFFLINE', 'REJECTED']).optional(),
-  publishStatus: z.string().trim().max(64).optional().nullable()
-});
+const albumPatch = albumInput.partial();
 const episodeInput = z.object({
   albumId: z.string().min(1).max(128),
   episodeNo: z.number().int().positive(),
@@ -47,9 +52,7 @@ const episodePatch = episodeInput.omit({ albumId: true, episodeNo: true }).parti
 const mediaBindingInput = z.object({
   byteplusVid: z.string().trim().min(1).max(256),
   byteplusCoverUrl: z.string().url().optional().nullable(),
-  durationMs: z.number().int().positive().optional().nullable(),
-  tiktokEpisodeId: z.string().trim().min(1).max(256).optional().nullable(),
-  status: z.enum(['DRAFT', 'READY', 'REVIEWING', 'ONLINE', 'OFFLINE', 'ERROR']).optional()
+  durationMs: z.number().int().positive().optional().nullable()
 });
 const uploadInput = z.object({
   episodeId: z.string().min(1).max(128),
@@ -61,6 +64,9 @@ const dramaInput = z.object({
   description: z.string().trim().max(20_000).default(''),
   coverAssetId: z.string().min(1).max(128),
   language: z.string().min(2).max(10).default('en'),
+  releaseYear: z.number().int().min(1900).max(2100),
+  dramaType: z.number().int().positive(),
+  tagList: z.array(z.number().int().positive()).min(1).max(3),
   regions: z.array(z.string().min(2).max(32)).optional(),
   accessConfig: accessConfigSchema.optional(),
   episodes: z.array(z.object({
@@ -233,8 +239,17 @@ async function validateReadyCover(app: FastifyInstance, coverAssetId?: string | 
   return asset;
 }
 
-function albumDataWithAccess<T extends { accessConfig?: unknown }>(input: T) {
-  return { ...input, accessConfig: input.accessConfig as Prisma.InputJsonValue | undefined };
+function ensureTikTokPlatformConfigured(app: FastifyInstance) {
+  if (app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET) return;
+  throw Object.assign(new Error('TikTok Short Drama OpenAPI 尚未配置。请设置 TIKTOK_CLIENT_KEY 和 TIKTOK_CLIENT_SECRET。'), { statusCode: 503 });
+}
+
+function albumDataWithAccess<T extends { accessConfig?: unknown; tagList?: unknown }>(input: T) {
+  return {
+    ...input,
+    accessConfig: input.accessConfig as Prisma.InputJsonValue | undefined,
+    tagList: input.tagList === undefined ? undefined : input.tagList === null ? Prisma.JsonNull : input.tagList as Prisma.InputJsonValue
+  };
 }
 
 async function audit(app: FastifyInstance, adminUserId: string, action: string, resource: string, resourceId?: string, metadata?: unknown) {
@@ -476,7 +491,12 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       }
       const sha256 = createHash('sha256').update(buffer).digest('hex');
       const existing = await app.prisma.coverAsset.findUnique({ where: { sha256 } });
-      if (existing?.status === 'READY') return existing;
+      if (existing?.status === 'READY') {
+        const syncJob = app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET
+          ? await enqueueCoverSync(app.prisma as any, existing.id, request.user.sub)
+          : null;
+        return { ...existing, platformSyncJob: syncJob };
+      }
 
       const storage = await new LocalObjectStorageService(app.config).putObject({
         key: `${sha256}${extension === '.jpeg' ? '.jpg' : extension}`,
@@ -506,7 +526,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         }
       });
       await audit(app, request.user.sub, 'UPLOAD', 'CoverAsset', asset.id, { fileName, fileSize: buffer.length });
-      return asset;
+      const syncJob = app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET
+        ? await enqueueCoverSync(app.prisma as any, asset.id, request.user.sub)
+        : null;
+      return { ...asset, platformSyncJob: syncJob };
     } finally {
       await unlink(tempPath).catch(() => undefined);
     }
@@ -528,6 +551,9 @@ export async function registerAdminRoutes(app: FastifyInstance) {
           coverAssetId: albumCover!.id,
           coverUrl: albumCover!.publicUrl,
           language: input.language,
+          releaseYear: input.releaseYear,
+          dramaType: input.dramaType,
+          tagList: input.tagList as Prisma.InputJsonValue,
           regions: input.regions,
           accessConfig: input.accessConfig as Prisma.InputJsonValue | undefined,
           status: 'DRAFT'
@@ -573,6 +599,21 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return album;
   });
 
+  app.delete('/admin/albums/:albumId', { preHandler: requirePermission('content.write') }, async (request, reply) => {
+    const { albumId } = albumParams.parse(request.params);
+    const album = await app.prisma.album.findUnique({
+      where: { id: albumId },
+      select: { id: true, title: true, status: true, tiktokAlbumId: true }
+    });
+    if (!album) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '剧集不存在。', requestId: request.id } });
+    if (album.status !== 'DRAFT' || album.tiktokAlbumId) {
+      return reply.code(409).send({ error: { code: 'CONFLICT', message: '仅未同步至 TikTok 的草稿剧集可以删除。请先下架并保留已同步内容的审计记录。', requestId: request.id } });
+    }
+    await app.prisma.album.delete({ where: { id: album.id } });
+    await audit(app, request.user.sub, 'DELETE', 'Album', album.id, { title: album.title });
+    return reply.code(204).send();
+  });
+
   app.post('/admin/episodes', { preHandler: requireAdmin }, async (request) => {
     const input = episodeInput.parse(request.body);
     const cover = await validateReadyCover(app, input.coverAssetId);
@@ -593,9 +634,6 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.post('/admin/episodes/:episodeId/bind-byteplus', { preHandler: requireAdmin }, async (request, reply) => {
     const { episodeId } = episodeParams.parse(request.params);
     const input = mediaBindingInput.parse(request.body);
-    if (input.status === 'ONLINE' && !input.tiktokEpisodeId) {
-      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '上线分集必须填写 TikTok 分集 ID。', requestId: request.id } });
-    }
     const mediaService = new BytePlusVodService(app.config);
     const [media] = await mediaService.getMediaInfos({ vids: [input.byteplusVid] });
     if (!media) {
@@ -610,15 +648,20 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         byteplusCoverUrl: providerCoverUrl,
         coverUrl: currentEpisode?.coverAsset?.status === 'READY' ? currentEpisode.coverAsset.publicUrl : providerCoverUrl,
         durationMs: input.durationMs ?? media.durationMs,
-        tiktokEpisodeId: input.tiktokEpisodeId,
-        status: input.status ?? 'READY'
+        status: 'READY',
+        byteplusUploadStatus: 'READY',
+        tiktokVideoStatus: 'NOT_STARTED',
+        tiktokVideoJobId: null,
+        tiktokVideoError: null
       }
     });
     await audit(app, request.user.sub, 'BIND_BYTEPLUS_MEDIA', 'Episode', episode.id, {
-      byteplusVid: media.vid,
-      tiktokEpisodeId: input.tiktokEpisodeId
+      byteplusVid: media.vid
     });
-    return episode;
+    const syncJob = app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET
+      ? await enqueueVideoSync(app.prisma as any, episode.id, request.user.sub)
+      : null;
+    return { ...episode, platformSyncJob: syncJob };
   });
 
   app.patch('/admin/episodes/:episodeId/access', { preHandler: requireAdmin }, async (request) => {
@@ -733,8 +776,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     if (!episodeId) return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'episodeId is required.', requestId: request.id } });
     const fileName = upload.filename.trim();
     const extension = fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.')).toLowerCase() : '';
-    if (!['.mp4', '.mov', '.m4v', '.webm'].includes(extension)) {
-      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '支持 MP4、MOV、M4V 和 WebM 视频格式。', requestId: request.id } });
+    if (!['.mp4', '.mov', '.m4v'].includes(extension)) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'TikTok 短剧仅接受兼容的 MP4、MOV 或 M4V 视频格式。', requestId: request.id } });
     }
     const episode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { id: true, title: true, coverAsset: { select: { publicUrl: true, status: true } }, album: { select: { status: true } } } });
     if (!episode) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '分集不存在。', requestId: request.id } });
@@ -755,10 +798,13 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       });
       const [job] = await app.prisma.$transaction([
         app.prisma.uploadJob.create({ data: { episodeId, sourceUrl: `local://${fileName}`, sourceType: 'FILE', sourceName: fileName, status: 'SUCCEEDED', startedAt: new Date(), completedAt: new Date() } }),
-        app.prisma.episode.update({ where: { id: episodeId }, data: { status: 'READY', byteplusVid: result.byteplusVid, byteplusCoverUrl: result.coverUrl, coverUrl: episode.coverAsset?.status === 'READY' ? episode.coverAsset.publicUrl : result.coverUrl, durationMs: result.durationMs } })
+        app.prisma.episode.update({ where: { id: episodeId }, data: { status: 'READY', byteplusUploadStatus: 'READY', tiktokVideoStatus: 'NOT_STARTED', tiktokVideoJobId: null, tiktokVideoError: null, byteplusVid: result.byteplusVid, byteplusCoverUrl: result.coverUrl, coverUrl: episode.coverAsset?.status === 'READY' ? episode.coverAsset.publicUrl : result.coverUrl, durationMs: result.durationMs } })
       ]);
       await audit(app, request.user.sub, 'UPLOAD_LOCAL', 'UploadJob', job.id, { episodeId, fileName, byteplusVid: result.byteplusVid });
-      return { job, episode: { id: episodeId, status: 'READY', byteplusVid: result.byteplusVid, durationMs: result.durationMs } };
+      const syncJob = app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET
+        ? await enqueueVideoSync(app.prisma as any, episodeId, request.user.sub)
+        : null;
+      return { job, platformSyncJob: syncJob, episode: { id: episodeId, status: 'READY', byteplusVid: result.byteplusVid, durationMs: result.durationMs } };
     } finally {
       await unlink(tempPath).catch(() => undefined);
     }
@@ -804,19 +850,79 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return retriedJob;
   });
 
-  app.post('/admin/albums/:albumId/review-submit', { preHandler: requireAdmin }, async (request, reply) => {
-    const { albumId } = albumParams.parse(request.params);
-    return reply.code(501).send({ error: { code: 'PLATFORM_INTEGRATION_UNAVAILABLE', message: `TikTok Short Drama review submission is not configured for album ${albumId}.`, requestId: request.id } });
+  app.get('/admin/platform-sync-jobs', { preHandler: requirePermission('content.read') }, async (request) => {
+    const query = z.object({ albumId: z.string().min(1).max(128).optional(), episodeId: z.string().min(1).max(128).optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query);
+    const items = await (app.prisma as any).platformSyncJob.findMany({
+      where: { ...(query.albumId ? { albumId: query.albumId } : {}), ...(query.episodeId ? { episodeId: query.episodeId } : {}) },
+      orderBy: { createdAt: 'desc' },
+      take: query.limit,
+      include: { album: { select: { id: true, title: true } }, episode: { select: { id: true, episodeNo: true, title: true } }, coverAsset: { select: { id: true, publicUrl: true } }, createdByAdminUser: { select: { id: true, email: true } } }
+    });
+    return { items };
   });
 
-  app.post('/admin/albums/:albumId/online', { preHandler: requireAdmin }, async (request, reply) => {
-    const { albumId } = albumParams.parse(request.params);
-    return reply.code(501).send({ error: { code: 'PLATFORM_INTEGRATION_UNAVAILABLE', message: `TikTok Short Drama listing is not configured for album ${albumId}.`, requestId: request.id } });
+  app.post('/admin/cover-assets/:coverAssetId/sync', { preHandler: requirePermission('content.sync') }, async (request) => {
+    ensureTikTokPlatformConfigured(app);
+    const { coverAssetId } = z.object({ coverAssetId: z.string().min(1).max(128) }).parse(request.params);
+    const job = await enqueueCoverSync(app.prisma as any, coverAssetId, request.user.sub);
+    await audit(app, request.user.sub, 'SYNC_TIKTOK', 'CoverAsset', coverAssetId, { jobId: job?.id ?? null });
+    return { job, alreadySynced: !job };
   });
 
-  app.post('/admin/albums/:albumId/offline', { preHandler: requireAdmin }, async (request, reply) => {
+  app.post('/admin/episodes/:episodeId/sync-tiktok-video', { preHandler: requirePermission('content.sync') }, async (request) => {
+    ensureTikTokPlatformConfigured(app);
+    const { episodeId } = episodeParams.parse(request.params);
+    const job = await enqueueVideoSync(app.prisma as any, episodeId, request.user.sub);
+    await audit(app, request.user.sub, 'SYNC_TIKTOK_VIDEO', 'Episode', episodeId, { jobId: job?.id ?? null });
+    return { job, alreadySynced: !job };
+  });
+
+  app.post('/admin/albums/:albumId/sync-version', { preHandler: requirePermission('content.sync') }, async (request) => {
+    ensureTikTokPlatformConfigured(app);
     const { albumId } = albumParams.parse(request.params);
-    return reply.code(501).send({ error: { code: 'PLATFORM_INTEGRATION_UNAVAILABLE', message: `TikTok Short Drama unlisting is not configured for album ${albumId}.`, requestId: request.id } });
+    const job = await enqueueAlbumVersionSync(app.prisma as any, albumId, request.user.sub);
+    await audit(app, request.user.sub, 'SYNC_TIKTOK_ALBUM_VERSION', 'Album', albumId, { jobId: job.id, snapshotHash: job.snapshotHash });
+    return { job };
+  });
+
+  app.post('/admin/albums/:albumId/reconcile', { preHandler: requirePermission('content.sync') }, async (request) => {
+    ensureTikTokPlatformConfigured(app);
+    const { albumId } = albumParams.parse(request.params);
+    const job = await enqueueAlbumAction(app.prisma as any, 'RECONCILE', albumId, request.user.sub);
+    await audit(app, request.user.sub, 'RECONCILE_TIKTOK_ALBUM', 'Album', albumId, { jobId: job.id });
+    return { job };
+  });
+
+  app.post('/admin/albums/:albumId/review-submit', { preHandler: requirePermission('content.review') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    ensureTikTokPlatformConfigured(app);
+    const job = await enqueueAlbumAction(app.prisma as any, 'REVIEW', albumId, request.user.sub);
+    await audit(app, request.user.sub, 'SUBMIT_TIKTOK_REVIEW', 'Album', albumId, { jobId: job.id });
+    return { job };
+  });
+
+  app.post('/admin/albums/:albumId/online-version', { preHandler: requirePermission('content.publish') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    ensureTikTokPlatformConfigured(app);
+    const job = await enqueueAlbumAction(app.prisma as any, 'SET_ONLINE_VERSION', albumId, request.user.sub);
+    await audit(app, request.user.sub, 'SET_TIKTOK_ONLINE_VERSION', 'Album', albumId, { jobId: job.id });
+    return { job };
+  });
+
+  app.post('/admin/albums/:albumId/online', { preHandler: requirePermission('content.publish') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    ensureTikTokPlatformConfigured(app);
+    const job = await enqueueAlbumAction(app.prisma as any, 'PUBLISH', albumId, request.user.sub);
+    await audit(app, request.user.sub, 'PUBLISH_TIKTOK_ALBUM', 'Album', albumId, { jobId: job.id });
+    return { job };
+  });
+
+  app.post('/admin/albums/:albumId/offline', { preHandler: requirePermission('content.publish') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    ensureTikTokPlatformConfigured(app);
+    const job = await enqueueAlbumAction(app.prisma as any, 'UNPUBLISH', albumId, request.user.sub);
+    await audit(app, request.user.sub, 'UNPUBLISH_TIKTOK_ALBUM', 'Album', albumId, { jobId: job.id });
+    return { job };
   });
 
   app.get('/admin/home-blocks', { preHandler: requireAdmin }, async () => app.prisma.homeBlock.findMany({ orderBy: { sortOrder: 'asc' }, include: { items: true } }));
@@ -829,14 +935,14 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   });
   app.post('/admin/home-blocks/:blockId/items', { preHandler: requireAdmin }, async (request) => {
     const { blockId } = blockParams.parse(request.params);
-    const input = z.object({ albumId: z.string().min(1).max(128).optional(), targetEpisodeId: z.string().min(1).max(128).optional(), imageUrl: z.string().url().optional(), linkPath: z.string().regex(/^\/(album|watch)\//).optional(), sortOrder: z.number().int().nonnegative(), startsAt: z.string().datetime().nullable().optional(), endsAt: z.string().datetime().nullable().optional() }).parse(request.body);
+    const input = z.object({ albumId: z.string().min(1).max(128).optional(), targetEpisodeId: z.string().min(1).max(128).optional(), imageUrl: z.string().url().optional(), previewUrl: z.string().url().optional(), linkPath: z.string().regex(/^\/(album|watch)\//).optional(), sortOrder: z.number().int().nonnegative(), startsAt: z.string().datetime().nullable().optional(), endsAt: z.string().datetime().nullable().optional() }).parse(request.body);
     const item = await app.prisma.homeBlockItem.create({ data: { ...input, blockId, startsAt: input.startsAt ? new Date(input.startsAt) : undefined, endsAt: input.endsAt ? new Date(input.endsAt) : undefined } });
     await audit(app, request.user.sub, 'CREATE', 'HomeBlockItem', item.id, { blockId });
     return item;
   });
   app.patch('/admin/home-blocks/:blockId/items/:itemId', { preHandler: requireAdmin }, async (request) => {
     const { blockId, itemId } = blockItemParams.parse(request.params);
-    const input = z.object({ imageUrl: z.string().url().nullable().optional(), linkPath: z.string().regex(/^\/(album|watch)\//).nullable().optional(), sortOrder: z.number().int().nonnegative().optional(), startsAt: z.string().datetime().nullable().optional(), endsAt: z.string().datetime().nullable().optional() }).parse(request.body);
+    const input = z.object({ imageUrl: z.string().url().nullable().optional(), previewUrl: z.string().url().nullable().optional(), linkPath: z.string().regex(/^\/(album|watch)\//).nullable().optional(), sortOrder: z.number().int().nonnegative().optional(), startsAt: z.string().datetime().nullable().optional(), endsAt: z.string().datetime().nullable().optional() }).parse(request.body);
     const result = await app.prisma.homeBlockItem.updateMany({ where: { id: itemId, blockId }, data: { ...input, startsAt: input.startsAt === undefined ? undefined : input.startsAt ? new Date(input.startsAt) : null, endsAt: input.endsAt === undefined ? undefined : input.endsAt ? new Date(input.endsAt) : null } });
     if (!result.count) throw Object.assign(new Error('首页区块内容不存在。'), { statusCode: 404 });
     const item = await app.prisma.homeBlockItem.findUniqueOrThrow({ where: { id: itemId } });

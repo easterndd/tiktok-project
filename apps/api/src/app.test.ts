@@ -23,6 +23,9 @@ const env: Env = {
   BYTEPLUS_ACCESS_KEY: undefined,
   BYTEPLUS_SECRET_KEY: undefined,
   BYTEPLUS_VOD_ENDPOINT: 'https://vod.byteplusapi.com',
+  TIKTOK_CLIENT_KEY: undefined,
+  TIKTOK_CLIENT_SECRET: undefined,
+  TIKTOK_SHORT_DRAMA_API_BASE: 'https://open.tiktokapis.com',
   API_PUBLIC_BASE_URL: undefined,
   COVER_ASSET_STORAGE_DIR: 'tmp/cover-assets-test',
   COVER_ASSET_PUBLIC_BASE_URL: undefined,
@@ -41,6 +44,10 @@ async function createPrismaStub() {
     regions: ['US'],
     accessConfig: { freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: 'rewarded_episode_unlock', rewardedAdCount: 3 },
     status: 'ONLINE',
+    platformPublishedVersion: 1,
+    onlineVersion: 1,
+    reviewStatus: 'PASSED',
+    publishStatus: 'LISTED',
     updatedAt: new Date('2026-09-10T00:00:00.000Z'),
     tiktokAlbumId: 'tiktok-album-1',
     episodes: [{ id: 'episode-1' }],
@@ -85,7 +92,8 @@ async function createPrismaStub() {
       findFirst: async () => ({ ...album, likes: [], favorites: [] }),
       findUnique: async () => album,
       create: async (args: { data: unknown }) => ({ ...album, ...(args.data as object) }),
-      update: async () => album,
+      update: async (args: { data: Record<string, unknown> }) => Object.assign(album, args.data),
+      delete: async () => ({ ...album }),
       count: async () => 1
     },
     episode: {
@@ -535,6 +543,17 @@ describe('QuicK ReeLS API', () => {
       headers: { authorization: `Bearer ${await token(app, 'admin')}` }
     });
     assert.equal(adminResponse.statusCode, 200);
+  });
+
+  it('does not allow synced or non-draft dramas to be deleted', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/api/v1/admin/albums/album-1',
+      headers: { authorization: `Bearer ${await token(app, 'admin')}` }
+    });
+    assert.equal(response.statusCode, 409);
   });
 
   it('logs administrators in with a password hash and returns an admin token', async () => {
