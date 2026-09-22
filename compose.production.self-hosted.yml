@@ -43,6 +43,7 @@ services:
     volumes:
       - cover_assets:/var/lib/quickreels/cover-assets
     networks:
+      - quickreels-proxy
       - quickreels-internal
 
   admin:
