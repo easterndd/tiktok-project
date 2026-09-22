@@ -137,6 +137,24 @@ export async function buildAlbumSnapshot(prisma: Db, albumId: string): Promise<A
 }
 
 export async function enqueuePlatformSyncJob(prisma: Db, input: PlatformJobInput) {
+  const existing = await prisma.platformSyncJob.findUnique({ where: { dedupeKey: input.dedupeKey } });
+  if (existing) {
+    if (existing.status !== 'FAILED') return existing;
+    // A deliberate operator retry should recover jobs that exhausted automatic
+    // retries during a transient provider or network outage.
+    return prisma.platformSyncJob.update({
+      where: { id: existing.id },
+      data: {
+        status: 'PENDING',
+        attemptCount: 0,
+        startedAt: null,
+        completedAt: null,
+        nextAttemptAt: new Date(),
+        errorCode: null,
+        errorMessage: null
+      }
+    });
+  }
   return prisma.platformSyncJob.upsert({
     where: { dedupeKey: input.dedupeKey },
     create: {
