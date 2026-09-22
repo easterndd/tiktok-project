@@ -5,6 +5,9 @@ services:
       dockerfile: apps/api/Dockerfile
     env_file:
       - ${QUICKREELS_ENV_FILE:-.env.production}
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     restart: unless-stopped
     expose:
       - "3000"
@@ -29,6 +32,9 @@ services:
       dockerfile: apps/api/Dockerfile
     env_file:
       - ${QUICKREELS_ENV_FILE:-.env.production}
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     command: ["node", "dist/jobs/tiktok-short-drama.worker.js"]
     restart: unless-stopped
     depends_on:
