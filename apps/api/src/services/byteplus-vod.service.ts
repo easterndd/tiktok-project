@@ -230,7 +230,10 @@ export class BytePlusVodService implements TikTokShortDramaService {
         FileName: input.fileName,
         FileExtension: extension,
         CallbackArgs: JSON.stringify({ byteplusAccountId: input.byteplusAccountId }),
-        Functions: JSON.stringify([{ Name: 'GetMeta' }])
+        Functions: JSON.stringify([{ Name: 'GetMeta' }]),
+        // The VOD SDK opens four parallel HTTP part uploads by default. A single
+        // server-side upload is more reliable on restricted cloud egress paths.
+        maxConcurrency: 1
       });
     } catch (error) {
       if (error instanceof BytePlusVodError) throw error;
