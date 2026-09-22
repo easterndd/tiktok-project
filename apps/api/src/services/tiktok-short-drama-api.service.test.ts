@@ -53,4 +53,20 @@ describe('TikTokShortDramaApiService', () => {
     assert.equal(result.data.review_status, 2);
     assert.deepEqual(result.data.episode_info_list, [{ episode_id: '7637437361307027476' }]);
   });
+
+  it('reports a safe OAuth error code and HTTP status without exposing credentials', async () => {
+    const service = new TikTokShortDramaApiService(env, {
+      fetch: async () => new Response(JSON.stringify({ error: 'invalid_client', error_description: 'Client key is invalid', log_id: 'log-1' }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' }
+      })
+    });
+
+    await assert.rejects(
+      () => service.createAlbum(),
+      (error: unknown) => error instanceof Error
+        && error.message === 'TikTok token request failed (HTTP 401): Client key is invalid'
+        && !error.message.includes(env.TIKTOK_CLIENT_SECRET!)
+    );
+  });
 });

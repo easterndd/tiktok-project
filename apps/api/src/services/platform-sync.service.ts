@@ -437,7 +437,14 @@ export async function processPlatformSyncJobs(prisma: Db, api: TikTokShortDramaA
       workerOptions.log?.('TikTok platform sync job completed.', { jobId: job.id, kind: job.kind });
     } catch (error) {
       await failJob(prisma, job, error, current, maxRetries);
-      workerOptions.log?.('TikTok platform sync job failed.', { jobId: job.id, kind: job.kind, error: platformError(error).message });
+      const details = platformError(error);
+      workerOptions.log?.('TikTok platform sync job failed.', {
+        jobId: job.id,
+        kind: job.kind,
+        error: details.message,
+        ...(details.code ? { errorCode: details.code } : {}),
+        ...(details.requestId ? { requestId: details.requestId } : {})
+      });
     }
   }
   return jobs.length;

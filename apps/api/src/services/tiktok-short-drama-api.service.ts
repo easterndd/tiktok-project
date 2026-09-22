@@ -76,6 +76,24 @@ function asNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function tokenFailure(body: Record<string, unknown> | null, status: number) {
+  const nested = asRecord(body?.error);
+  const code = asString(nested.code) ?? asString(body?.error) ?? asString(body?.code);
+  const detail = asString(nested.message)
+    ?? asString(nested.description)
+    ?? asString(body?.error_description)
+    ?? asString(body?.message);
+  const requestId = asString(nested.log_id)
+    ?? asString(body?.log_id)
+    ?? asString(body?.request_id);
+  const suffix = detail ? `: ${detail}` : '';
+  return {
+    code,
+    requestId,
+    message: `TikTok token request failed (HTTP ${status})${suffix}`
+  };
+}
+
 export class TikTokShortDramaApiService {
   private readonly fetch: FetchLike;
   private readonly now: () => Date;
@@ -263,8 +281,8 @@ export class TikTokShortDramaApiService {
     const token = asString(body?.access_token);
     const expiresIn = asNumber(body?.expires_in);
     if (!response.ok || !token || !expiresIn) {
-      const error = asRecord(body?.error);
-      throw new TikTokShortDramaApiError(asString(error.message) ?? 'TikTok token request failed.', asString(error.code), asString(error.log_id), isRetryableStatus(response.status));
+      const failure = tokenFailure(body, response.status);
+      throw new TikTokShortDramaApiError(failure.message, failure.code, failure.requestId, isRetryableStatus(response.status));
     }
     this.accessToken = token;
     this.accessTokenExpiresAt = this.now().getTime() + Math.max(1, expiresIn - 300) * 1_000;
