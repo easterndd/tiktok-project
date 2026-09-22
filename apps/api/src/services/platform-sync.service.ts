@@ -13,6 +13,10 @@ type Db = PrismaClient & { [key: string]: any };
 
 export type PlatformSyncKind = 'COVER' | 'VIDEO' | 'ALBUM_VERSION' | 'REVIEW' | 'SET_ONLINE_VERSION' | 'PUBLISH' | 'UNPUBLISH' | 'RECONCILE';
 
+function workflowConflict(message: string) {
+  return Object.assign(new Error(message), { statusCode: 409 });
+}
+
 type AlbumSnapshot = {
   albumId: string;
   albumInfo: TikTokAlbumInfoInput;
@@ -186,9 +190,9 @@ export async function enqueueVideoSync(prisma: Db, episodeId: string, createdByA
 
 export async function enqueueAlbumAction(prisma: Db, kind: Extract<PlatformSyncKind, 'REVIEW' | 'SET_ONLINE_VERSION' | 'PUBLISH' | 'UNPUBLISH' | 'RECONCILE'>, albumId: string, createdByAdminUserId?: string) {
   const album = await prisma.album.findUnique({ where: { id: albumId }, select: { id: true, tiktokVersion: true, onlineVersion: true, tiktokAlbumId: true } });
-  if (!album?.tiktokAlbumId) throw new Error('剧目尚未同步至 TikTok。');
+  if (!album?.tiktokAlbumId) throw workflowConflict('剧目尚未同步至 TikTok，请先执行“同步版本”。');
   const version = kind === 'SET_ONLINE_VERSION' ? album.tiktokVersion : album.onlineVersion ?? album.tiktokVersion;
-  if (['REVIEW', 'SET_ONLINE_VERSION'].includes(kind) && !version) throw new Error('剧目尚无可操作的 TikTok 版本。');
+  if (['REVIEW', 'SET_ONLINE_VERSION'].includes(kind) && !version) throw workflowConflict('剧目尚无可操作的 TikTok 版本，请先执行“同步版本”。');
   const snapshot = { albumId, platformAlbumId: album.tiktokAlbumId, version };
   const active = await prisma.platformSyncJob.findFirst({
     where: { kind, albumId, status: { in: ['PENDING', 'PROCESSING'] }, snapshotHash: hashSnapshot(snapshot) },
