@@ -278,9 +278,16 @@ async function processVideo(prisma: Db, api: TikTokShortDramaApiService, job: an
   if (episode.tiktokVideoStatus === 'READY') return completeJob(prisma, job, {}, now);
   if (!episode.tiktokVideoJobId) {
     const result = await api.createVideo({ vid: episode.byteplusVid, title: episode.title });
+    if (result.status === 'READY') {
+      await (prisma.$transaction as any)(async (tx: Db) => {
+        await tx.episode.update({ where: { id: episode.id }, data: { byteplusVid: result.byteplusVid, tiktokVideoStatus: 'READY', tiktokVideoError: null, platformSyncedAt: now } });
+        await completeJob(tx, job, { providerRequestId: result.requestId, providerResponse: { byteplus_vid: result.byteplusVid, result_type: 1 } }, now);
+      });
+      return;
+    }
     await (prisma.$transaction as any)(async (tx: Db) => {
       await tx.episode.update({ where: { id: episode.id }, data: { tiktokVideoJobId: result.jobId, tiktokVideoStatus: 'PROCESSING', tiktokVideoError: null } });
-      await tx.platformSyncJob.update({ where: { id: job.id }, data: { status: 'PENDING', providerJobId: result.jobId, providerRequestId: result.requestId, providerResponse: { byteplus_vid: result.byteplusVid ?? episode.byteplusVid }, startedAt: job.startedAt ?? now, nextAttemptAt: new Date(now.getTime() + 30_000) } });
+      await tx.platformSyncJob.update({ where: { id: job.id }, data: { status: 'PENDING', providerJobId: result.jobId, providerRequestId: result.requestId, providerResponse: { byteplus_vid: result.byteplusVid, result_type: 2 }, startedAt: job.startedAt ?? now, nextAttemptAt: new Date(now.getTime() + 30_000) } });
     });
     return;
   }

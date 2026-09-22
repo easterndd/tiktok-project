@@ -119,16 +119,25 @@ export class TikTokShortDramaApiService {
   }
 
   async createVideo(input: { vid: string; title: string }) {
-    const { data, requestId } = await this.request<{ job_id?: unknown; byteplus_vid?: unknown }>('/v2/sg/shortdrama/video', 'POST', {
+    const { data, requestId } = await this.request<{ result_type?: unknown; job_id?: unknown; byteplus_vid?: unknown }>('/v2/sg/shortdrama/video', 'POST', {
       vid: input.vid,
       title: input.title,
       space_name: this.env.BYTEPLUS_SPACE_NAME,
       byteplus_account_id: this.env.BYTEPLUS_ACCOUNT_ID,
       byteplus_region: this.env.BYTEPLUS_REGION
     });
+    const resultType = asNumber(data.result_type);
     const jobId = asString(data.job_id);
-    if (!jobId) throw new TikTokShortDramaApiError('TikTok video registration completed without job_id.', undefined, requestId, false);
-    return { jobId, byteplusVid: asString(data.byteplus_vid), requestId };
+    const byteplusVid = asString(data.byteplus_vid) ?? input.vid;
+    // The Short Drama API reports result_type=1 when an existing BytePlus VID
+    // is registered immediately. Only result_type=2 requires job polling.
+    if (resultType === 1) return { status: 'READY' as const, byteplusVid, requestId };
+    if (resultType === 2 || jobId) {
+      if (!jobId) throw new TikTokShortDramaApiError('TikTok accepted asynchronous video registration without job_id.', undefined, requestId, true);
+      return { status: 'PROCESSING' as const, jobId, byteplusVid, requestId };
+    }
+    if (resultType === 3) throw new TikTokShortDramaApiError('TikTok rejected video registration.', undefined, requestId, false);
+    throw new TikTokShortDramaApiError('TikTok video registration returned an unknown result_type.', undefined, requestId, true);
   }
 
   async getVideo(input: { jobId?: string; vid?: string }) {

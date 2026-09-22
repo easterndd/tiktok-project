@@ -24,16 +24,30 @@ describe('TikTokShortDramaApiService', () => {
         const url = new URL(String(input));
         requests.push({ url, body: typeof init?.body === 'string' ? init.body : undefined });
         if (url.pathname === '/v2/oauth/token/') return response({ access_token: 'token-1', expires_in: 7200 });
-        return response({ data: { job_id: 'vod:job:1', byteplus_vid: 'v123' }, error: { code: 'ok', message: '', log_id: 'log-1' } });
+        return response({ data: { result_type: 2, job_id: 'vod:job:1', byteplus_vid: 'v123' }, error: { code: 'ok', message: '', log_id: 'log-1' } });
       }
     });
 
     const result = await service.createVideo({ vid: 'v123', title: 'Episode 1' });
+    assert.equal(result.status, 'PROCESSING');
     assert.equal(result.jobId, 'vod:job:1');
     assert.equal(requests.length, 2);
     const body = JSON.parse(requests[1].body!);
     assert.deepEqual(body, { client_key: 'mn-client-key', vid: 'v123', title: 'Episode 1', space_name: 'space-1', byteplus_account_id: 'account-1', byteplus_region: 'ap-singapore-1' });
     assert.equal(requests[1].url.searchParams.get('client_key'), 'mn-client-key');
+  });
+
+  it('accepts a synchronously registered BytePlus video without a polling job', async () => {
+    const service = new TikTokShortDramaApiService(env, {
+      fetch: async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/v2/oauth/token/') return response({ access_token: 'token-1', expires_in: 7200 });
+        return response({ data: { result_type: 1, byteplus_vid: 'v123' }, error: { code: 'ok', message: '', log_id: 'log-1' } });
+      }
+    });
+
+    const result = await service.createVideo({ vid: 'v123', title: 'Episode 1' });
+    assert.deepEqual(result, { status: 'READY', byteplusVid: 'v123', requestId: 'log-1' });
   });
 
   it('preserves an int64 album id as a string and normalizes album_version_list', async () => {
