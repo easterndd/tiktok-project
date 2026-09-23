@@ -133,7 +133,8 @@ export class TikTokShortDramaApiService {
     });
     const resultType = asNumber(data.result_type);
     const jobId = asString(data.job_id);
-    const byteplusVid = asString(data.byteplus_vid) ?? input.vid;
+    const returnedByteplusVid = asString(data.byteplus_vid);
+    const byteplusVid = returnedByteplusVid ?? input.vid;
     // The Short Drama API reports result_type=1 when an existing BytePlus VID
     // is registered immediately. Only result_type=2 requires job polling.
     if (resultType === 1) return { status: 'READY' as const, byteplusVid, requestId };
@@ -142,7 +143,7 @@ export class TikTokShortDramaApiService {
       return { status: 'PROCESSING' as const, jobId, byteplusVid, requestId };
     }
     if (resultType === 3) throw new TikTokShortDramaApiError('TikTok rejected video registration.', undefined, requestId, false);
-    if (byteplusVid) return { status: 'VERIFYING' as const, byteplusVid, requestId };
+    if (returnedByteplusVid) return { status: 'VERIFYING' as const, byteplusVid, requestId };
     const rawResultType = asString(data.result_type) ?? 'missing';
     const responseKeys = Object.keys(data).sort().join(',') || 'none';
     throw new TikTokShortDramaApiError(`TikTok video registration returned an unknown result_type (${rawResultType}; response keys: ${responseKeys}).`, undefined, requestId, true);
