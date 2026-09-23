@@ -895,9 +895,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.post('/admin/albums/:albumId/review-submit', { preHandler: requirePermission('content.review') }, async (request) => {
     const { albumId } = albumParams.parse(request.params);
+    const { priorityScore } = z.object({ priorityScore: z.union([z.literal(1), z.literal(2)]).default(2) }).strict().parse(request.body ?? {});
     ensureTikTokPlatformConfigured(app);
-    const job = await enqueueAlbumAction(app.prisma as any, 'REVIEW', albumId, request.user.sub);
-    await audit(app, request.user.sub, 'SUBMIT_TIKTOK_REVIEW', 'Album', albumId, { jobId: job.id });
+    const job = await enqueueAlbumAction(app.prisma as any, 'REVIEW', albumId, request.user.sub, priorityScore);
+    await audit(app, request.user.sub, 'SUBMIT_TIKTOK_REVIEW', 'Album', albumId, { jobId: job.id, priorityScore });
     return { job };
   });
 

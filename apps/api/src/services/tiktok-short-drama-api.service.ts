@@ -225,10 +225,11 @@ export class TikTokShortDramaApiService {
     };
   }
 
-  async submitReview(input: { albumId: string; version: number }) {
+  async submitReview(input: { albumId: string; version: number; priorityScore: 1 | 2 }) {
     const { data, requestId } = await this.request<{ review_id?: unknown }>('/v2/sg/shortdrama/album/review/submit/', 'POST', {
       album_id: input.albumId,
-      version: input.version
+      version: input.version,
+      priority_score: input.priorityScore
     });
     return { reviewId: asString(data.review_id), requestId };
   }

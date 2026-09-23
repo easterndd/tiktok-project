@@ -17,6 +17,20 @@ function response(body: unknown) {
 }
 
 describe('TikTokShortDramaApiService', () => {
+  it('sends the selected moderation priority to TikTok', async () => {
+    const submitted: Record<string, unknown>[] = [];
+    const service = new TikTokShortDramaApiService(env, {
+      fetch: async (input, init) => {
+        if (new URL(String(input)).pathname === '/v2/oauth/token/') return response({ access_token: 'token-1', expires_in: 7200 });
+        submitted.push(JSON.parse(String(init?.body)));
+        return response({ data: { review_id: 'review-1' }, error: { code: 'ok' } });
+      }
+    });
+    await service.submitReview({ albumId: '7688551749335058439', version: 1, priorityScore: 1 });
+    assert.equal(submitted[0].priority_score, 1);
+    assert.equal(submitted[0].album_id, '7688551749335058439');
+  });
+
   it('adds the server-only credentials and BytePlus binding when registering a video', async () => {
     const requests: Array<{ url: URL; body: string | undefined }> = [];
     const service = new TikTokShortDramaApiService(env, {

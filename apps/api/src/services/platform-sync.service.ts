@@ -214,17 +214,21 @@ export async function enqueueVideoSync(prisma: Db, episodeId: string, createdByA
   });
 }
 
-export async function enqueueAlbumAction(prisma: Db, kind: Extract<PlatformSyncKind, 'REVIEW' | 'SET_ONLINE_VERSION' | 'PUBLISH' | 'UNPUBLISH' | 'RECONCILE'>, albumId: string, createdByAdminUserId?: string) {
-  const album = await prisma.album.findUnique({ where: { id: albumId }, select: { id: true, tiktokVersion: true, onlineVersion: true, tiktokAlbumId: true } });
+export async function enqueueAlbumAction(prisma: Db, kind: Extract<PlatformSyncKind, 'REVIEW' | 'SET_ONLINE_VERSION' | 'PUBLISH' | 'UNPUBLISH' | 'RECONCILE'>, albumId: string, createdByAdminUserId?: string, priorityScore: 1 | 2 = 2) {
+  const album = await prisma.album.findUnique({ where: { id: albumId }, select: { id: true, tiktokVersion: true, onlineVersion: true, tiktokAlbumId: true, reviewStatus: true } });
   if (!album?.tiktokAlbumId) throw workflowConflict('剧目尚未同步至 TikTok，请先执行“同步版本”。');
-  const version = kind === 'SET_ONLINE_VERSION' ? album.tiktokVersion : album.onlineVersion ?? album.tiktokVersion;
+  if (kind === 'REVIEW' && ['REVIEWING', '1'].includes(album.reviewStatus ?? '')) throw workflowConflict('当前版本已在审核中，不能通过重复送审改为加急；请对账查询结果或联系 TikTok 平台支持。');
+  const version = kind === 'SET_ONLINE_VERSION' || kind === 'REVIEW' ? album.tiktokVersion : album.onlineVersion ?? album.tiktokVersion;
   if (['REVIEW', 'SET_ONLINE_VERSION'].includes(kind) && !version) throw workflowConflict('剧目尚无可操作的 TikTok 版本，请先执行“同步版本”。');
-  const snapshot = { albumId, platformAlbumId: album.tiktokAlbumId, version };
+  const snapshot = { albumId, platformAlbumId: album.tiktokAlbumId, version, ...(kind === 'REVIEW' ? { priorityScore } : {}) };
   const active = await prisma.platformSyncJob.findFirst({
-    where: { kind, albumId, status: { in: ['PENDING', 'PROCESSING'] }, snapshotHash: hashSnapshot(snapshot) },
+    where: { kind, albumId, status: { in: ['PENDING', 'PROCESSING'] }, ...(kind === 'REVIEW' ? {} : { snapshotHash: hashSnapshot(snapshot) }) },
     orderBy: { createdAt: 'desc' }
   });
-  if (active) return active;
+  if (active) {
+    if (kind === 'REVIEW' && (active.snapshotJson as { priorityScore?: number } | null)?.priorityScore !== priorityScore) throw workflowConflict('已有不同优先级的送审任务在处理，请等待结果，勿重复送审。');
+    return active;
+  }
   return enqueuePlatformSyncJob(prisma, {
     kind,
     targetId: albumId,
@@ -417,9 +421,12 @@ async function processAlbumAction(prisma: Db, api: TikTokShortDramaApiService, j
   if (!album?.tiktokAlbumId) throw new Error('剧目尚未同步至 TikTok。');
   if (job.kind === 'REVIEW') {
     if (!album.tiktokVersion) throw new Error('剧目尚无可送审的 TikTok 版本。');
-    const result = await api.submitReview({ albumId: album.tiktokAlbumId, version: album.tiktokVersion });
+    const snapshot = job.snapshotJson as { platformAlbumId?: string; version?: number; priorityScore?: number } | null;
+    if ((snapshot?.platformAlbumId && snapshot.platformAlbumId !== album.tiktokAlbumId) || (snapshot?.version && snapshot.version !== album.tiktokVersion)) throw workflowConflict('送审排队后剧目版本已变化，请对账后重新确认送审。');
+    const priorityScore = snapshot?.priorityScore === 1 ? 1 : 2;
+    const result = await api.submitReview({ albumId: album.tiktokAlbumId, version: album.tiktokVersion, priorityScore });
     await prisma.album.update({ where: { id: album.id }, data: { status: 'REVIEWING', reviewStatus: 'REVIEWING' } });
-    return completeJob(prisma, job, { providerRequestId: result.requestId, providerResponse: { review_id: result.reviewId } }, now);
+    return completeJob(prisma, job, { providerRequestId: result.requestId, providerResponse: { review_id: result.reviewId, priority_score: priorityScore } }, now);
   }
   if (job.kind === 'SET_ONLINE_VERSION') {
     if (!album.tiktokVersion) throw new Error('剧目尚无可设为线上版本的 TikTok 版本。');

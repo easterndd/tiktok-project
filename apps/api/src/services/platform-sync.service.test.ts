@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enqueuePlatformSyncJob, processPlatformSyncJobs } from './platform-sync.service';
+import { enqueueAlbumAction, enqueuePlatformSyncJob, processPlatformSyncJobs } from './platform-sync.service';
 import { TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
 
 test('requeues a failed platform sync job when an operator retries it', async () => {
@@ -50,6 +50,24 @@ test('does not duplicate an active platform sync job', async () => {
   });
 
   assert.equal(result, existing);
+});
+
+test('stores review priority in the queued snapshot and rejects changing an active review', async () => {
+  let queued: Record<string, any> | null = null;
+  const prisma = {
+    album: { findUnique: async () => ({ id: 'album-1', tiktokAlbumId: '7688551749335058439', tiktokVersion: 2, onlineVersion: 1, reviewStatus: null }) },
+    platformSyncJob: {
+      findFirst: async () => queued,
+      findUnique: async () => null,
+      upsert: async (input: Record<string, any>) => {
+        queued = { id: 'review-1', ...input.create };
+        return queued;
+      }
+    }
+  };
+  const job = await enqueueAlbumAction(prisma as any, 'REVIEW', 'album-1', 'admin-1', 1);
+  assert.deepEqual(job.snapshotJson, { albumId: 'album-1', platformAlbumId: '7688551749335058439', version: 2, priorityScore: 1 });
+  await assert.rejects(() => enqueueAlbumAction(prisma as any, 'REVIEW', 'album-1', 'admin-1', 2), /不同优先级/);
 });
 
 test('recreates a TikTok album when its saved ID is not found for the current client', async () => {

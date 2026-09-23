@@ -146,6 +146,18 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .button-row { display: flex; flex-wrap: wrap; gap: 6px; min-width: 280px; }
 .button-row button { min-height: 30px; padding: 0 8px; font-size: 10px; }
 .button-row:empty { display: none; }
+.platform-guide { margin: 0 22px 20px; padding: 16px 18px; border: 1px solid #c9e4e8; border-radius: 8px; background: #f5fbfc; }
+.platform-guide h3 { margin: 0 0 12px; color: var(--ink); font-size: 14px; }
+.platform-guide ol { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 20px; padding-left: 20px; margin: 0; }
+.platform-guide li { padding-left: 2px; color: #175b69; font-size: 12px; line-height: 1.55; }
+.platform-guide li strong { display: block; color: var(--ink); font-size: 12px; }
+.platform-guide li span { color: #42576b; }
+.platform-guide p { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #d9e9ed; color: #42576b; font-size: 12px; line-height: 1.55; }
+.platform-next-step { display: block; max-width: 310px; margin-top: 8px; color: #175b69; font-size: 11px; line-height: 1.5; white-space: normal; }
+.review-priority { display: inline-flex; align-items: center; gap: 5px; color: #42576b; font-size: 11px; white-space: nowrap; }
+.review-priority select { width: auto; min-height: 30px; padding: 0 5px; border: 1px solid #c9d4dc; border-radius: 5px; background: #fff; color: var(--ink); font-size: 11px; }
+.platform-jobs-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 22px 8px; }
+.platform-jobs-heading h3 { margin: 0; font-size: 13px; color: var(--ink); }
 .component-list { display: grid; padding: 0 22px 18px; }
 .component-row { display: grid; grid-template-columns: minmax(0, 1fr) 54px 58px; align-items: center; gap: 14px; min-height: 70px; border-bottom: 1px solid #edf0f4; }
 .component-row:last-child { border-bottom: 0; }.component-row > span { display: grid; gap: 4px; }.component-row strong { color: var(--ink); font-size: 13px; }.component-row small { color: var(--muted); font-size: 11px; }.component-row em { color: var(--green); font-size: 11px; font-style: normal; font-weight: 800; }.component-row em.disabled-text { color: #99a4b3; }
