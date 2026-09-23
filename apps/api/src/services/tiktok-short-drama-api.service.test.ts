@@ -63,6 +63,19 @@ describe('TikTokShortDramaApiService', () => {
     assert.equal(result.status, 'READY');
   });
 
+  it('returns a verification state when TikTok only returns byteplus_vid', async () => {
+    const service = new TikTokShortDramaApiService(env, {
+      fetch: async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/v2/oauth/token/') return response({ access_token: 'token-1', expires_in: 7200 });
+        return response({ data: { byteplus_vid: 'v123' }, error: { code: 'ok', log_id: 'log-1' } });
+      }
+    });
+
+    const result = await service.createVideo({ vid: 'v123', title: 'Episode 1' });
+    assert.deepEqual(result, { status: 'VERIFYING', byteplusVid: 'v123', requestId: 'log-1' });
+  });
+
   it('preserves an int64 album id as a string and normalizes album_version_list', async () => {
     let queryUrl = '';
     const service = new TikTokShortDramaApiService(env, {

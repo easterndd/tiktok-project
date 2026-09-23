@@ -276,6 +276,20 @@ async function processVideo(prisma: Db, api: TikTokShortDramaApiService, job: an
   const episode = await prisma.episode.findUnique({ where: { id: job.episodeId ?? job.targetId }, select: { id: true, title: true, byteplusVid: true, tiktokVideoJobId: true, tiktokVideoStatus: true } });
   if (!episode?.byteplusVid) throw new Error('分集尚未完成 BytePlus 视频上传。');
   if (episode.tiktokVideoStatus === 'READY') return completeJob(prisma, job, {}, now);
+  const registeredVid = typeof job.providerResponse?.byteplus_vid === 'string' ? job.providerResponse.byteplus_vid : undefined;
+  if (!episode.tiktokVideoJobId && registeredVid) {
+    const result = await api.getVideo({ vid: registeredVid });
+    if (result.uploadStatus === 1) {
+      await prisma.platformSyncJob.update({ where: { id: job.id }, data: { status: 'PENDING', nextAttemptAt: new Date(now.getTime() + 30_000), providerRequestId: result.requestId } });
+      return;
+    }
+    if (result.uploadStatus === 3 || !result.vid) throw new TikTokShortDramaApiError('TikTok rejected the registered video.', undefined, result.requestId, false);
+    await (prisma.$transaction as any)(async (tx: Db) => {
+      await tx.episode.update({ where: { id: episode.id }, data: { byteplusVid: result.vid, tiktokVideoStatus: 'READY', tiktokVideoError: null, platformSyncedAt: now } });
+      await completeJob(tx, job, { providerRequestId: result.requestId, providerResponse: { vid: result.vid, upload_status: result.uploadStatus } }, now);
+    });
+    return;
+  }
   if (!episode.tiktokVideoJobId) {
     const result = await api.createVideo({ vid: episode.byteplusVid, title: episode.title });
     if (result.status === 'READY') {
@@ -283,6 +297,19 @@ async function processVideo(prisma: Db, api: TikTokShortDramaApiService, job: an
         await tx.episode.update({ where: { id: episode.id }, data: { byteplusVid: result.byteplusVid, tiktokVideoStatus: 'READY', tiktokVideoError: null, platformSyncedAt: now } });
         await completeJob(tx, job, { providerRequestId: result.requestId, providerResponse: { byteplus_vid: result.byteplusVid, result_type: 1 } }, now);
       });
+      return;
+    }
+    if (result.status === 'VERIFYING') {
+      const verification = await api.getVideo({ vid: result.byteplusVid });
+      if (verification.uploadStatus === 2 && verification.vid) {
+        await (prisma.$transaction as any)(async (tx: Db) => {
+          await tx.episode.update({ where: { id: episode.id }, data: { byteplusVid: verification.vid, tiktokVideoStatus: 'READY', tiktokVideoError: null, platformSyncedAt: now } });
+          await completeJob(tx, job, { providerRequestId: verification.requestId, providerResponse: { vid: verification.vid, upload_status: verification.uploadStatus } }, now);
+        });
+        return;
+      }
+      if (verification.uploadStatus === 3 || !verification.vid) throw new TikTokShortDramaApiError('TikTok rejected the registered video.', undefined, verification.requestId, false);
+      await prisma.platformSyncJob.update({ where: { id: job.id }, data: { status: 'PENDING', nextAttemptAt: new Date(now.getTime() + 30_000), providerRequestId: verification.requestId, providerResponse: { byteplus_vid: result.byteplusVid, result_type: 'VERIFYING' } } });
       return;
     }
     await (prisma.$transaction as any)(async (tx: Db) => {

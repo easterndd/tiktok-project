@@ -142,6 +142,7 @@ export class TikTokShortDramaApiService {
       return { status: 'PROCESSING' as const, jobId, byteplusVid, requestId };
     }
     if (resultType === 3) throw new TikTokShortDramaApiError('TikTok rejected video registration.', undefined, requestId, false);
+    if (byteplusVid) return { status: 'VERIFYING' as const, byteplusVid, requestId };
     const rawResultType = asString(data.result_type) ?? 'missing';
     const responseKeys = Object.keys(data).sort().join(',') || 'none';
     throw new TikTokShortDramaApiError(`TikTok video registration returned an unknown result_type (${rawResultType}; response keys: ${responseKeys}).`, undefined, requestId, true);
