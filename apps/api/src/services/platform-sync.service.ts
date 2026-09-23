@@ -87,6 +87,10 @@ function record(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function platformResponse(value: unknown) {
+  return record(value);
+}
+
 function numberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
@@ -342,6 +346,7 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
   let platformAlbumId = album.tiktokAlbumId;
   let expectedVersion = album.tiktokVersion ?? undefined;
   let recreatedAlbum = false;
+  const savedCreatedAlbumId = stringify(platformResponse(job.providerResponse).created_album_id);
   if (platformAlbumId) {
     try {
       const queried = await api.queryAlbum({ albumId: platformAlbumId });
@@ -349,6 +354,10 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
       if (current) expectedVersion = current;
     } catch (error) {
       if (!isTikTokAlbumNotFound(error)) throw error;
+      if (savedCreatedAlbumId === platformAlbumId) {
+        await prisma.platformSyncJob.update({ where: { id: job.id }, data: { status: 'PENDING', nextAttemptAt: new Date(now.getTime() + 60_000), providerRequestId: (error as TikTokShortDramaApiError).requestId, errorCode: '22001', errorMessage: 'TikTok 剧目刚创建，平台仍在同步，稍后自动重试。' } });
+        return;
+      }
       // An album may have been created with an earlier Client Key or removed on
       // TikTok. Its episode IDs cannot be reused with a replacement album.
       platformAlbumId = null;
@@ -365,6 +374,7 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
         ...(recreatedAlbum ? { tiktokVersion: null, onlineVersion: null, platformPublishedVersion: null, platformPublishedAt: null, reviewStatus: null } : {})
       } });
       if (recreatedAlbum) await tx.episode.updateMany({ where: { albumId: album.id }, data: { tiktokEpisodeId: null } });
+      await tx.platformSyncJob.update({ where: { id: job.id }, data: { providerRequestId: created.requestId, providerResponse: { created_album_id: platformAlbumId } } });
     });
   }
   const submittedEpisodes = snapshot.episodes.map(({ localEpisodeId: _localEpisodeId, ...episode }) => {
@@ -372,12 +382,19 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
     const { episode_id: _staleEpisodeId, ...newEpisode } = episode;
     return newEpisode;
   });
-  const result = await api.updateAlbumVersion({
-    albumId: platformAlbumId!,
-    version: expectedVersion,
-    albumInfo: snapshot.albumInfo,
-    episodes: submittedEpisodes
-  });
+  let result;
+  try {
+    result = await api.updateAlbumVersion({
+      albumId: platformAlbumId!,
+      version: expectedVersion,
+      albumInfo: snapshot.albumInfo,
+      episodes: submittedEpisodes
+    });
+  } catch (error) {
+    if (!recreatedAlbum || !isTikTokAlbumNotFound(error)) throw error;
+    await prisma.platformSyncJob.update({ where: { id: job.id }, data: { status: 'PENDING', nextAttemptAt: new Date(now.getTime() + 60_000), providerRequestId: (error as TikTokShortDramaApiError).requestId, providerResponse: { created_album_id: platformAlbumId }, errorCode: '22001', errorMessage: 'TikTok 剧目刚创建，平台仍在同步，稍后自动重试。' } });
+    return;
+  }
   await (prisma.$transaction as any)(async (tx: Db) => {
     await tx.album.update({ where: { id: album.id }, data: {
       tiktokAlbumId: platformAlbumId!,
