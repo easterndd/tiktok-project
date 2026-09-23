@@ -1,3 +1,4 @@
+import { isSafeNumber, parse } from 'lossless-json';
 import type { Env } from '../config/env';
 
 type FetchLike = typeof fetch;
@@ -264,7 +265,11 @@ export class TikTokShortDramaApiService {
     }).catch(() => {
       throw new TikTokShortDramaApiError('TikTok Short Drama request failed before receiving a response.', undefined, undefined, true);
     });
-    const envelope = await response.json().catch(() => null) as TikTokApiEnvelope<T> | null;
+    const envelope = await response.text()
+      .then((text) => parse(text, undefined, {
+        parseNumber: (value) => isSafeNumber(value) ? Number(value) : value
+      }))
+      .catch(() => null) as TikTokApiEnvelope<T> | null;
     const requestId = envelope?.error?.log_id ?? response.headers.get('x-tt-logid') ?? undefined;
     if (!response.ok || (envelope?.error?.code && envelope.error.code !== 'ok')) {
       throw new TikTokShortDramaApiError(

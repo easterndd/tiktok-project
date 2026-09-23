@@ -94,6 +94,30 @@ describe('TikTokShortDramaApiService', () => {
     assert.deepEqual(result.data.episode_info_list, [{ episode_id: '7637437361307027476' }]);
   });
 
+  it('parses numeric int64 album and episode ids without rounding them', async () => {
+    const albumId = '7688340549090544384';
+    const episodeId = '7688340549090544385';
+    const service = new TikTokShortDramaApiService(env, {
+      fetch: async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/v2/oauth/token/') return response({ access_token: 'token-1', expires_in: 7200 });
+        if (url.pathname.endsWith('/album/create/')) {
+          return new Response(`{"data":{"album_id":${albumId}},"error":{"code":"ok"}}`);
+        }
+        return new Response(`{"data":{"version":1,"episode_id_map":{"seq_1":${episodeId}}},"error":{"code":"ok"}}`);
+      }
+    });
+
+    const created = await service.createAlbum();
+    assert.equal(created.albumId, albumId);
+    const updated = await service.updateAlbumVersion({
+      albumId: created.albumId,
+      albumInfo: { language: 'en', title: 'Test', seq_num: 1, cover_list: ['cover-1'], year: 2026, album_status: 3, desp: 'Test', drama_type: 1, tag_list: [1] },
+      episodes: [{ title: 'Episode 1', seq: 1, cover_list: ['cover-1'], byteplus_vid: 'vid-1' }]
+    });
+    assert.equal(updated.episodeIdMap.seq_1, episodeId);
+  });
+
   it('reports a safe OAuth error code and HTTP status without exposing credentials', async () => {
     const service = new TikTokShortDramaApiService(env, {
       fetch: async () => new Response(JSON.stringify({ error: 'invalid_client', error_description: 'Client key is invalid', log_id: 'log-1' }), {
