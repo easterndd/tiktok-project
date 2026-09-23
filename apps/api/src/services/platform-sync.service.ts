@@ -347,6 +347,7 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
   let expectedVersion = album.tiktokVersion ?? undefined;
   let recreatedAlbum = false;
   const savedCreatedAlbumId = stringify(platformResponse(job.providerResponse).created_album_id);
+  let createdForJob = Boolean(platformAlbumId && savedCreatedAlbumId === platformAlbumId);
   if (platformAlbumId) {
     try {
       const queried = await api.queryAlbum({ albumId: platformAlbumId });
@@ -368,6 +369,7 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
   if (!platformAlbumId) {
     const created = await api.createAlbum();
     platformAlbumId = created.albumId;
+    createdForJob = true;
     await (prisma.$transaction as any)(async (tx: Db) => {
       await tx.album.update({ where: { id: album.id }, data: {
         tiktokAlbumId: platformAlbumId!,
@@ -378,7 +380,7 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
     });
   }
   const submittedEpisodes = snapshot.episodes.map(({ localEpisodeId: _localEpisodeId, ...episode }) => {
-    if (!recreatedAlbum) return episode;
+    if (!createdForJob) return episode;
     const { episode_id: _staleEpisodeId, ...newEpisode } = episode;
     return newEpisode;
   });
@@ -391,7 +393,7 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
       episodes: submittedEpisodes
     });
   } catch (error) {
-    if (!recreatedAlbum || !isTikTokAlbumNotFound(error)) throw error;
+    if (!createdForJob || !isTikTokAlbumNotFound(error)) throw error;
     await prisma.platformSyncJob.update({ where: { id: job.id }, data: { status: 'PENDING', nextAttemptAt: new Date(now.getTime() + 60_000), providerRequestId: (error as TikTokShortDramaApiError).requestId, providerResponse: { created_album_id: platformAlbumId }, errorCode: '22001', errorMessage: 'TikTok 剧目刚创建，平台仍在同步，稍后自动重试。' } });
     return;
   }
@@ -403,8 +405,8 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
       ...(recreatedAlbum ? { onlineVersion: null, platformPublishedVersion: null, platformPublishedAt: null, reviewStatus: null } : {})
     } });
     await Promise.all(snapshot.episodes.map((episode) => {
-      const mapped = result.episodeIdMap[recreatedAlbum ? `seq_${episode.seq}` : episode.episode_id ?? `seq_${episode.seq}`];
-      return tx.episode.update({ where: { id: episode.localEpisodeId }, data: { tiktokEpisodeId: mapped ?? (recreatedAlbum ? null : episode.episode_id), tiktokCoverPicId: episode.cover_list[0] } });
+      const mapped = result.episodeIdMap[createdForJob ? `seq_${episode.seq}` : episode.episode_id ?? `seq_${episode.seq}`];
+      return tx.episode.update({ where: { id: episode.localEpisodeId }, data: { tiktokEpisodeId: mapped ?? (createdForJob ? null : episode.episode_id), tiktokCoverPicId: episode.cover_list[0] } });
     }));
     await completeJob(tx, job, { providerRequestId: result.requestId, providerResponse: { version: result.version, episode_id_map: result.episodeIdMap } }, now);
   });

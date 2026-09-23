@@ -104,3 +104,82 @@ test('recreates a TikTok album when its saved ID is not found for the current cl
   assert.equal((albumUpdates.at(-1)?.data as Record<string, unknown>).tiktokAlbumId, 'new-album-1');
   assert.equal((syncJobUpdates.at(-1)?.data as Record<string, unknown>).status, 'SUCCEEDED');
 });
+
+test('resumes a recreated album without reusing episode ids from the old snapshot', async () => {
+  const episodeUpdates: Record<string, unknown>[] = [];
+  const submittedEpisodes: Record<string, unknown>[] = [];
+  const syncJobUpdates: Record<string, unknown>[] = [];
+  const job = {
+    id: 'job-1', kind: 'ALBUM_VERSION', status: 'PENDING', attemptCount: 1,
+    albumId: 'album-1', targetId: 'album-1',
+    providerResponse: { created_album_id: 'new-album-1' },
+    snapshotJson: {
+      albumId: 'album-1',
+      albumInfo: { language: 'en', title: 'Drama', seq_num: 1, cover_list: ['cover-1'], year: 2026, album_status: 3, desp: 'Description', drama_type: 2, tag_list: [1] },
+      episodes: [{ localEpisodeId: 'episode-1', episode_id: 'stale-episode-1', title: 'Episode 1', seq: 1, cover_list: ['cover-1'], byteplus_vid: 'vid-1' }]
+    }
+  };
+  const prisma = {
+    platformSyncJob: {
+      findMany: async () => [job],
+      updateMany: async () => ({ count: 1 }),
+      update: async (input: Record<string, unknown>) => { syncJobUpdates.push(input); return input; }
+    },
+    album: {
+      findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'new-album-1', tiktokVersion: null }),
+      update: async (input: Record<string, unknown>) => input
+    },
+    episode: { update: async (input: Record<string, unknown>) => { episodeUpdates.push(input); return input; } },
+    $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
+  };
+  const api = {
+    queryAlbum: async () => ({ data: { current_version: null } }),
+    createAlbum: async () => assert.fail('a recreated album must not be created again'),
+    updateAlbumVersion: async (input: { episodes: Record<string, unknown>[] }) => {
+      submittedEpisodes.push(...input.episodes);
+      return { version: 1, episodeIdMap: { seq_1: 'new-episode-1' }, requestId: 'update-log', publishStatus: 0 };
+    }
+  };
+
+  await processPlatformSyncJobs(prisma as any, api as any, { now: () => new Date('2026-09-23T10:00:00.000Z') });
+
+  assert.equal(submittedEpisodes[0].episode_id, undefined);
+  assert.equal((episodeUpdates[0].data as Record<string, unknown>).tiktokEpisodeId, 'new-episode-1');
+  assert.equal((syncJobUpdates.at(-1)?.data as Record<string, unknown>).status, 'SUCCEEDED');
+});
+
+test('waits after an initial album creation reports not found without creating another album', async () => {
+  const syncJobUpdates: Record<string, unknown>[] = [];
+  let creations = 0;
+  const job = {
+    id: 'job-1', kind: 'ALBUM_VERSION', status: 'PENDING', attemptCount: 0,
+    albumId: 'album-1', targetId: 'album-1',
+    snapshotJson: {
+      albumId: 'album-1',
+      albumInfo: { language: 'en', title: 'Drama', seq_num: 1, cover_list: ['cover-1'], year: 2026, album_status: 3, desp: 'Description', drama_type: 2, tag_list: [1] },
+      episodes: [{ localEpisodeId: 'episode-1', title: 'Episode 1', seq: 1, cover_list: ['cover-1'], byteplus_vid: 'vid-1' }]
+    }
+  };
+  const prisma = {
+    platformSyncJob: {
+      findMany: async () => [job],
+      updateMany: async () => ({ count: 1 }),
+      update: async (input: Record<string, unknown>) => { syncJobUpdates.push(input); return input; }
+    },
+    album: {
+      findUnique: async () => ({ id: 'album-1', tiktokAlbumId: null, tiktokVersion: null }),
+      update: async (input: Record<string, unknown>) => input
+    },
+    $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
+  };
+  const api = {
+    createAlbum: async () => { creations += 1; return { albumId: 'new-album-1', requestId: 'create-log' }; },
+    updateAlbumVersion: async () => { throw new TikTokShortDramaApiError('Short drama album not found', '22001', 'update-log'); }
+  };
+
+  await processPlatformSyncJobs(prisma as any, api as any, { now: () => new Date('2026-09-23T10:00:00.000Z') });
+
+  assert.equal(creations, 1);
+  assert.equal((syncJobUpdates.at(-1)?.data as Record<string, unknown>).status, 'PENDING');
+  assert.deepEqual((syncJobUpdates.at(-1)?.data as Record<string, unknown>).providerResponse, { created_album_id: 'new-album-1' });
+});
