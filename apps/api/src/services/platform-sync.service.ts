@@ -66,6 +66,10 @@ function platformError(error: unknown) {
   return { message: error instanceof Error ? error.message.slice(0, 500) : 'TikTok platform sync failed.', retryable: false };
 }
 
+function isTikTokAlbumNotFound(error: unknown) {
+  return error instanceof TikTokShortDramaApiError && error.code === '22001';
+}
+
 function tags(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.filter((tag): tag is number => typeof tag === 'number' && Number.isInteger(tag));
@@ -336,28 +340,54 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
   const album = await prisma.album.findUnique({ where: { id: job.albumId ?? job.targetId }, select: { id: true, tiktokAlbumId: true, tiktokVersion: true } });
   if (!album) throw new Error('剧目不存在。');
   let platformAlbumId = album.tiktokAlbumId;
+  let expectedVersion = album.tiktokVersion ?? undefined;
+  let recreatedAlbum = false;
+  if (platformAlbumId) {
+    try {
+      const queried = await api.queryAlbum({ albumId: platformAlbumId });
+      const current = numberValue(queried.data.current_version);
+      if (current) expectedVersion = current;
+    } catch (error) {
+      if (!isTikTokAlbumNotFound(error)) throw error;
+      // An album may have been created with an earlier Client Key or removed on
+      // TikTok. Its episode IDs cannot be reused with a replacement album.
+      platformAlbumId = null;
+      expectedVersion = undefined;
+      recreatedAlbum = true;
+    }
+  }
   if (!platformAlbumId) {
     const created = await api.createAlbum();
     platformAlbumId = created.albumId;
-    await prisma.album.update({ where: { id: album.id }, data: { tiktokAlbumId: platformAlbumId } });
+    await (prisma.$transaction as any)(async (tx: Db) => {
+      await tx.album.update({ where: { id: album.id }, data: {
+        tiktokAlbumId: platformAlbumId!,
+        ...(recreatedAlbum ? { tiktokVersion: null, onlineVersion: null, platformPublishedVersion: null, platformPublishedAt: null, reviewStatus: null } : {})
+      } });
+      if (recreatedAlbum) await tx.episode.updateMany({ where: { albumId: album.id }, data: { tiktokEpisodeId: null } });
+    });
   }
-  let expectedVersion = album.tiktokVersion ?? undefined;
-  if (platformAlbumId) {
-    const queried = await api.queryAlbum({ albumId: platformAlbumId });
-    const current = numberValue(queried.data.current_version);
-    if (current) expectedVersion = current;
-  }
+  const submittedEpisodes = snapshot.episodes.map(({ localEpisodeId: _localEpisodeId, ...episode }) => {
+    if (!recreatedAlbum) return episode;
+    const { episode_id: _staleEpisodeId, ...newEpisode } = episode;
+    return newEpisode;
+  });
   const result = await api.updateAlbumVersion({
     albumId: platformAlbumId!,
     version: expectedVersion,
     albumInfo: snapshot.albumInfo,
-    episodes: snapshot.episodes.map(({ localEpisodeId: _localEpisodeId, ...episode }) => episode)
+    episodes: submittedEpisodes
   });
   await (prisma.$transaction as any)(async (tx: Db) => {
-    await tx.album.update({ where: { id: album.id }, data: { tiktokAlbumId: platformAlbumId, tiktokVersion: result.version, publishStatus: stringify(result.publishStatus) ?? null } });
+    await tx.album.update({ where: { id: album.id }, data: {
+      tiktokAlbumId: platformAlbumId!,
+      tiktokVersion: result.version,
+      publishStatus: stringify(result.publishStatus) ?? null,
+      ...(recreatedAlbum ? { onlineVersion: null, platformPublishedVersion: null, platformPublishedAt: null, reviewStatus: null } : {})
+    } });
     await Promise.all(snapshot.episodes.map((episode) => {
-      const mapped = result.episodeIdMap[episode.episode_id ?? `seq_${episode.seq}`];
-      return tx.episode.update({ where: { id: episode.localEpisodeId }, data: { tiktokEpisodeId: mapped ?? episode.episode_id, tiktokCoverPicId: episode.cover_list[0] } });
+      const mapped = result.episodeIdMap[recreatedAlbum ? `seq_${episode.seq}` : episode.episode_id ?? `seq_${episode.seq}`];
+      return tx.episode.update({ where: { id: episode.localEpisodeId }, data: { tiktokEpisodeId: mapped ?? (recreatedAlbum ? null : episode.episode_id), tiktokCoverPicId: episode.cover_list[0] } });
     }));
     await completeJob(tx, job, { providerRequestId: result.requestId, providerResponse: { version: result.version, episode_id_map: result.episodeIdMap } }, now);
   });
