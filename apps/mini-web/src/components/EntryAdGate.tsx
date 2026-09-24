@@ -2,6 +2,7 @@ import { AlertCircle, RefreshCw } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { completeAppEntryAd, showAppEntryAd, startAppEntryAdSession, type AppEntryAdSession } from '../features/ads/app-entry-ad';
 import { ensureAnonymousSession } from '../features/auth/anonymous-session';
+import { appName } from '../lib/app-brand';
 import styles from './EntryAdGate.module.css';
 
 type GateState = 'LOADING' | 'BLOCKED' | 'READY';
@@ -10,12 +11,15 @@ type GateStep = 'ANONYMOUS_SESSION' | 'ENTRY_AD_POLICY' | 'ENTRY_AD_PLAYBACK';
 function formatGateError(step: GateStep, cause: unknown) {
   const detail = cause instanceof Error && cause.message ? `: ${cause.message}` : '';
   if (step === 'ANONYMOUS_SESSION') {
-    return `SESSION_BOOTSTRAP_FAILED${detail}`;
+    return `Unable to connect to the app service. Please check the API URL and try again${detail}`;
   }
   if (step === 'ENTRY_AD_POLICY') {
-    return `ENTRY_AD_POLICY_FAILED${detail}`;
+    return `Unable to load the entry-ad policy. Please try again${detail}`;
   }
-  return `ENTRY_AD_PLAYBACK_FAILED${detail}`;
+  if (cause instanceof Error && cause.message === 'ENTRY_AD_UNAVAILABLE') {
+    return 'TikTok does not currently provide this ad placement in Preview. The app can continue without the entry ad.';
+  }
+  return `The entry ad could not be shown. Please try again${detail}`;
 }
 
 export function EntryAdGate({ children }: { children: ReactNode }) {
@@ -67,6 +71,6 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
   }, []);
   if (state === 'READY') return <>{children}</>;
   return <main className={styles.gate} aria-busy={state === 'LOADING'}><section className={styles.surface} aria-live="polite">
-    {state === 'LOADING' ? <><span className={styles.spinner} /><h1>QuicK ReeLS</h1><p>Preparing your next story</p></> : <><AlertCircle size={28} aria-hidden="true" /><h1>Unable to continue</h1><p>{error}</p><button onClick={() => void run()}><RefreshCw size={17} aria-hidden="true" />Try again</button></>}
+    {state === 'LOADING' ? <><span className={styles.spinner} /><h1>{appName}</h1><p>Preparing your next story</p></> : <><AlertCircle size={28} aria-hidden="true" /><h1>Unable to continue</h1><p>{error}</p><button onClick={() => void run()}><RefreshCw size={17} aria-hidden="true" />Try again</button></>}
   </section></main>;
 }
