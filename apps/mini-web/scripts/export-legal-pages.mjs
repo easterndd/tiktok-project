@@ -12,10 +12,11 @@ const packageRoot = resolve(scriptDir, '..');
 const repoRoot = resolve(packageRoot, '..', '..');
 const app = process.argv[2] ?? 'quickreels';
 if (app !== 'quickreels' && app !== 'xu03') throw new Error('Expected quickreels or xu03 as the app name.');
-const appName = app === 'xu03' ? 'xu03' : 'QuicK ReeLS';
+const appName = app === 'xu03' ? 'TaleTV' : 'QuicK ReeLS';
+const publicPath = app === 'xu03' ? 'taletv' : 'quickreels';
 const sourcePath = join(packageRoot, 'src', 'pages', 'legal-docs.ts');
-const outputRoot = join(repoRoot, 'deploy', 'website', app);
-const publicBaseUrl = `https://evergreenprosper.com/${app}`;
+const outputRoot = join(repoRoot, 'deploy', 'website', publicPath);
+const publicBaseUrl = `https://evergreenprosper.com/${publicPath}`;
 
 function loadLegalDocuments(source) {
   const transpiled = ts.transpileModule(source, {
@@ -198,7 +199,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
     <header class="hero">
       <div class="brand">
         <a href="https://evergreenprosper.com/">evergreenprosper</a>
-        <span class="mark">${app === 'xu03' ? 'X3' : 'QR'}</span>
+        <span class="mark">${app === 'xu03' ? 'TV' : 'QR'}</span>
       </div>
       <p class="eyebrow">${legalDocument.eyebrow}</p>
       <h1>${legalDocument.title}</h1>
@@ -207,7 +208,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
         <dl class="meta-panel">${legalDocument.metaHtml}</dl>
       </div>
       <div class="actions">
-        <a href="/${app}/${otherType}">${otherLabel}</a>
+        <a href="/${publicPath}/${otherType}">${otherLabel}</a>
         <a class="primary" href="mailto:${legalContactEmail}">Contact</a>
       </div>
       <div class="markets" aria-label="Supported regional sections">${legalDocument.marketsHtml}</div>
@@ -228,7 +229,6 @@ function renderPage(type, legalDocument, legalContactEmail) {
 const source = await readFile(sourcePath, 'utf8');
 const { legalDocumentForApp, legalContactEmail } = loadLegalDocuments(source);
 
-await rm(outputRoot, { recursive: true, force: true });
 for (const type of ['privacy', 'terms']) {
   const directory = join(outputRoot, type);
   await mkdir(directory, { recursive: true });

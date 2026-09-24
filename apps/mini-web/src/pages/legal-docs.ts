@@ -151,8 +151,8 @@ export function legalDocumentForApp(type: LegalDocumentType, app: 'quickreels' |
   if (app === 'quickreels') return source;
   return {
     ...source,
-    title: source.title.replaceAll('QuicK ReeLS', 'xu03'),
-    introHtml: source.introHtml.replaceAll('QuicK ReeLS', 'xu03'),
-    contentHtml: source.contentHtml.replaceAll('QuicK ReeLS', 'xu03')
+    title: source.title.replaceAll('QuicK ReeLS', 'TaleTV'),
+    introHtml: source.introHtml.replaceAll('QuicK ReeLS', 'TaleTV'),
+    contentHtml: source.contentHtml.replaceAll('QuicK ReeLS', 'TaleTV')
   };
 }

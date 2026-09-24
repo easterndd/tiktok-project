@@ -19,7 +19,7 @@ export function LegalPage({ type }: { type: LegalDocumentType }) {
     <header className={styles.hero}>
       <div className={styles.heroTop}>
         <Link className={styles.backLink} to="/profile"><ArrowLeft size={17} aria-hidden="true" /> Back</Link>
-        <span className={styles.brandMark}>{appKey === 'xu03' ? 'X3' : 'QR'}</span>
+        <span className={styles.brandMark}>{appKey === 'xu03' ? 'TV' : 'QR'}</span>
       </div>
       <p className="eyebrow">{legalDocument.eyebrow}</p>
       <h1>{legalDocument.title}</h1>

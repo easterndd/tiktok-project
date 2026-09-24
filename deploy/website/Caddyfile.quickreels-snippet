@@ -8,10 +8,10 @@ rewrite @quickreelsTerms /quickreels/terms/index.html
 
 header /quickreels/* Cache-Control "public, max-age=300"
 
-@xu03Privacy path /xu03/privacy
-rewrite @xu03Privacy /xu03/privacy/index.html
+@taleTvPrivacy path /taletv/privacy
+rewrite @taleTvPrivacy /taletv/privacy/index.html
 
-@xu03Terms path /xu03/terms
-rewrite @xu03Terms /xu03/terms/index.html
+@taleTvTerms path /taletv/terms
+rewrite @taleTvTerms /taletv/terms/index.html
 
-header /xu03/* Cache-Control "public, max-age=300"
+header /taletv/* Cache-Control "public, max-age=300"
