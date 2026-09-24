@@ -1,5 +1,6 @@
 import { PrismaClient, type UploadJob } from '@prisma/client';
 import { loadEnv } from '../config/env';
+import { xu03Environment } from '../config/mini-apps';
 import {
   ProviderNotConfiguredError,
   UnconfiguredTikTokShortDramaService,
@@ -224,22 +225,32 @@ export async function processJobs(
 }
 
 export async function startUploadWorker() {
-  const env = loadEnv();
-  const prisma = new PrismaClient();
-  const service = env.BYTEPLUS_ACCESS_KEY && env.BYTEPLUS_SECRET_KEY
-    ? new BytePlusVodService(env)
-    : new UnconfiguredTikTokShortDramaService();
-  const platformApi = new TikTokShortDramaApiService(env);
+  const env = { ...loadEnv(), MINI_APP_KEY: 'main' as const };
+  const environments = [env, xu03Environment(env)].filter((item): item is typeof env => item !== null);
+  const contexts = environments.map((contextEnv) => ({
+    env: contextEnv,
+    prisma: new PrismaClient({ datasources: { db: { url: contextEnv.DATABASE_URL } } }),
+    service: contextEnv.BYTEPLUS_ACCESS_KEY && contextEnv.BYTEPLUS_SECRET_KEY
+      ? new BytePlusVodService(contextEnv)
+      : new UnconfiguredTikTokShortDramaService(),
+    platformApi: new TikTokShortDramaApiService(contextEnv)
+  }));
   const run = async () => {
-    await processJobs(prisma, service, {
-      maxRetries: env.UPLOAD_MAX_RETRIES,
-      log: (message, details) => console.info(message, details)
-    }, env);
-    if (platformApi.isConfigured()) {
-      await processPlatformSyncJobs(prisma as any, platformApi, {
-        maxRetries: env.UPLOAD_MAX_RETRIES,
-        log: (message, details) => console.info(message, details)
-      });
+    for (const context of contexts) {
+      try {
+        await processJobs(context.prisma, context.service, {
+          maxRetries: context.env.UPLOAD_MAX_RETRIES,
+          log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
+        }, context.env);
+        if (context.platformApi.isConfigured()) {
+          await processPlatformSyncJobs(context.prisma as any, context.platformApi, {
+            maxRetries: context.env.UPLOAD_MAX_RETRIES,
+            log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
+          });
+        }
+      } catch (error) {
+        console.error(`${context.env.MINI_APP_KEY} worker cycle failed.`, error);
+      }
     }
   };
 
@@ -247,7 +258,7 @@ export async function startUploadWorker() {
   const timer = setInterval(() => void run().catch((error) => console.error('Upload worker cycle failed.', error)), env.UPLOAD_WORKER_INTERVAL_MS || defaultIntervalMs);
   const shutdown = async () => {
     clearInterval(timer);
-    await prisma.$disconnect();
+    await Promise.all(contexts.map((context) => context.prisma.$disconnect()));
   };
   process.once('SIGINT', () => void shutdown());
   process.once('SIGTERM', () => void shutdown());

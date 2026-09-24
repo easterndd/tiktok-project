@@ -35,7 +35,8 @@ function sessionResponse(session: { id: string; mode: 'INTERSTITIAL' | 'REWARDED
 }
 
 export async function readAppEntryAdPolicy(app: FastifyInstance) {
-  return await app.prisma.appEntryAdPolicy.findUnique({ where: { id: policyId } }) ?? disabledPolicy;
+  return await app.prisma.appEntryAdPolicy.findUnique({ where: { id: policyId } })
+    ?? (app.config.MINI_APP_KEY === 'xu03' ? { ...disabledPolicy, placementId: '' } : disabledPolicy);
 }
 
 export async function registerAppEntryAdRoutes(app: FastifyInstance) {

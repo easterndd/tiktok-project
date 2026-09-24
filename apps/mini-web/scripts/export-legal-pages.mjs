@@ -10,9 +10,12 @@ const ts = require('typescript');
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(scriptDir, '..');
 const repoRoot = resolve(packageRoot, '..', '..');
+const app = process.argv[2] ?? 'quickreels';
+if (app !== 'quickreels' && app !== 'xu03') throw new Error('Expected quickreels or xu03 as the app name.');
+const appName = app === 'xu03' ? 'xu03' : 'QuicK ReeLS';
 const sourcePath = join(packageRoot, 'src', 'pages', 'legal-docs.ts');
-const outputRoot = join(repoRoot, 'deploy', 'website', 'quickreels');
-const publicBaseUrl = 'https://evergreenprosper.com/quickreels';
+const outputRoot = join(repoRoot, 'deploy', 'website', app);
+const publicBaseUrl = `https://evergreenprosper.com/${app}`;
 
 function loadLegalDocuments(source) {
   const transpiled = ts.transpileModule(source, {
@@ -43,8 +46,8 @@ function renderPage(type, legalDocument, legalContactEmail) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${legalDocument.title} | QuicK ReeLS</title>
-  <meta name="description" content="${legalDocument.title} for QuicK ReeLS, a TikTok Minis short-drama service operated by evergreenprosper.">
+  <title>${legalDocument.title} | ${appName}</title>
+  <meta name="description" content="${legalDocument.title} for ${appName}, a TikTok Minis short-drama service operated by evergreenprosper.">
   <link rel="canonical" href="${canonicalUrl}">
   <style>
     :root {
@@ -195,7 +198,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
     <header class="hero">
       <div class="brand">
         <a href="https://evergreenprosper.com/">evergreenprosper</a>
-        <span class="mark">QR</span>
+        <span class="mark">${app === 'xu03' ? 'X3' : 'QR'}</span>
       </div>
       <p class="eyebrow">${legalDocument.eyebrow}</p>
       <h1>${legalDocument.title}</h1>
@@ -204,7 +207,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
         <dl class="meta-panel">${legalDocument.metaHtml}</dl>
       </div>
       <div class="actions">
-        <a href="/quickreels/${otherType}">${otherLabel}</a>
+        <a href="/${app}/${otherType}">${otherLabel}</a>
         <a class="primary" href="mailto:${legalContactEmail}">Contact</a>
       </div>
       <div class="markets" aria-label="Supported regional sections">${legalDocument.marketsHtml}</div>
@@ -223,13 +226,13 @@ function renderPage(type, legalDocument, legalContactEmail) {
 }
 
 const source = await readFile(sourcePath, 'utf8');
-const { legalDocuments, legalContactEmail } = loadLegalDocuments(source);
+const { legalDocumentForApp, legalContactEmail } = loadLegalDocuments(source);
 
 await rm(outputRoot, { recursive: true, force: true });
 for (const type of ['privacy', 'terms']) {
   const directory = join(outputRoot, type);
   await mkdir(directory, { recursive: true });
-  await writeFile(join(directory, 'index.html'), renderPage(type, legalDocuments[type], legalContactEmail), 'utf8');
+  await writeFile(join(directory, 'index.html'), renderPage(type, legalDocumentForApp(type, app), legalContactEmail), 'utf8');
 }
 
-console.log(`Exported QuicK ReeLS legal pages to ${outputRoot}`);
+console.log(`Exported ${appName} legal pages to ${outputRoot}`);

@@ -10,6 +10,7 @@ const env: Env = {
   PORT: 3000,
   HOST: '127.0.0.1',
   DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
+  MINI_APP_KEY: 'main',
   API_CORS_ORIGIN: 'http://localhost:5173',
   TRUST_GEO_COUNTRY_HEADER: true,
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters',
@@ -97,10 +98,10 @@ async function createPrismaStub() {
       count: async () => 1
     },
     episode: {
-      findMany: async () => [episode],
+      findMany: async (args?: { where?: { episodeNo?: { in: number[] } } }) => args?.where?.episodeNo?.in ? [episode].filter((item) => args.where!.episodeNo!.in.includes(item.episodeNo)) : [episode],
       findFirst: async () => episode,
       findUnique: async () => episode,
-      create: async () => episode,
+      create: async (args?: { data?: Record<string, unknown> }) => ({ ...episode, ...args?.data, id: `episode-${args?.data?.episodeNo ?? 1}` }),
       update: async () => episode,
       count: async () => 1
     },
@@ -278,7 +279,7 @@ async function createTestApp(envOverrides: Partial<Env> = {}) {
 }
 
 async function token(app: Awaited<ReturnType<typeof createTestApp>>, kind: 'user' | 'admin') {
-  return app.jwt.sign(kind === 'user' ? { sub: 'user-1', kind } : { sub: 'admin-1', kind, role: 'OWNER', tokenVersion: 0 });
+  return app.jwt.sign(kind === 'user' ? { sub: 'user-1', kind, appKey: 'main' } : { sub: 'admin-1', kind, appKey: 'main', role: 'OWNER', tokenVersion: 0 });
 }
 
 describe('QuicK ReeLS API', () => {
@@ -554,6 +555,20 @@ describe('QuicK ReeLS API', () => {
       headers: { authorization: `Bearer ${await token(app, 'admin')}` }
     });
     assert.equal(response.statusCode, 409);
+  });
+
+  it('appends episodes to the selected album without changing its access policy', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const headers = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const payload = { episodes: [{ episodeNo: 4, title: '第 4 集', sortOrder: 4, isFree: false }] };
+    const created = await app.inject({ method: 'POST', url: '/api/v1/admin/albums/album-1/episodes/batch', headers, payload });
+    assert.equal(created.statusCode, 200);
+    assert.equal(created.json().album.accessConfig.freeEpisodeCount, 0);
+    assert.equal(created.json().episodes[0].episodeNo, 4);
+    assert.equal(created.json().episodes[0].status, 'DRAFT');
+    const duplicate = await app.inject({ method: 'POST', url: '/api/v1/admin/albums/album-1/episodes/batch', headers, payload: { episodes: [{ episodeNo: 1, title: 'Duplicate' }] } });
+    assert.equal(duplicate.statusCode, 409);
   });
 
   it('logs administrators in with a password hash and returns an admin token', async () => {

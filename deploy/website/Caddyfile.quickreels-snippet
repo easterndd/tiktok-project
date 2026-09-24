@@ -7,3 +7,11 @@ rewrite @quickreelsPrivacy /quickreels/privacy/index.html
 rewrite @quickreelsTerms /quickreels/terms/index.html
 
 header /quickreels/* Cache-Control "public, max-age=300"
+
+@xu03Privacy path /xu03/privacy
+rewrite @xu03Privacy /xu03/privacy/index.html
+
+@xu03Terms path /xu03/terms
+rewrite @xu03Terms /xu03/terms/index.html
+
+header /xu03/* Cache-Control "public, max-age=300"

@@ -201,3 +201,130 @@ test('waits after an initial album creation reports not found without creating a
   assert.equal((syncJobUpdates.at(-1)?.data as Record<string, unknown>).status, 'PENDING');
   assert.deepEqual((syncJobUpdates.at(-1)?.data as Record<string, unknown>).providerResponse, { created_album_id: 'new-album-1' });
 });
+
+test('reviewing a new version keeps the published old version online', async () => {
+  const updates: Record<string, any>[] = [];
+  const job = { id: 'review-2', kind: 'REVIEW', status: 'PENDING', attemptCount: 0, albumId: 'album-1', snapshotJson: { platformAlbumId: 'platform-1', version: 2, priorityScore: 2 } };
+  const prisma: any = {
+    platformSyncJob: { findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async (input: Record<string, any>) => input },
+    album: { findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2, onlineVersion: 1, platformPublishedVersion: 1 }), update: async (input: Record<string, any>) => { updates.push(input); return input; } },
+    $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
+  };
+  const api = { submitReview: async () => ({ reviewId: 'review-id', requestId: 'request-id' }) };
+  await processPlatformSyncJobs(prisma as any, api as any);
+  assert.equal(updates[0].data.status, 'ONLINE');
+  assert.equal(updates[0].data.reviewStatus, 'REVIEWING');
+});
+
+test('reconciliation keeps old episodes online while the new version is under review', async () => {
+  const episodeUpdates: Record<string, any>[] = [];
+  const albumUpdates: Record<string, any>[] = [];
+  const job = { id: 'reconcile-1', kind: 'RECONCILE', status: 'PENDING', attemptCount: 0, albumId: 'album-1' };
+  const prisma: any = {
+    platformSyncJob: {
+      findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async (input: Record<string, any>) => input,
+      findFirst: async () => ({ snapshotJson: { episodes: [{ localEpisodeId: 'episode-1' }, { localEpisodeId: 'episode-2' }, { localEpisodeId: 'episode-3' }] } })
+    },
+    album: {
+      findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2, onlineVersion: 1 }),
+      update: async (input: Record<string, any>) => { albumUpdates.push(input); return input; }
+    },
+    episode: { updateMany: async (input: Record<string, any>) => { episodeUpdates.push(input); return input; } },
+    $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
+  };
+  const api = { queryAlbum: async (input: { version?: number }) => ({ requestId: 'request-id', data: input.version === 1
+    ? { review_status: 2, episode_info_list: [] }
+    : { current_version: 2, online_version: 1, publish_status: 1, review_status: 1, episode_info_list: [] } }) };
+  await processPlatformSyncJobs(prisma, api as any);
+  assert.equal(albumUpdates[0].data.status, 'ONLINE');
+  assert.equal(albumUpdates[0].data.reviewStatus, '1');
+  assert.equal(episodeUpdates[0].data.status, 'OFFLINE');
+  assert.deepEqual(episodeUpdates[1].where.id.in, ['episode-1', 'episode-2', 'episode-3']);
+  assert.equal(episodeUpdates[1].data.status, 'ONLINE');
+});
+
+test('switching a listed album waits for reconciliation before exposing new episodes', async () => {
+  const episodeUpdates: Record<string, any>[] = [];
+  const albumUpdates: Record<string, any>[] = [];
+  const job = { id: 'online-2', kind: 'SET_ONLINE_VERSION', status: 'PENDING', attemptCount: 0, albumId: 'album-1', snapshotJson: { version: 2 } };
+  const prisma: any = {
+    platformSyncJob: {
+      findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async (input: Record<string, any>) => input,
+      findFirst: async () => ({ snapshotJson: { episodes: [1, 2, 3, 4].map((number) => ({ localEpisodeId: `episode-${number}` })) } })
+    },
+    album: {
+      findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2, onlineVersion: 1, platformPublishedVersion: 1, publishStatus: 'LISTED' }),
+      update: async (input: Record<string, any>) => { albumUpdates.push(input); return input; }
+    },
+    episode: { updateMany: async (input: Record<string, any>) => { episodeUpdates.push(input); return input; } },
+    $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
+  };
+  const api = { queryAlbum: async () => ({ data: { review_status: 2 } }), setOnlineVersion: async () => ({ onlineVersion: 2, requestId: 'request-id' }) };
+  await processPlatformSyncJobs(prisma, api as any);
+  assert.equal(albumUpdates[0].data.onlineVersion, 2);
+  assert.equal(albumUpdates[0].data.platformPublishedVersion, undefined);
+  assert.equal(episodeUpdates.length, 0);
+});
+
+test('reconciliation opens the added episode after the new online version is confirmed', async () => {
+  const episodeUpdates: Record<string, any>[] = [];
+  const albumUpdates: Record<string, any>[] = [];
+  const job = { id: 'reconcile-2', kind: 'RECONCILE', status: 'PENDING', attemptCount: 0, albumId: 'album-1' };
+  const prisma: any = {
+    platformSyncJob: {
+      findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async (input: Record<string, any>) => input,
+      findFirst: async () => ({ snapshotJson: { episodes: [1, 2, 3, 4].map((number) => ({ localEpisodeId: `episode-${number}` })) } })
+    },
+    album: {
+      findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2, onlineVersion: 2, platformPublishedVersion: 1 }),
+      update: async (input: Record<string, any>) => { albumUpdates.push(input); return input; }
+    },
+    episode: { updateMany: async (input: Record<string, any>) => { episodeUpdates.push(input); return input; } },
+    $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
+  };
+  const api = { queryAlbum: async () => ({ requestId: 'request-id', data: { current_version: 2, online_version: 2, publish_status: 1, review_status: 2, episode_info_list: [] } }) };
+  await processPlatformSyncJobs(prisma, api as any);
+  assert.equal(albumUpdates[0].data.platformPublishedVersion, 2);
+  assert.deepEqual(episodeUpdates[1].where.id.in, ['episode-1', 'episode-2', 'episode-3', 'episode-4']);
+});
+
+test('uncertain review result is not replayed automatically', async () => {
+  const updates: Record<string, any>[] = [];
+  const job = { id: 'review-2', kind: 'REVIEW', status: 'PENDING', attemptCount: 0, albumId: 'album-1', snapshotJson: { platformAlbumId: 'platform-1', version: 2 } };
+  const prisma = {
+    platformSyncJob: { findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async (input: Record<string, any>) => { updates.push(input); return input; } },
+    album: { findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2 }) }
+  };
+  const api = { submitReview: async () => { throw new TikTokShortDramaApiError('timeout', undefined, undefined, true); } };
+  await processPlatformSyncJobs(prisma as any, api as any);
+  assert.equal(updates.at(-1)?.data.status, 'CONFLICT');
+  assert.equal(updates.at(-1)?.data.nextAttemptAt, null);
+});
+
+test('a local save failure after TikTok accepts review requires reconciliation', async () => {
+  const updates: Record<string, any>[] = [];
+  const job = { id: 'review-2', kind: 'REVIEW', status: 'PENDING', attemptCount: 0, albumId: 'album-1', snapshotJson: { platformAlbumId: 'platform-1', version: 2 } };
+  const prisma: any = {
+    platformSyncJob: { findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async (input: Record<string, any>) => { updates.push(input); return input; } },
+    album: { findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2 }), update: async () => { throw new Error('database unavailable'); } },
+    $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
+  };
+  const api = { submitReview: async () => ({ reviewId: 'accepted', requestId: 'request-id' }) };
+  await processPlatformSyncJobs(prisma, api as any);
+  assert.equal(updates.at(-1)?.data.status, 'CONFLICT');
+});
+
+test('a stale review job is not replayed after a worker interruption', async () => {
+  const updates: Record<string, any>[] = [];
+  const job = { id: 'review-2', kind: 'REVIEW', status: 'PROCESSING', albumId: 'album-1', startedAt: new Date('2026-09-23T09:00:00.000Z') };
+  const prisma = {
+    platformSyncJob: {
+      findMany: async () => [job],
+      updateMany: async () => ({ count: 1 }),
+      update: async (input: Record<string, any>) => { updates.push(input); return input; }
+    }
+  };
+  const api = { submitReview: async () => assert.fail('stale review must not be resubmitted') };
+  await processPlatformSyncJobs(prisma as any, api as any, { now: () => new Date('2026-09-23T10:00:00.000Z') });
+  assert.equal(updates[0].data.status, 'CONFLICT');
+});

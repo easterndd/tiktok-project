@@ -2,10 +2,9 @@ import { createWriteStream } from 'node:fs';
 import { access, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import archiver from 'archiver';
 
-const appRoot = fileURLToPath(new URL('..', import.meta.url));
+const appRoot = process.cwd();
 const outputRoot = join(appRoot, 'dist');
 const archivePath = join(outputRoot, 'minis.config.zip');
 const files = ['fallback-cover.svg', 'index.html', 'minis.config.json', 'minis.manifest.json'];

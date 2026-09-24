@@ -2,8 +2,9 @@ import type { UiComponent, UiComponentKey } from '@quickreels/shared-types';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../lib/api-client';
 import { defaultUiComponents } from './defaults';
+import { storagePrefix } from '../../lib/app-brand';
 
-const uiComponentsCacheKey = 'quickreels_ui_components';
+const uiComponentsCacheKey = `${storagePrefix}_ui_components`;
 
 type UiComponentsResponse = { items: UiComponent[]; version: number };
 

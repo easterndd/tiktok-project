@@ -145,3 +145,14 @@ export const legalDocuments: Record<LegalDocumentType, LegalDocument> = {
     contentHtml: termsContent
   }
 };
+
+export function legalDocumentForApp(type: LegalDocumentType, app: 'quickreels' | 'xu03'): LegalDocument {
+  const source = legalDocuments[type];
+  if (app === 'quickreels') return source;
+  return {
+    ...source,
+    title: source.title.replaceAll('QuicK ReeLS', 'xu03'),
+    introHtml: source.introHtml.replaceAll('QuicK ReeLS', 'xu03'),
+    contentHtml: source.contentHtml.replaceAll('QuicK ReeLS', 'xu03')
+  };
+}

@@ -1,0 +1,32 @@
+{
+  "name": "xu03",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "pnpm --filter mini-web lint && vite build",
+    "build:minis": "ttdx minis build --prod",
+    "build:minis:release": "pnpm build && ttdx minis build --prod && ttdx minis check --output && node ../mini-web/scripts/check-release.mjs && node ../mini-web/scripts/package-minis-archive.mjs",
+    "preview": "vite preview --host 0.0.0.0",
+    "export:legal": "node ../mini-web/scripts/export-legal-pages.mjs xu03",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@quickreels/shared-types": "workspace:*",
+    "@tanstack/react-query": "^5.90.12",
+    "archiver": "7.0.1",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.6",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2"
+  }
+}

@@ -1,10 +1,11 @@
 import { apiClient, registerUnauthorizedHandler } from '../../lib/api-client';
 import { clearSessionToken, getOrCreateVisitorKey, getSessionToken, isDemoMode, setSessionToken } from '../../lib/storage';
+import { storagePrefix } from '../../lib/app-brand';
 
 let pendingSession: Promise<void> | null = null;
 
 function getOrCreateClientSessionId() {
-  const key = 'quickreels_app_session_id';
+  const key = `${storagePrefix}_app_session_id`;
   const existing = sessionStorage.getItem(key);
   if (existing) return existing;
   const value = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `session-${Date.now()}`;

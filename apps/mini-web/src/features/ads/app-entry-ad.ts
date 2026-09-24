@@ -1,5 +1,6 @@
 import { ApiError, apiClient } from '../../lib/api-client';
 import { isDemoMode } from '../../lib/storage';
+import { storagePrefix } from '../../lib/app-brand';
 
 export type AppEntryAdSession = {
   required: boolean;
@@ -22,7 +23,7 @@ function eventId() {
 }
 
 export function getLaunchId() {
-  const key = 'quickreels_launch_id';
+  const key = `${storagePrefix}_launch_id`;
   const existing = sessionStorage.getItem(key);
   if (existing) return existing;
   const launchId = eventId();

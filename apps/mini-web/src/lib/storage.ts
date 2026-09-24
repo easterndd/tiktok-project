@@ -1,20 +1,22 @@
 import type { Locale } from '@quickreels/shared-types';
 import { useSyncExternalStore } from 'react';
 import { detectLocale } from './i18n';
+import { storagePrefix } from './app-brand';
 
 const validLocales = new Set(['en', 'pt', 'fr', 'id', 'ja', 'es', 'ko', 'th']);
 
-const sessionKey = 'quickreels_access_token';
-const visitorKey = 'quickreels_visitor_key';
+const sessionKey = `${storagePrefix}_access_token`;
+const visitorKey = `${storagePrefix}_visitor_key`;
+const localeKey = `${storagePrefix}_locale`;
 const sessionListeners = new Set<() => void>();
 
 export function getStoredLocale(): Locale {
-  const stored = localStorage.getItem('quickreels_locale');
+  const stored = localStorage.getItem(localeKey);
   return stored && validLocales.has(stored) ? stored as Locale : detectLocale();
 }
 
 export function setStoredLocale(locale: Locale) {
-  localStorage.setItem('quickreels_locale', locale);
+  localStorage.setItem(localeKey, locale);
   localeListeners.forEach((listener) => listener());
 }
 

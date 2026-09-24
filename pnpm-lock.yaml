@@ -132,6 +132,52 @@ importers:
         specifier: ^7.2.2
         version: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(tsx@4.23.13)
 
+  apps/xu03:
+    dependencies:
+      '@quickreels/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
+      '@tanstack/react-query':
+        specifier: ^5.90.12
+        version: 5.102.8(react@19.2.8)
+      archiver:
+        specifier: 7.0.1
+        version: 7.0.1
+      lucide-react:
+        specifier: ^0.468.0
+        version: 0.468.0(react@19.2.8)
+      react:
+        specifier: ^19.2.0
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.0
+        version: 19.2.8(react@19.2.8)
+      react-router-dom:
+        specifier: ^7.9.6
+        version: 7.18.3(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      zustand:
+        specifier: ^5.0.8
+        version: 5.0.15(@types/react@19.2.18)(react@19.2.8)
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.13.3
+      '@types/react':
+        specifier: ^19.2.2
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.2
+        version: 19.2.7(@types/react@19.2.18)
+      '@vitejs/plugin-react':
+        specifier: ^5.1.1
+        version: 5.2.0(supports-color@8.1.1)(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(tsx@4.23.13))
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^7.2.2
+        version: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(tsx@4.23.13)
+
   packages/shared-types:
     devDependencies:
       typescript:

@@ -1,8 +1,9 @@
 import { access, readdir, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL('../dist/', import.meta.url));
+const root = join(process.cwd(), 'dist');
+if (existsSync('.env') && typeof process.loadEnvFile === 'function') process.loadEnvFile('.env');
 const failures = [];
 const apiBaseUrl = process.env.VITE_API_BASE_URL;
 const clientKey = process.env.VITE_TIKTOK_CLIENT_KEY;

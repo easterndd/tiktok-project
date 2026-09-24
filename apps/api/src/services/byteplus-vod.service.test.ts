@@ -8,6 +8,7 @@ const env: Env = {
   PORT: 3000,
   HOST: '127.0.0.1',
   DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
+  MINI_APP_KEY: 'main',
   API_CORS_ORIGIN: 'http://localhost:5173',
   TRUST_GEO_COUNTRY_HEADER: false,
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters',

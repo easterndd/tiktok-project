@@ -1,24 +1,25 @@
 import { ArrowLeft, Mail, ScrollText, ShieldCheck } from 'lucide-react';
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { legalContactEmail, legalDocuments, type LegalDocumentType } from './legal-docs';
+import { legalContactEmail, legalDocumentForApp, type LegalDocumentType } from './legal-docs';
+import { appKey, appName } from '../lib/app-brand';
 import styles from './LegalPage.module.css';
 
 export function LegalPage({ type }: { type: LegalDocumentType }) {
-  const legalDocument = legalDocuments[type];
+  const legalDocument = legalDocumentForApp(type, appKey === 'xu03' ? 'xu03' : 'quickreels');
   const related = type === 'privacy' ? { path: '/terms', label: 'Terms of Service', icon: ScrollText } : { path: '/privacy', label: 'Privacy Policy', icon: ShieldCheck };
   const RelatedIcon = related.icon;
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
-    globalThis.document.title = `${legalDocument.title} | QuicK ReeLS`;
+    globalThis.document.title = `${legalDocument.title} | ${appName}`;
   }, [legalDocument.title]);
 
   return <article className={styles.page}>
     <header className={styles.hero}>
       <div className={styles.heroTop}>
         <Link className={styles.backLink} to="/profile"><ArrowLeft size={17} aria-hidden="true" /> Back</Link>
-        <span className={styles.brandMark}>QR</span>
+        <span className={styles.brandMark}>{appKey === 'xu03' ? 'X3' : 'QR'}</span>
       </div>
       <p className="eyebrow">{legalDocument.eyebrow}</p>
       <h1>{legalDocument.title}</h1>

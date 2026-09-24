@@ -1,0 +1,20 @@
+{
+  "appId": "REPLACE_WITH_XU03_APP_ID",
+  "dev": {
+    "name": "xu03",
+    "host": "localhost",
+    "port": 5175,
+    "iconUrl": "",
+    "desc": "xu03 is a TikTok Minis short-drama app featuring bite-sized series in romance, family, suspense, and more. Viewers can discover stories, watch available free episodes, resume viewing from their history, and unlock selected episodes through rewarded ads where available. Content availability varies by region.",
+    "ppLink": "https://evergreenprosper.com/xu03/privacy",
+    "tosLink": "https://evergreenprosper.com/xu03/terms"
+  },
+  "navbar": {
+    "bgColorLight": "#0f172a",
+    "bgColorDark": "#0f172a"
+  },
+  "build": {
+    "htmlEntry": "index.html",
+    "outputDir": "dist"
+  }
+}

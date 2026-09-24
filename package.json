@@ -5,6 +5,7 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "dev:mini": "pnpm --filter mini-web dev",
+    "dev:xu03": "pnpm --filter xu03 dev",
     "dev:api": "pnpm --filter api dev",
     "dev:admin": "pnpm --filter admin-web dev",
     "dev:worker": "pnpm --filter api worker",

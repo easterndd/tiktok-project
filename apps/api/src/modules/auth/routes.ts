@@ -26,7 +26,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       create: { userId: user.id, clientSessionId, platform, clientVersion, source },
       update: { platform, clientVersion, source }
     });
-    const accessToken = await app.jwt.sign({ sub: user.id, kind: 'user' }, { expiresIn: app.config.USER_JWT_EXPIRES_IN });
+    const accessToken = await app.jwt.sign({ sub: user.id, kind: 'user', appKey: app.config.MINI_APP_KEY }, { expiresIn: app.config.USER_JWT_EXPIRES_IN });
     return {
       accessToken,
       expiresIn: app.config.USER_JWT_EXPIRES_IN,

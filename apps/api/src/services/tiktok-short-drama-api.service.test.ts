@@ -4,7 +4,7 @@ import type { Env } from '../config/env';
 import { TikTokShortDramaApiService } from './tiktok-short-drama-api.service';
 
 const env: Env = {
-  NODE_ENV: 'test', PORT: 3000, HOST: '127.0.0.1', DATABASE_URL: 'postgresql://test:test@localhost:5432/test', API_CORS_ORIGIN: 'http://localhost:5173', TRUST_GEO_COUNTRY_HEADER: false,
+  NODE_ENV: 'test', PORT: 3000, HOST: '127.0.0.1', DATABASE_URL: 'postgresql://test:test@localhost:5432/test', MINI_APP_KEY: 'main', API_CORS_ORIGIN: 'http://localhost:5173', TRUST_GEO_COUNTRY_HEADER: false,
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters', USER_JWT_EXPIRES_IN: 3600, ADMIN_JWT_EXPIRES_IN: 28_800,
   ADMIN_BOOTSTRAP_EMAIL: undefined, ADMIN_BOOTSTRAP_PASSWORD: undefined,
   BYTEPLUS_ACCOUNT_ID: 'account-1', BYTEPLUS_SPACE_NAME: 'space-1', BYTEPLUS_REGION: 'ap-singapore-1', BYTEPLUS_ACCESS_KEY: undefined, BYTEPLUS_SECRET_KEY: undefined, BYTEPLUS_VOD_ENDPOINT: 'https://vod.byteplusapi.com',

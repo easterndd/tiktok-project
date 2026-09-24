@@ -12,7 +12,6 @@ export function publicAlbumWhere(env: Env): any {
     status: 'ONLINE',
     platformPublishedVersion: { not: null },
     onlineVersion: { not: null },
-    reviewStatus: 'PASSED',
     publishStatus: 'LISTED'
   };
 }
@@ -24,7 +23,6 @@ export function isPlatformPublished(album: any, env: Env): boolean {
     && album.platformPublishedVersion !== undefined
     && album.onlineVersion !== null
     && album.onlineVersion !== undefined
-    && album.reviewStatus === 'PASSED'
     && album.publishStatus === 'LISTED';
 }
 

@@ -4,6 +4,7 @@ import styles from './App.module.css';
 import { t } from '../lib/i18n';
 import { useLocale } from '../lib/storage';
 import { componentIsEnabled, useUiComponents } from '../features/cms/ui-components';
+import { appKey, appName } from '../lib/app-brand';
 
 function NavItem({ to, label, icon: Icon }: { to: string; label: string; icon: typeof Compass }) {
   return <NavLink to={to} className={({ isActive }) => `${styles.navItem} ${isActive ? styles.navActive : ''}`}>{({ isActive }) => <><Icon size={19} strokeWidth={isActive ? 2.4 : 1.8} aria-hidden="true" /><span>{label}</span></>}</NavLink>;
@@ -19,9 +20,9 @@ export function App() {
 
   return <div className={styles.appShell}>
     {!isWatchPage && componentIsEnabled(ui, 'APP_TOPBAR') && <header className={styles.topbar}>
-      <button className={styles.brandButton} onClick={() => navigate('/')} aria-label="QuicKReeL home">
+      <button className={styles.brandButton} onClick={() => navigate('/')} aria-label={`${appName} home`}>
         <span className={styles.brandMark}><Film size={18} aria-hidden="true" /></span>
-        <span>QuicK<span>ReeLS</span></span>
+        {appKey === 'xu03' ? <span>{appName}</span> : <span>QuicK<span>ReeLS</span></span>}
       </button>
       <div className={styles.topbarActions}>
         <button className={styles.topIcon} onClick={() => navigate('/?search=1')} aria-label={t(locale, 'search')} title={t(locale, 'search')}><Search size={19} aria-hidden="true" /></button>

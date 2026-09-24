@@ -78,6 +78,7 @@ const dramaInput = z.object({
     coverAssetId: z.string().min(1).max(128).optional().nullable()
   })).min(1).max(500)
 });
+const appendEpisodesInput = z.object({ episodes: dramaInput.shape.episodes });
 const jobParams = z.object({ jobId: z.string().min(1).max(128) });
 const blockParams = z.object({ blockId: z.string().min(1).max(128) });
 const blockItemParams = z.object({ blockId: z.string().min(1).max(128), itemId: z.string().min(1).max(128) });
@@ -338,7 +339,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     }
     await app.prisma.adminUser.update({ where: { id: admin.id }, data: { lastLoginAt: new Date() } });
     const accessToken = await app.jwt.sign(
-      { sub: admin.id, kind: 'admin', role: admin.role, tokenVersion: admin.tokenVersion },
+      { sub: admin.id, kind: 'admin', appKey: app.config.MINI_APP_KEY, role: admin.role, tokenVersion: admin.tokenVersion },
       { expiresIn: app.config.ADMIN_JWT_EXPIRES_IN }
     );
     return { accessToken, expiresIn: app.config.ADMIN_JWT_EXPIRES_IN, admin: { id: admin.id, email: admin.email, role: admin.role } };
@@ -445,7 +446,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/admin/episodes', { preHandler: requireAdmin }, async () => {
     const episodes = await app.prisma.episode.findMany({
       orderBy: [{ album: { title: 'asc' } }, { sortOrder: 'asc' }],
-      select: { id: true, albumId: true, episodeNo: true, title: true, status: true, byteplusVid: true, byteplusCoverUrl: true, coverUrl: true, durationMs: true, tiktokEpisodeId: true, album: { select: { title: true, status: true, tiktokAlbumId: true } } }
+      select: { id: true, albumId: true, episodeNo: true, title: true, sortOrder: true, status: true, byteplusVid: true, byteplusCoverUrl: true, coverUrl: true, durationMs: true, tiktokEpisodeId: true, album: { select: { title: true, status: true, tiktokAlbumId: true } } }
     });
     return { items: episodes };
   });
@@ -535,8 +536,11 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/admin/dramas', { preHandler: requireAdmin }, async (request) => {
+  app.post('/admin/dramas', { preHandler: requirePermission('content.write') }, async (request) => {
     const input = dramaInput.parse(request.body);
+    if (new Set(input.episodes.map((episode) => episode.episodeNo)).size !== input.episodes.length) {
+      throw Object.assign(new Error('分集集号不能重复。'), { statusCode: 400 });
+    }
     const albumCover = await validateReadyCover(app, input.coverAssetId);
     const episodeCoverIds = Array.from(new Set(input.episodes.flatMap((episode) => episode.coverAssetId ? [episode.coverAssetId] : [])));
     const episodeCovers = episodeCoverIds.length ? await app.prisma.coverAsset.findMany({ where: { id: { in: episodeCoverIds }, status: 'READY' } }) : [];
@@ -579,6 +583,48 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       return { album, episodes };
     });
     return result;
+  });
+
+  app.post('/admin/albums/:albumId/episodes/batch', { preHandler: requirePermission('content.write') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    const { episodes: inputEpisodes } = appendEpisodesInput.parse(request.body);
+    const numbers = inputEpisodes.map((episode) => episode.episodeNo);
+    if (new Set(numbers).size !== numbers.length) throw Object.assign(new Error('新增分集集号不能重复。'), { statusCode: 400 });
+    const coverIds = [...new Set(inputEpisodes.flatMap((episode) => episode.coverAssetId ? [episode.coverAssetId] : []))];
+    const covers = coverIds.length ? await app.prisma.coverAsset.findMany({ where: { id: { in: coverIds }, status: 'READY' } }) : [];
+    if (covers.length !== coverIds.length) throw Object.assign(new Error('一个或多个分集封面尚未准备就绪。'), { statusCode: 400 });
+    const coverById = new Map(covers.map((cover) => [cover.id, cover]));
+    try {
+      return await app.prisma.$transaction(async (tx) => {
+        const album = await tx.album.findUnique({ where: { id: albumId }, select: { id: true, title: true, accessConfig: true, _count: { select: { episodes: true } } } });
+        if (!album) throw Object.assign(new Error('目标剧集不存在。'), { statusCode: 404 });
+        if (album._count.episodes + inputEpisodes.length > 500) throw Object.assign(new Error('单部剧集最多 500 集。'), { statusCode: 400 });
+        const existing = await tx.episode.findMany({ where: { albumId, episodeNo: { in: numbers } }, select: { episodeNo: true } });
+        if (existing.length) throw Object.assign(new Error(`集号已存在：${existing.map((episode) => episode.episodeNo).join('、')}。`), { statusCode: 409 });
+        const episodes = [];
+        for (const input of inputEpisodes) {
+          const cover = input.coverAssetId ? coverById.get(input.coverAssetId) : null;
+          episodes.push(await tx.episode.create({ data: {
+            albumId,
+            episodeNo: input.episodeNo,
+            title: input.title,
+            description: input.description,
+            sortOrder: input.sortOrder ?? input.episodeNo,
+            isFree: input.isFree,
+            coverAssetId: cover?.id,
+            coverUrl: cover?.publicUrl,
+            status: 'DRAFT'
+          } }));
+        }
+        await tx.auditLog.create({ data: { adminUserId: request.user.sub, action: 'APPEND', resource: 'Album', resourceId: albumId, metadata: { episodeNos: numbers } as never } });
+        return { album: { id: album.id, title: album.title, accessConfig: album.accessConfig }, episodes };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw Object.assign(new Error('集号已被其他操作占用，请刷新分集列表后重试。'), { statusCode: 409 });
+      }
+      throw error;
+    }
   });
 
   app.post('/admin/albums', { preHandler: requireAdmin }, async (request) => {

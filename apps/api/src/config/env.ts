@@ -18,7 +18,8 @@ const environment = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   HOST: z.string().default('0.0.0.0'),
   DATABASE_URL: z.string().url(),
-  API_CORS_ORIGIN: z.string().default('http://localhost:5173,http://localhost:5174'),
+  XU03_DATABASE_URL: z.string().url().optional(),
+  API_CORS_ORIGIN: z.string().default('http://localhost:5173,http://localhost:5174,http://localhost:5175'),
   // Enable only when the public API is behind a proxy that removes client
   // supplied X-Geo-Country and writes a verified ISO 3166-1 alpha-2 value.
   TRUST_GEO_COUNTRY_HEADER: z.coerce.boolean().default(false),
@@ -35,6 +36,9 @@ const environment = z.object({
   BYTEPLUS_VOD_ENDPOINT: z.string().url().default('https://vod.byteplusapi.com'),
   TIKTOK_CLIENT_KEY: z.string().min(1).optional(),
   TIKTOK_CLIENT_SECRET: z.string().min(1).optional(),
+  XU03_TIKTOK_CLIENT_KEY: z.string().min(1).optional(),
+  XU03_TIKTOK_CLIENT_SECRET: z.string().min(1).optional(),
+  MINI_APP_KEY: z.enum(['main', 'xu03']).default('main'),
   TIKTOK_SHORT_DRAMA_API_BASE: z.string().url().default('https://open.tiktokapis.com'),
   API_PUBLIC_BASE_URL: z.string().url().optional(),
   COVER_ASSET_STORAGE_DIR: z.string().min(1).default('tmp/cover-assets'),

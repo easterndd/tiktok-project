@@ -12,14 +12,15 @@ const permissionsByRole: Record<AdminRole, ReadonlySet<AdminPermission | '*'> > 
 
 declare module '@fastify/jwt' {
   interface FastifyJWT {
-    payload: { sub: string; kind: 'user' | 'admin'; role?: AdminRole; tokenVersion?: number };
-    user: { sub: string; kind: 'user' | 'admin'; role?: AdminRole; tokenVersion?: number };
+    payload: { sub: string; kind: 'user' | 'admin'; appKey: 'main' | 'xu03'; role?: AdminRole; tokenVersion?: number };
+    user: { sub: string; kind: 'user' | 'admin'; appKey: 'main' | 'xu03'; role?: AdminRole; tokenVersion?: number };
   }
 }
 
 export async function requireUser(request: FastifyRequest) {
   await request.jwtVerify();
   if (request.user.kind !== 'user') throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
+  if (request.user.appKey !== request.server.config.MINI_APP_KEY) throw Object.assign(new Error('Wrong mini app session'), { statusCode: 401 });
 }
 
 function permissionForRequest(request: FastifyRequest): AdminPermission {
@@ -39,6 +40,7 @@ function forbidden() {
 export async function requireAdmin(request: FastifyRequest) {
   await request.jwtVerify();
   if (request.user.kind !== 'admin' || request.user.tokenVersion === undefined) throw forbidden();
+  if (request.user.appKey !== request.server.config.MINI_APP_KEY) throw Object.assign(new Error('Wrong mini app session'), { statusCode: 401 });
   const admin = await request.server.prisma.adminUser.findUnique({
     where: { id: request.user.sub },
     select: { role: true, status: true, tokenVersion: true }

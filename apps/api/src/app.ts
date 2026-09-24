@@ -3,11 +3,13 @@ import multipart from '@fastify/multipart';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import type { PrismaClient } from '@prisma/client';
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 import type { Env } from './config/env';
+import { xu03Environment } from './config/mini-apps';
+import { PrismaClient as DatabaseClient } from '@prisma/client';
 import { registerAlbumRoutes } from './modules/albums/routes';
 import { registerAuthRoutes } from './modules/auth/routes';
 import { registerEpisodeRoutes } from './modules/episodes/routes';
@@ -71,9 +73,10 @@ function isMiniBootstrapRequest(url: string) {
   return miniBootstrapPaths.has(url.split('?', 1)[0]);
 }
 
-export async function buildApp(env: Env, options: { prisma?: PrismaClient } = {}) {
+export async function buildApp(env: Env, options: { prisma?: PrismaClient; xu03Prisma?: PrismaClient } = {}) {
+  const mainEnv: Env = { ...env, MINI_APP_KEY: 'main' };
   const app = Fastify({ logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' } });
-  app.decorate('config', env);
+  const xu03Env = xu03Environment(mainEnv);
   registerErrorHandler(app);
   const configuredCorsOrigins = env.API_CORS_ORIGIN.split(',');
   await app.register(cors, {
@@ -146,19 +149,29 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient } = {}
   app.get('/ready', readiness);
   app.get('/health', readiness);
 
-  await app.register(async (api) => {
-    await registerAuthRoutes(api);
-    await registerAppEntryAdRoutes(api);
-    await registerAlbumRoutes(api);
-    await registerEpisodeRoutes(api);
-    await registerProgressRoutes(api);
-    await registerHomeRoutes(api);
-    await registerSearchRoutes(api);
-    await registerInteractionRoutes(api);
-    await registerProfileRoutes(api);
-    await registerAdRoutes(api);
-    await registerUiRoutes(api);
-    await registerAdminRoutes(api);
-  }, { prefix: '/api/v1' });
+  const registerContext = async (context: FastifyInstance, contextEnv: Env, prisma?: PrismaClient) => {
+    context.decorate('config', contextEnv);
+    await registerPrisma(context, prisma);
+    await context.register(async (api) => {
+      await registerAuthRoutes(api);
+      await registerAppEntryAdRoutes(api);
+      await registerAlbumRoutes(api);
+      await registerEpisodeRoutes(api);
+      await registerProgressRoutes(api);
+      await registerHomeRoutes(api);
+      await registerSearchRoutes(api);
+      await registerInteractionRoutes(api);
+      await registerProfileRoutes(api);
+      await registerAdRoutes(api);
+      await registerUiRoutes(api);
+      await registerAdminRoutes(api);
+    });
+  };
+  await app.register((context) => registerContext(context, mainEnv, app.prisma), { prefix: '/api/v1' });
+  if (xu03Env) {
+    const xu03Prisma = options.xu03Prisma ?? new DatabaseClient({ datasources: { db: { url: xu03Env.DATABASE_URL } } });
+    await app.register((context) => registerContext(context, xu03Env, xu03Prisma), { prefix: '/api/xu03/v1' });
+    if (!options.xu03Prisma) app.addHook('onClose', async () => xu03Prisma.$disconnect());
+  }
   return app;
 }
