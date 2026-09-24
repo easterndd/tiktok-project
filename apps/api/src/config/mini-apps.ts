@@ -1,6 +1,6 @@
 import type { Env } from './env';
 
-export type MiniAppKey = 'main' | 'xu03';
+export type MiniAppKey = 'main' | 'taletv';
 
 export type MiniAppPlatformConfig = {
   key: MiniAppKey;
@@ -9,28 +9,34 @@ export type MiniAppPlatformConfig = {
   appId?: string;
 };
 
-export function xu03Environment(env: Env): Env | null {
-  if (!env.XU03_DATABASE_URL) return null;
+export type MiniAppAdConfig = {
+  key: MiniAppKey;
+  rewardedPlacementId: string;
+  appEntryPlacementId: string;
+};
+
+export function taletvEnvironment(env: Env): Env | null {
+  if (!env.TALETV_DATABASE_URL) return null;
   const main = new URL(env.DATABASE_URL);
-  const xu03 = new URL(env.XU03_DATABASE_URL);
-  const sameDatabase = main.host === xu03.host && main.pathname === xu03.pathname;
+  const taletv = new URL(env.TALETV_DATABASE_URL);
+  const sameDatabase = main.host === taletv.host && main.pathname === taletv.pathname;
   const mainSchema = main.searchParams.get('schema') ?? 'public';
-  const xu03Schema = xu03.searchParams.get('schema') ?? 'public';
-  if (sameDatabase && mainSchema === xu03Schema) {
-    throw new Error('XU03_DATABASE_URL must use a different database or PostgreSQL schema from DATABASE_URL.');
+  const taletvSchema = taletv.searchParams.get('schema') ?? 'public';
+  if (sameDatabase && mainSchema === taletvSchema) {
+    throw new Error('TALETV_DATABASE_URL must use a different database or PostgreSQL schema from DATABASE_URL.');
   }
   return {
     ...env,
-    MINI_APP_KEY: 'xu03',
-    DATABASE_URL: env.XU03_DATABASE_URL,
-    TIKTOK_CLIENT_KEY: env.XU03_TIKTOK_CLIENT_KEY,
-    TIKTOK_CLIENT_SECRET: env.XU03_TIKTOK_CLIENT_SECRET
+    MINI_APP_KEY: 'taletv',
+    DATABASE_URL: env.TALETV_DATABASE_URL,
+    TIKTOK_CLIENT_KEY: env.TALETV_TIKTOK_CLIENT_KEY,
+    TIKTOK_CLIENT_SECRET: env.TALETV_TIKTOK_CLIENT_SECRET
   };
 }
 
 export function miniAppEnvironment(env: Env, key: MiniAppKey): Env | null {
   if (key === 'main') return { ...env, MINI_APP_KEY: 'main' };
-  return xu03Environment({ ...env, MINI_APP_KEY: 'main' });
+  return taletvEnvironment({ ...env, MINI_APP_KEY: 'main' });
 }
 
 export function miniAppPlatformConfig(env: Env, key: MiniAppKey): MiniAppPlatformConfig {
@@ -44,8 +50,23 @@ export function miniAppPlatformConfig(env: Env, key: MiniAppKey): MiniAppPlatfor
   }
   return {
     key,
-    clientKey: env.XU03_TIKTOK_CLIENT_KEY,
-    clientSecret: env.XU03_TIKTOK_CLIENT_SECRET,
-    appId: env.XU03_TIKTOK_APP_ID
+    clientKey: env.TALETV_TIKTOK_CLIENT_KEY,
+    clientSecret: env.TALETV_TIKTOK_CLIENT_SECRET,
+    appId: env.TALETV_TIKTOK_APP_ID
+  };
+}
+
+export function miniAppAdConfig(env: Env, key: MiniAppKey = env.MINI_APP_KEY): MiniAppAdConfig {
+  if (key === 'main') {
+    return {
+      key,
+      rewardedPlacementId: env.REWARDED_PLACEMENT_ID,
+      appEntryPlacementId: env.APP_ENTRY_PLACEMENT_ID
+    };
+  }
+  return {
+    key,
+    rewardedPlacementId: env.TALETV_REWARDED_PLACEMENT_ID,
+    appEntryPlacementId: env.TALETV_APP_ENTRY_PLACEMENT_ID
   };
 }

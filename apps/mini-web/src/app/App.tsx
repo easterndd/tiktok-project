@@ -22,7 +22,7 @@ export function App() {
     {!isWatchPage && componentIsEnabled(ui, 'APP_TOPBAR') && <header className={styles.topbar}>
       <button className={styles.brandButton} onClick={() => navigate('/')} aria-label={`${appName} home`}>
         <span className={styles.brandMark}><Film size={18} aria-hidden="true" /></span>
-        {appKey === 'xu03' ? <span>{appName}</span> : <span>QuicK<span>ReeLS</span></span>}
+        {appKey === 'taletv' ? <span>{appName}</span> : <span>QuicK<span>ReeLS</span></span>}
       </button>
       <div className={styles.topbarActions}>
         <button className={styles.topIcon} onClick={() => navigate('/?search=1')} aria-label={t(locale, 'search')} title={t(locale, 'search')}><Search size={19} aria-hidden="true" /></button>

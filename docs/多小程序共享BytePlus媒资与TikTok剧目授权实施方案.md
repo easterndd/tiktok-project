@@ -2,13 +2,13 @@
 
 ## 1. 文档目的
 
-本文用于指导 QuicK ReeLS、xu03 以及后续其他 TikTok Mini App 复用同一套 BytePlus VOD 媒资，并通过 TikTok 官方短剧媒资授权机制复用同一个 TikTok 剧目、版本、分集和审核结果。
+本文用于指导 QuicK ReeLS、taletv 以及后续其他 TikTok Mini App 复用同一套 BytePlus VOD 媒资，并通过 TikTok 官方短剧媒资授权机制复用同一个 TikTok 剧目、版本、分集和审核结果。
 
 本文针对当前仓库的实际结构编写：
 
 - 一个 API 进程同时服务多个小程序。
 - QuicK ReeLS 使用 `/api/v1`。
-- xu03 使用 `/api/xu03/v1`。
+- taletv 使用 `/api/taletv/v1`。
 - 两个小程序目前使用不同的 PostgreSQL schema 或数据库。
 - 两个小程序可以使用同一个 BytePlus Account ID、VOD Space、Region 和 AK/SK。
 - 当前 `Album`、`Episode`、`PlatformSyncJob` 以及 TikTok 平台 ID 主要保存在各自小程序的数据库上下文中。
@@ -48,7 +48,7 @@
 
 ```text
 QuickReels 创建 album-A 并审核通过
-xu03 创建 album-B
+taletv 创建 album-B
 把 album-A 的 review_status 直接复制到 album-B
 ```
 
@@ -67,7 +67,7 @@ TikTok 官方公开 API 没有提供“把一个 `album_id + version` 的审核�
 仍然需要分别处理：
 
 - QuicK ReeLS Mini App 自身的代码版本审核。
-- xu03 Mini App 自身的代码版本审核。
+- taletv Mini App 自身的代码版本审核。
 - 每个 Mini App 自己的 Client Key、Client Secret、App ID、隐私协议和产品信息。
 
 正确理解是：
@@ -205,10 +205,10 @@ Album.publishStatus
 
 ```text
 /api/v1       -> mainEnv       -> 主数据库上下文
-/api/xu03/v1  -> xu03Env       -> xu03 数据库上下文
+/api/taletv/v1  -> taletvEnv       -> taletv 数据库上下文
 ```
 
-`apps/api/src/config/mini-apps.ts` 会为 xu03 替换：
+`apps/api/src/config/mini-apps.ts` 会为 taletv 替换：
 
 ```text
 DATABASE_URL
@@ -222,14 +222,14 @@ MINI_APP_KEY
 ```text
 QuickReels.Episode.byteplusVid
 和
-xu03.Episode.byteplusVid
+taletv.Episode.byteplusVid
 ```
 
 成为两个互不认识的字段。
 
 ### 4.3 当前逻辑的具体问题
 
-当前 `enqueueVideoSync()` 的前置条件是本地 `Episode.byteplusVid` 存在；如果 xu03 的内容记录没有这个字段，后台会要求先在 xu03 上重新上传或重新绑定。
+当前 `enqueueVideoSync()` 的前置条件是本地 `Episode.byteplusVid` 存在；如果 taletv 的内容记录没有这个字段，后台会要求先在 taletv 上重新上传或重新绑定。
 
 当前 `enqueueAlbumVersionSync()` 又要求：
 
@@ -340,7 +340,7 @@ SharedTikTokAlbum
 
 MiniAppAlbumAuthorization
   ├── quickreels -> AUTHORIZED
-  └── xu03       -> AUTHORIZED
+  └── taletv       -> AUTHORIZED
 ```
 
 ### 5.3 核心原则
@@ -358,7 +358,7 @@ MiniAppAlbumAuthorization
 
 ### 6.1 推荐：增加共享数据库 schema
 
-如果 QuicK ReeLS 和 xu03 使用的是同一个 PostgreSQL 数据库，建议新增：
+如果 QuicK ReeLS 和 taletv 使用的是同一个 PostgreSQL 数据库，建议新增：
 
 ```text
 shared_platform
@@ -389,7 +389,7 @@ PLATFORM_SHARED_DATABASE_URL=postgresql://.../quickreels-platform?schema=public
 
 API 进程额外创建一个 `sharedPlatformPrisma` 客户端，所有共享媒资和 TikTok 授权任务都通过这个客户端读写。
 
-不要把共享媒资只放在主小程序数据库中。否则主小程序数据库不可用时，xu03 无法获取媒资授权状态。
+不要把共享媒资只放在主小程序数据库中。否则主小程序数据库不可用时，taletv 无法获取媒资授权状态。
 
 ### 6.3 不建议：只在两个业务 schema 各复制一份字段
 
@@ -397,7 +397,7 @@ API 进程额外创建一个 `sharedPlatformPrisma` 客户端，所有共享媒�
 
 ```text
 main.Episode.byteplusVid = V001
-xu03.Episode.byteplusVid = V001
+taletv.Episode.byteplusVid = V001
 ```
 
 问题：
@@ -604,12 +604,12 @@ model SharedPlatformOperation {
 
 ## 8. 小程序注册配置
 
-当前代码只有 `main` 和 `xu03` 两个上下文，后续应从硬编码切换为服务端小程序注册表。
+当前代码只有 `main` 和 `taletv` 两个上下文，后续应从硬编码切换为服务端小程序注册表。
 
 ### 8.1 推荐配置
 
 ```env
-MINI_APPS_JSON=[{"key":"main","name":"QuicK ReeLS","clientKey":"...","appId":"..."},{"key":"xu03","name":"xu03","clientKey":"...","appId":"..."}]
+MINI_APPS_JSON=[{"key":"main","name":"QuicK ReeLS","clientKey":"...","appId":"..."},{"key":"taletv","name":"taletv","clientKey":"...","appId":"..."}]
 PLATFORM_SHARED_DATABASE_URL=...
 SHARED_PLATFORM_OWNER_APP_KEY=main
 ```
@@ -619,8 +619,8 @@ SHARED_PLATFORM_OWNER_APP_KEY=main
 ```env
 TIKTOK_CLIENT_KEY=...
 TIKTOK_CLIENT_SECRET=...
-XU03_TIKTOK_CLIENT_KEY=...
-XU03_TIKTOK_CLIENT_SECRET=...
+TALETV_TIKTOK_CLIENT_KEY=...
+TALETV_TIKTOK_CLIENT_SECRET=...
 ```
 
 服务端应提供：
@@ -830,21 +830,21 @@ POST /admin/episodes/:episodeId/bind-shared-media
 
 ### 11.2 授权到目标小程序
 
-管理员在主剧目详情中选择目标小程序，例如 `xu03`：
+管理员在主剧目详情中选择目标小程序，例如 `taletv`：
 
 ```text
 1. 校验主剧目已经有 tiktokAlbumId
 2. 校验主版本已经审核通过
 3. 校验主剧目已设置线上版本
-4. 校验 xu03 已配置 client_key
-5. 校验 xu03 与共享 BytePlus Account ID 绑定
+4. 校验 taletv 已配置 client_key
+5. 校验 taletv 与共享 BytePlus Account ID 绑定
 6. 创建 MiniAppAlbumAuthorization(PENDING)
 7. 创建 SharedPlatformOperation(AUTHORIZE_ALBUM)
 8. Worker 调用 album/authorize
 9. 保存授权结果
 10. 使用目标上下文对账
-11. 标记 xu03 = AUTHORIZED
-12. 建立 xu03 本地 Album/Episode 映射
+11. 标记 taletv = AUTHORIZED
+12. 建立 taletv 本地 Album/Episode 映射
 ```
 
 ### 11.3 目标小程序不再走重复送审
@@ -1043,8 +1043,8 @@ POST /admin/shared/albums/:sharedAlbumId/authorizations
 
 ```json
 {
-  "targetMiniAppKey": "xu03",
-  "localAlbumId": "xu03-local-album-id"
+  "targetMiniAppKey": "taletv",
+  "localAlbumId": "taletv-local-album-id"
 }
 ```
 
@@ -1199,13 +1199,13 @@ CONFLICT
 | 当前版本 | TikTok 当前版本 |
 | 审核状态 | 平台真实状态 |
 | 线上版本 | 平台真实状态 |
-| 目标小程序 | xu03、其他已注册小程序 |
+| 目标小程序 | taletv、其他已注册小程序 |
 | 授权状态 | 待授权、处理中、已授权、失败、冲突 |
 | 最近对账 | 最后一次查询时间 |
 
 ### 15.2 目标小程序页面
 
-当当前后台选择 `xu03` 时：
+当当前后台选择 `taletv` 时：
 
 如果存在已授权主剧目：
 
@@ -1301,11 +1301,11 @@ Episode.tiktokVideoStatus
 pg_dump --format=custom --file=before-shared-platform.dump "$DATABASE_URL"
 ```
 
-如果主库和 xu03 是不同数据库，分别备份：
+如果主库和 taletv 是不同数据库，分别备份：
 
 ```bash
 pg_dump --format=custom --file=before-main.dump "$MAIN_DATABASE_URL"
-pg_dump --format=custom --file=before-xu03.dump "$XU03_DATABASE_URL"
+pg_dump --format=custom --file=before-taletv.dump "$TALETV_DATABASE_URL"
 ```
 
 同时保存：
@@ -1366,16 +1366,16 @@ SharedTikTokAlbum = CONFLICT
 
 由管理员人工选择主记录，不得自动覆盖平台 ID。
 
-### 17.5 处理已有 xu03 数据
+### 17.5 处理已有 taletv 数据
 
-如果 xu03 以前已经独立创建过 TikTok 剧目：
+如果 taletv 以前已经独立创建过 TikTok 剧目：
 
 - 保留原有 `album_id` 和审计记录。
 - 不自动删除或撤销。
 - 由管理员选择：
   - 继续作为独立剧目维护；或
   - 新建共享主剧目授权关系。
-- 如果采用共享主剧目，先完成平台授权，再将 xu03 本地内容绑定到共享主剧目。
+- 如果采用共享主剧目，先完成平台授权，再将 taletv 本地内容绑定到共享主剧目。
 - 确认播放链路和上线状态后，再决定是否下线旧剧目。
 
 不能在没有平台确认的情况下直接把旧 `album_id` 替换为新 `album_id`。
@@ -1386,15 +1386,15 @@ SharedTikTokAlbum = CONFLICT
 
 先不要改生产数据，使用测试剧目完成以下验证：
 
-1. QuicK ReeLS 和 xu03 都绑定同一个 BytePlus Account ID。
+1. QuicK ReeLS 和 taletv 都绑定同一个 BytePlus Account ID。
 2. BytePlus 使用同一个 Space。
 3. QuicK ReeLS 上传视频并得到 VID。
 4. QuicK ReeLS 创建 TikTok 剧目。
 5. QuicK ReeLS 同步版本并审核通过。
 6. 使用 QuicK ReeLS 凭证调用 `album/authorize`。
-7. 目标为 xu03 Client Key。
-8. 使用 xu03 凭证查询或访问该剧目。
-9. 验证 xu03 不需要重新上传、不需要创建新 album、不需要重复送审。
+7. 目标为 taletv Client Key。
+8. 使用 taletv 凭证查询或访问该剧目。
+9. 验证 taletv 不需要重新上传、不需要创建新 album、不需要重复送审。
 10. 验证目标小程序实际播放。
 11. 验证撤销授权后目标小程序不可继续使用。
 
@@ -1659,14 +1659,14 @@ POST /admin/shared/albums/:id/authorizations/:app/revoke
 验收清单：
 
 - BytePlus 只产生一次上传记录。
-- QuickReels 与 xu03 使用相同 BytePlus VID。
+- QuickReels 与 taletv 使用相同 BytePlus VID。
 - 两个小程序使用相同 `album_id`。
 - 两个小程序使用相同对应 `episode_id`。
-- xu03 不产生新的 `album/create`。
-- xu03 不产生新的 `album/review/submit`。
-- xu03 能实际播放。
-- 主剧目版本更新后，xu03 对账可以看到新线上版本。
-- 撤销授权后，xu03 不再可播放。
+- taletv 不产生新的 `album/create`。
+- taletv 不产生新的 `album/review/submit`。
+- taletv 能实际播放。
+- 主剧目版本更新后，taletv 对账可以看到新线上版本。
+- 撤销授权后，taletv 不再可播放。
 - 审计可以追溯所有平台请求。
 
 ## 22. 监控与告警
@@ -1840,11 +1840,11 @@ apps/api/src/modules/episodes/routes.ts
 满足以下条件才算完成：
 
 1. 同一个视频在 BytePlus 只上传一次。
-2. QuickReels 和 xu03 可以绑定同一个共享媒资。
+2. QuickReels 和 taletv 可以绑定同一个共享媒资。
 3. 主剧目只创建一次。
-4. xu03 通过 `album/authorize` 获得授权。
-5. xu03 不重复创建剧目。
-6. xu03 不重复送审同一剧目版本。
+4. taletv 通过 `album/authorize` 获得授权。
+5. taletv 不重复创建剧目。
+6. taletv 不重复送审同一剧目版本。
 7. 两个小程序都能正常播放。
 8. 主剧目新版本审核通过后，目标小程序可以通过对账刷新。
 9. 授权失败、未知、撤销都有明确状态。
@@ -1868,7 +1868,7 @@ apps/api/src/modules/episodes/routes.ts
 7. 审核通过
 8. 设置线上版本
 9. 上架
-10. 授权给 xu03 和其他目标小程序
+10. 授权给 taletv 和其他目标小程序
 ```
 
 ### 已有视频新增到其他小程序

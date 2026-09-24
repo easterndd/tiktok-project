@@ -11,9 +11,9 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(scriptDir, '..');
 const repoRoot = resolve(packageRoot, '..', '..');
 const app = process.argv[2] ?? 'quickreels';
-if (app !== 'quickreels' && app !== 'xu03') throw new Error('Expected quickreels or xu03 as the app name.');
-const appName = app === 'xu03' ? 'TaleTV' : 'QuicK ReeLS';
-const publicPath = app === 'xu03' ? 'taletv' : 'quickreels';
+if (app !== 'quickreels' && app !== 'taletv') throw new Error('Expected quickreels or taletv as the app name.');
+const appName = app === 'taletv' ? 'TaleTV' : 'QuicK ReeLS';
+const publicPath = app === 'taletv' ? 'taletv' : 'quickreels';
 const sourcePath = join(packageRoot, 'src', 'pages', 'legal-docs.ts');
 const outputRoot = join(repoRoot, 'deploy', 'website', publicPath);
 const publicBaseUrl = `https://evergreenprosper.com/${publicPath}`;
@@ -199,7 +199,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
     <header class="hero">
       <div class="brand">
         <a href="https://evergreenprosper.com/">evergreenprosper</a>
-        <span class="mark">${app === 'xu03' ? 'TV' : 'QR'}</span>
+        <span class="mark">${app === 'taletv' ? 'TV' : 'QR'}</span>
       </div>
       <p class="eyebrow">${legalDocument.eyebrow}</p>
       <h1>${legalDocument.title}</h1>

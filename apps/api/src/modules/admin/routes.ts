@@ -9,7 +9,7 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { requireAdmin, requirePermission } from '../../plugins/auth';
 import { hashPassword, verifyPassword } from '../../services/password';
-import { accessConfigSchema } from '../../lib/content-access';
+import { accessConfigSchema, readMiniAppAccessConfig } from '../../lib/content-access';
 import { publicLocaleSchema } from '../../lib/locales';
 import { BytePlusVodService } from '../../services/byteplus-vod.service';
 import { LocalObjectStorageService } from '../../services/object-storage.service';
@@ -67,7 +67,7 @@ const sharedMediaBindingInput = z.object({
   sharedMediaAssetId: z.string().trim().min(1).max(128)
 });
 const sharedAuthorizationInput = z.object({
-  targetMiniAppKey: z.enum(['main', 'xu03']),
+  targetMiniAppKey: z.enum(['main', 'taletv']),
   targetLocalAlbumId: z.string().trim().min(1).max(128).optional()
 });
 const uploadInput = z.object({
@@ -135,10 +135,10 @@ const analyticsQuery = z.object({
 const appEntryAdPolicyInput = z.object({
   enabled: z.boolean(),
   mode: z.enum(['INTERSTITIAL', 'REWARDED_GATED']),
-  placementId: z.string().trim().min(1).max(128),
+  placementId: z.string().trim().max(128),
   requiredCount: z.number().int().min(1),
   onUnavailable: z.enum(['ALLOW', 'BLOCK'])
-});
+}).refine((value) => !value.enabled || value.placementId.length > 0, { path: ['placementId'], message: '启用进入广告时必须填写广告位 ID。' });
 
 const componentLabels: Record<z.infer<typeof componentParams>['key'], string> = {
   APP_TOPBAR: '顶部导航',
@@ -261,10 +261,12 @@ function ensureTikTokPlatformConfigured(app: FastifyInstance) {
   throw Object.assign(new Error('TikTok Short Drama OpenAPI 尚未配置。请设置 TIKTOK_CLIENT_KEY 和 TIKTOK_CLIENT_SECRET。'), { statusCode: 503 });
 }
 
-function albumDataWithAccess<T extends { accessConfig?: unknown; tagList?: unknown }>(input: T) {
+function albumDataWithAccess<T extends { accessConfig?: unknown; tagList?: unknown }>(app: FastifyInstance, input: T) {
   return {
     ...input,
-    accessConfig: input.accessConfig as Prisma.InputJsonValue | undefined,
+    accessConfig: input.accessConfig === undefined
+      ? undefined
+      : readMiniAppAccessConfig(input.accessConfig, app.config) as unknown as Prisma.InputJsonValue,
     tagList: input.tagList === undefined ? undefined : input.tagList === null ? Prisma.JsonNull : input.tagList as Prisma.InputJsonValue
   };
 }
@@ -575,7 +577,9 @@ export async function registerAdminRoutes(app: FastifyInstance) {
           dramaType: input.dramaType,
           tagList: input.tagList as Prisma.InputJsonValue,
           regions: input.regions,
-          accessConfig: input.accessConfig as Prisma.InputJsonValue | undefined,
+          accessConfig: input.accessConfig === undefined
+            ? undefined
+            : readMiniAppAccessConfig(input.accessConfig, app.config) as unknown as Prisma.InputJsonValue,
           status: 'DRAFT'
         }
       });
@@ -647,7 +651,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const input = albumInput.parse(request.body);
     const cover = await validateReadyCover(app, input.coverAssetId);
     if (!cover && !input.coverUrl) throw Object.assign(new Error('必须提供封面地址或封面资源 ID。'), { statusCode: 400 });
-    const album = await app.prisma.album.create({ data: { ...albumDataWithAccess(input), coverUrl: cover?.publicUrl ?? input.coverUrl!, coverAssetId: cover?.id ?? input.coverAssetId, regions: input.regions } });
+    const album = await app.prisma.album.create({ data: { ...albumDataWithAccess(app, input), coverUrl: cover?.publicUrl ?? input.coverUrl!, coverAssetId: cover?.id ?? input.coverAssetId, regions: input.regions } });
     await audit(app, request.user.sub, 'CREATE', 'Album', album.id);
     return album;
   });
@@ -656,7 +660,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const { albumId } = albumParams.parse(request.params);
     const input = albumPatch.parse(request.body);
     const cover = await validateReadyCover(app, input.coverAssetId);
-    const album = await app.prisma.album.update({ where: { id: albumId }, data: { ...albumDataWithAccess(input), coverUrl: cover?.publicUrl ?? input.coverUrl, coverAssetId: input.coverAssetId === undefined ? undefined : cover?.id ?? null } });
+    const album = await app.prisma.album.update({ where: { id: albumId }, data: { ...albumDataWithAccess(app, input), coverUrl: cover?.publicUrl ?? input.coverUrl, coverAssetId: input.coverAssetId === undefined ? undefined : cover?.id ?? null } });
     await audit(app, request.user.sub, 'UPDATE', 'Album', album.id, input);
     return album;
   });

@@ -12,8 +12,8 @@ const permissionsByRole: Record<AdminRole, ReadonlySet<AdminPermission | '*'> > 
 
 declare module '@fastify/jwt' {
   interface FastifyJWT {
-    payload: { sub: string; kind: 'user' | 'admin'; appKey: 'main' | 'xu03'; role?: AdminRole; tokenVersion?: number };
-    user: { sub: string; kind: 'user' | 'admin'; appKey: 'main' | 'xu03'; role?: AdminRole; tokenVersion?: number };
+    payload: { sub: string; kind: 'user' | 'admin'; appKey: 'main' | 'taletv'; role?: AdminRole; tokenVersion?: number };
+    user: { sub: string; kind: 'user' | 'admin'; appKey: 'main' | 'taletv'; role?: AdminRole; tokenVersion?: number };
   }
 }
 

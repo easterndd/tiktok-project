@@ -6,7 +6,7 @@ import { appKey, appName } from '../lib/app-brand';
 import styles from './LegalPage.module.css';
 
 export function LegalPage({ type }: { type: LegalDocumentType }) {
-  const legalDocument = legalDocumentForApp(type, appKey === 'xu03' ? 'xu03' : 'quickreels');
+  const legalDocument = legalDocumentForApp(type, appKey === 'taletv' ? 'taletv' : 'quickreels');
   const related = type === 'privacy' ? { path: '/terms', label: 'Terms of Service', icon: ScrollText } : { path: '/privacy', label: 'Privacy Policy', icon: ShieldCheck };
   const RelatedIcon = related.icon;
 
@@ -19,7 +19,7 @@ export function LegalPage({ type }: { type: LegalDocumentType }) {
     <header className={styles.hero}>
       <div className={styles.heroTop}>
         <Link className={styles.backLink} to="/profile"><ArrowLeft size={17} aria-hidden="true" /> Back</Link>
-        <span className={styles.brandMark}>{appKey === 'xu03' ? 'TV' : 'QR'}</span>
+        <span className={styles.brandMark}>{appKey === 'taletv' ? 'TV' : 'QR'}</span>
       </div>
       <p className="eyebrow">{legalDocument.eyebrow}</p>
       <h1>{legalDocument.title}</h1>

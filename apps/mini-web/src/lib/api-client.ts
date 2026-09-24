@@ -3,7 +3,7 @@ import { mockApiRequest } from './mock-api';
 import { getSessionToken } from './storage';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
-  ?? (import.meta.env.VITE_APP_KEY === 'xu03' ? 'http://localhost:3000/api/xu03/v1' : 'http://localhost:3000/api/v1');
+  ?? (import.meta.env.VITE_APP_KEY === 'taletv' ? 'http://localhost:3000/api/taletv/v1' : 'http://localhost:3000/api/v1');
 const useMockApi = import.meta.env.VITE_USE_MOCK_API === 'true' || import.meta.env.VITE_DEMO_MODE === 'true';
 const enableMockFallback = import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
 

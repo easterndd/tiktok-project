@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { optionalUser } from '../../plugins/optional-auth';
 import { BytePlusVodService } from '../../services/byteplus-vod.service';
 import { requireUser } from '../../plugins/auth';
-import { isEpisodeFree, readAccessConfig } from '../../lib/content-access';
+import { isEpisodeFree, readMiniAppAccessConfig } from '../../lib/content-access';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
 
@@ -48,7 +48,7 @@ async function createOrResumeRewardSession(app: FastifyInstance, userId: string,
   const unlocked = await app.prisma.episodeUnlock.findUnique({ where: { userId_episodeId: { userId, episodeId } }, select: { id: true } });
   if (unlocked) return { access: 'PLAYABLE' };
 
-  const accessConfig = readAccessConfig(episode.album.accessConfig);
+  const accessConfig = readMiniAppAccessConfig(episode.album.accessConfig, app.config);
   if (!accessConfig.rewardedAdEnabled) return { adDisabled: true };
   await app.prisma.rewardedUnlockSession.updateMany({
     where: { userId, episodeId, status: 'ACTIVE', expiresAt: { lte: now } },

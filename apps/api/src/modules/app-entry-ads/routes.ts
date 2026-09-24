@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
+import { miniAppAdConfig } from '../../config/mini-apps';
 
 const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
@@ -9,17 +10,19 @@ const startInput = z.object({ launchId: z.string().uuid() });
 const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.literal(true) });
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
 
-const disabledPolicy = {
-  id: policyId,
-  enabled: false,
-  mode: 'INTERSTITIAL' as const,
-  placementId: 'ad7686459458972829697',
-  requiredCount: 1,
-  onUnavailable: 'ALLOW' as const,
-  version: 1
-};
+function disabledPolicy(app: FastifyInstance) {
+  return {
+    id: policyId,
+    enabled: false,
+    mode: 'INTERSTITIAL' as const,
+    placementId: miniAppAdConfig(app.config).appEntryPlacementId,
+    requiredCount: 1,
+    onUnavailable: 'ALLOW' as const,
+    version: 1
+  };
+}
 
-export type AppEntryAdPolicyInput = typeof disabledPolicy;
+export type AppEntryAdPolicyInput = ReturnType<typeof disabledPolicy>;
 
 function sessionResponse(session: { id: string; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; requiredCount: number; completedCount: number; status: string }, fallback: 'ALLOW' | 'BLOCK') {
   if (session.status === 'COMPLETED' || session.completedCount >= session.requiredCount) return { required: false as const };
@@ -36,7 +39,7 @@ function sessionResponse(session: { id: string; mode: 'INTERSTITIAL' | 'REWARDED
 
 export async function readAppEntryAdPolicy(app: FastifyInstance) {
   return await app.prisma.appEntryAdPolicy.findUnique({ where: { id: policyId } })
-    ?? (app.config.MINI_APP_KEY === 'xu03' ? { ...disabledPolicy, placementId: '' } : disabledPolicy);
+    ?? disabledPolicy(app);
 }
 
 export async function registerAppEntryAdRoutes(app: FastifyInstance) {

@@ -10,6 +10,19 @@ const visitorKey = `${storagePrefix}_visitor_key`;
 const localeKey = `${storagePrefix}_locale`;
 const sessionListeners = new Set<() => void>();
 
+if (storagePrefix === 'taletv') {
+  for (const suffix of ['visitor_key', 'locale']) {
+    const oldKey = `xu03_${suffix}`;
+    const nextKey = `${storagePrefix}_${suffix}`;
+    const saved = localStorage.getItem(oldKey);
+    if (saved !== null) {
+      if (localStorage.getItem(nextKey) === null) localStorage.setItem(nextKey, saved);
+      localStorage.removeItem(oldKey);
+    }
+  }
+  sessionStorage.removeItem('xu03_access_token');
+}
+
 export function getStoredLocale(): Locale {
   const stored = localStorage.getItem(localeKey);
   return stored && validLocales.has(stored) ? stored as Locale : detectLocale();

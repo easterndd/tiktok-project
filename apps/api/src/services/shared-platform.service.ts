@@ -56,7 +56,7 @@ function asNumber(value: unknown) {
 }
 
 function requireMiniAppKey(value: string): MiniAppKey {
-  if (value === 'main' || value === 'xu03') return value;
+  if (value === 'main' || value === 'taletv') return value;
   throw conflict(`未知的小程序标识：${value}`);
 }
 

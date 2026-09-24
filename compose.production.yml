@@ -44,6 +44,9 @@ services:
       dockerfile: apps/admin-web/Dockerfile
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:?set VITE_API_BASE_URL before building}
+        VITE_TALETV_API_BASE_URL: ${VITE_TALETV_API_BASE_URL:-}
+        VITE_TALETV_REWARDED_PLACEMENT_ID: ${VITE_TALETV_REWARDED_PLACEMENT_ID:-ad7688599028879722512}
+        VITE_TALETV_APP_ENTRY_PLACEMENT_ID: ${VITE_TALETV_APP_ENTRY_PLACEMENT_ID:-}
     restart: unless-stopped
     expose:
       - "80"

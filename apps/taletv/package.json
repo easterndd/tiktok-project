@@ -1,5 +1,5 @@
 {
-  "name": "xu03",
+  "name": "taletv",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -8,7 +8,7 @@
     "build:minis": "ttdx minis build --prod",
     "build:minis:release": "pnpm build && ttdx minis build --prod && ttdx minis check --output && node ../mini-web/scripts/check-release.mjs && node ../mini-web/scripts/package-minis-archive.mjs",
     "preview": "vite preview --host 0.0.0.0",
-    "export:legal": "node ../mini-web/scripts/export-legal-pages.mjs xu03",
+    "export:legal": "node ../mini-web/scripts/export-legal-pages.mjs taletv",
     "lint": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

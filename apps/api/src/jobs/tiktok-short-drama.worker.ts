@@ -1,6 +1,6 @@
 import { PrismaClient, type UploadJob } from '@prisma/client';
 import { loadEnv } from '../config/env';
-import { xu03Environment } from '../config/mini-apps';
+import { taletvEnvironment } from '../config/mini-apps';
 import {
   ProviderNotConfiguredError,
   UnconfiguredTikTokShortDramaService,
@@ -227,7 +227,7 @@ export async function processJobs(
 
 export async function startUploadWorker() {
   const env = { ...loadEnv(), MINI_APP_KEY: 'main' as const };
-  const environments = [env, xu03Environment(env)].filter((item): item is typeof env => item !== null);
+  const environments = [env, taletvEnvironment(env)].filter((item): item is typeof env => item !== null);
   const contexts = environments.map((contextEnv) => ({
     env: contextEnv,
     prisma: new PrismaClient({ datasources: { db: { url: contextEnv.DATABASE_URL } } }),

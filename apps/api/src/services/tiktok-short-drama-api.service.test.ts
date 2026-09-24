@@ -8,7 +8,9 @@ const env: Env = {
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters', USER_JWT_EXPIRES_IN: 3600, ADMIN_JWT_EXPIRES_IN: 28_800,
   ADMIN_BOOTSTRAP_EMAIL: undefined, ADMIN_BOOTSTRAP_PASSWORD: undefined,
   BYTEPLUS_ACCOUNT_ID: 'account-1', BYTEPLUS_SPACE_NAME: 'space-1', BYTEPLUS_REGION: 'ap-singapore-1', BYTEPLUS_ACCESS_KEY: undefined, BYTEPLUS_SECRET_KEY: undefined, BYTEPLUS_VOD_ENDPOINT: 'https://vod.byteplusapi.com',
-  TIKTOK_CLIENT_KEY: 'mn-client-key', TIKTOK_CLIENT_SECRET: 'client-secret', TIKTOK_SHORT_DRAMA_API_BASE: 'https://open.tiktokapis.com',
+  TIKTOK_CLIENT_KEY: 'mn-client-key', TIKTOK_CLIENT_SECRET: 'client-secret', TIKTOK_APP_ID: undefined, TALETV_TIKTOK_CLIENT_KEY: undefined, TALETV_TIKTOK_CLIENT_SECRET: undefined, TALETV_TIKTOK_APP_ID: undefined,
+  REWARDED_PLACEMENT_ID: 'ad7686459794040702993', TALETV_REWARDED_PLACEMENT_ID: 'ad7688599028879722512', APP_ENTRY_PLACEMENT_ID: 'ad7686459458972829697', TALETV_APP_ENTRY_PLACEMENT_ID: '',
+  TIKTOK_SHORT_DRAMA_API_BASE: 'https://open.tiktokapis.com',
   API_PUBLIC_BASE_URL: undefined, COVER_ASSET_STORAGE_DIR: 'tmp/cover-assets-test', COVER_ASSET_PUBLIC_BASE_URL: undefined, LOCAL_PLAYBACK_ENABLED: false, UPLOAD_WORKER_INTERVAL_MS: 30_000, UPLOAD_MAX_RETRIES: 5
 };
 
@@ -59,16 +61,16 @@ describe('TikTokShortDramaApiService', () => {
         requests.push({ url, body: typeof init?.body === 'string' ? JSON.parse(init.body) : null });
         if (url.pathname === '/v2/oauth/token/') return response({ access_token: 'token-1', expires_in: 7200 });
         return response({
-          data: { client_key_result_list: [{ client_key: 'xu03-client-key', auth_status: 1, error_code: 0, error_message: '' }] },
+          data: { client_key_result_list: [{ client_key: 'taletv-client-key', auth_status: 1, error_code: 0, error_message: '' }] },
           error: { code: 'ok', log_id: 'log-auth' }
         });
       }
     });
 
-    const result = await service.authorizeAlbum({ albumId: '7688551749335058439', targetClientKeys: ['xu03-client-key'] });
+    const result = await service.authorizeAlbum({ albumId: '7688551749335058439', targetClientKeys: ['taletv-client-key'] });
     assert.equal(requests[1].url.pathname, '/v2/sg/shortdrama/album/authorize/');
-    assert.deepEqual(requests[1].body, { client_key: 'mn-client-key', album_id: '7688551749335058439', operate_type: 1, target_client_key_list: ['xu03-client-key'] });
-    assert.deepEqual(result.results, [{ clientKey: 'xu03-client-key', authStatus: 1, errorCode: '0', errorMessage: '' }]);
+    assert.deepEqual(requests[1].body, { client_key: 'mn-client-key', album_id: '7688551749335058439', operate_type: 1, target_client_key_list: ['taletv-client-key'] });
+    assert.deepEqual(result.results, [{ clientKey: 'taletv-client-key', authStatus: 1, errorCode: '0', errorMessage: '' }]);
     assert.equal(result.requestId, 'log-auth');
   });
 

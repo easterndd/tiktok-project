@@ -1,4 +1,4 @@
-# TaleTV（内部标识 xu03）：Developer Portal 信息与法律页部署
+# TaleTV（内部标识 taletv）：Developer Portal 信息与法律页部署
 
 ## Description
 
@@ -10,7 +10,7 @@
 
 > TaleTV 是一款 TikTok Minis 短剧应用，提供爱情、家庭、悬疑等类型的短篇剧集。用户可以发现新故事、观看可免费观看的剧集、从观看历史继续播放，并在可用时通过观看激励广告解锁部分剧集。具体内容因地区而异。
 
-`apps/xu03/minis.config.json` 的 `dev.desc` 同步使用英文描述。Developer Portal 的 Description 仍需在网页表单中单独填写。
+`apps/taletv/minis.config.json` 的 `dev.desc` 同步使用英文描述。Developer Portal 的 Description 仍需在网页表单中单独填写。
 
 ## Portal URL
 
@@ -22,14 +22,14 @@
 | Privacy policy URL | `https://evergreenprosper.com/taletv/privacy` |
 | Domain of your service | `https://evergreenprosper.com` |
 
-不要使用 QuicK ReeLS 的 `/quickreels/...` 页面；它们仍属于原小程序。TaleTV 法律页使用 `/taletv/...`，业务 API 仍使用内部路径 `/api/xu03/v1`。两条法律页 URL 必须在不登录的浏览器中直接打开，最终响应为 200，不能跳转到别的域名或首页。
+不要使用 QuicK ReeLS 的 `/quickreels/...` 页面；它们仍属于原小程序。TaleTV 法律页使用 `/taletv/...`，业务 API 仍使用内部路径 `/api/taletv/v1`。两条法律页 URL 必须在不登录的浏览器中直接打开，最终响应为 200，不能跳转到别的域名或首页。
 
 ## 生成静态页面
 
 在本项目根目录运行：
 
 ```powershell
-pnpm --filter xu03 export:legal
+pnpm --filter taletv export:legal
 ```
 
 生成文件：
@@ -51,7 +51,7 @@ sudo install -d -m 755 /opt/evergreenprosper-website/taletv
 sudo cp -a deploy/website/taletv/. /opt/evergreenprosper-website/taletv/
 ```
 
-把 `deploy/website/Caddyfile.quickreels-snippet` 中的 `taletv` 规则放进 `evergreenprosper.com` 站点块、最终 `file_server` 之前。现有 `/xu03/privacy`、`/xu03/terms` 规则不再使用，在新地址验证成功后从服务器 Caddyfile 删除旧规则。修改 Caddyfile 前先备份，再校验和重载：
+检查 `evergreenprosper.com` 站点块是否已有 `deploy/website/Caddyfile.quickreels-snippet` 中的 `taletv` 路径重写规则；没有才添加到最终 `file_server` 之前，已有则保留，不要删除。修改 Caddyfile 前先备份，再校验和重载：
 
 ```bash
 export CADDY_CONTAINER=evergreenprosper-website-web-1
@@ -68,4 +68,4 @@ curl -IL https://evergreenprosper.com/taletv/privacy
 curl -IL https://evergreenprosper.com/taletv/terms
 ```
 
-两条 URL 都返回 200、页面标题为 `TaleTV` 后再填写 Portal。确认 TikTok Portal 已改为新地址后，可删除服务器静态根目录中的旧 `/xu03/privacy` 与 `/xu03/terms` 文件。小程序 ZIP 由 TikTok 托管；这些法律页由现有官网服务器托管。
+两条 URL 都返回 200、页面标题为 `TaleTV` 后再填写 Portal。保留服务器静态根目录中的 `/taletv/privacy` 与 `/taletv/terms` 文件供 Portal 使用。小程序 ZIP 由 TikTok 托管；这些法律页由现有官网服务器托管。

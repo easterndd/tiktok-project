@@ -8,22 +8,38 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { defaultEpisodeTitle, nextEpisodeNo, renumberEpisodes } from './episode-draft';
 import './styles.css';
 
-type MiniApp = 'main' | 'xu03';
-const activeApp: MiniApp = localStorage.getItem('quickreels_active_app') === 'xu03' ? 'xu03' : 'main';
+type MiniApp = 'main' | 'taletv';
+if (localStorage.getItem('quickreels_active_app') === 'xu03') localStorage.setItem('quickreels_active_app', 'taletv');
+for (const suffix of ['content_draft', 'content_templates']) {
+  const oldKey = `quickreels_xu03_${suffix}`;
+  const nextKey = `quickreels_taletv_${suffix}`;
+  const saved = localStorage.getItem(oldKey);
+  if (saved !== null) {
+    if (localStorage.getItem(nextKey) === null) localStorage.setItem(nextKey, saved);
+    localStorage.removeItem(oldKey);
+  }
+}
+sessionStorage.removeItem('quickreels_xu03_admin_token');
+const activeApp: MiniApp = localStorage.getItem('quickreels_active_app') === 'taletv' ? 'taletv' : 'main';
 const primaryApi = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/api/v1';
-const xu03Api = new URL('/api/xu03/v1', primaryApi).toString().replace(/\/$/, '');
-const API = activeApp === 'xu03'
-  ? import.meta.env.VITE_XU03_API_BASE_URL ?? xu03Api
+const taletvApi = new URL('/api/taletv/v1', primaryApi).toString().replace(/\/$/, '');
+const API = activeApp === 'taletv'
+  ? import.meta.env.VITE_TALETV_API_BASE_URL || taletvApi
   : primaryApi;
-const adminTokenStorageKey = activeApp === 'main' ? 'quickreels_admin_token' : 'quickreels_xu03_admin_token';
-const defaultPlacementId = activeApp === 'main' ? 'ad7686459794040702993' : '';
+const adminTokenStorageKey = activeApp === 'main' ? 'quickreels_admin_token' : 'quickreels_taletv_admin_token';
+const defaultPlacementId = activeApp === 'main'
+  ? import.meta.env.VITE_REWARDED_PLACEMENT_ID ?? 'ad7686459794040702993'
+  : import.meta.env.VITE_TALETV_REWARDED_PLACEMENT_ID ?? 'ad7688599028879722512';
+const defaultEntryPlacementId = activeApp === 'main'
+  ? import.meta.env.VITE_APP_ENTRY_PLACEMENT_ID ?? 'ad7686459458972829697'
+  : import.meta.env.VITE_TALETV_APP_ENTRY_PLACEMENT_ID ?? '';
 function selectMiniApp(value: MiniApp) {
   if (value === activeApp) return;
   localStorage.setItem('quickreels_active_app', value);
   window.location.reload();
 }
 function MiniAppSelect() {
-  return <label className="mini-app-select">当前小程序<select value={activeApp} onChange={(event) => selectMiniApp(event.target.value as MiniApp)}><option value="main">QuicK ReeLS</option><option value="xu03">TaleTV</option></select></label>;
+  return <label className="mini-app-select">当前小程序<select value={activeApp} onChange={(event) => selectMiniApp(event.target.value as MiniApp)}><option value="main">QuicK ReeLS</option><option value="taletv">TaleTV</option></select></label>;
 }
 let adminSessionRecoveryStarted = false;
 
@@ -71,8 +87,8 @@ type AdminRole = 'OWNER' | 'EDITOR' | 'ANALYST' | 'SUPPORT';
 type AdminPermission = 'content.write' | 'content.sync' | 'content.review' | 'content.publish' | 'ads.write';
 type AdminProfile = { id: string; email: string; role: AdminRole; status: string; lastLoginAt?: string | null; passwordChangedAt?: string | null };
 type Tab = 'overview' | 'create' | 'albums' | 'ads' | 'audience' | 'playback' | 'security';
-const contentDraftStorageKey = activeApp === 'main' ? 'quickreels_content_draft' : 'quickreels_xu03_content_draft';
-const contentTemplateStorageKey = activeApp === 'main' ? 'quickreels_content_templates' : 'quickreels_xu03_content_templates';
+const contentDraftStorageKey = activeApp === 'main' ? 'quickreels_content_draft' : 'quickreels_taletv_content_draft';
+const contentTemplateStorageKey = activeApp === 'main' ? 'quickreels_content_templates' : 'quickreels_taletv_content_templates';
 
 const rolePermissions: Record<AdminRole, readonly AdminPermission[]> = {
   OWNER: ['content.write', 'content.sync', 'content.review', 'content.publish', 'ads.write'],
@@ -201,7 +217,7 @@ function AdminApp() {
   const [overview, setOverview] = useState<Overview>({ albums: 0, episodes: 0, users: 0, likes: 0, favorites: 0, shares: 0, searches: 0, rewardedUnlocks: 0 });
   const [audience, setAudience] = useState<Audience | null>(null);
   const [playback, setPlayback] = useState<Playback | null>(null);
-  const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ enabled: false, mode: 'REWARDED_GATED', placementId: defaultPlacementId, requiredCount: 1, onUnavailable: 'ALLOW', version: 1 });
+  const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ enabled: false, mode: 'REWARDED_GATED', placementId: defaultEntryPlacementId, requiredCount: 1, onUnavailable: 'ALLOW', version: 1 });
   const [analyticsFrom, setAnalyticsFrom] = useState(() => rangeStart(30));
   const [analyticsTo, setAnalyticsTo] = useState(() => inputDate(new Date()));
   const [analyticsTimezone, setAnalyticsTimezone] = useState('Asia/Shanghai');
@@ -586,7 +602,7 @@ function AdminApp() {
 
   const updateAccess = async (album: Album) => {
     setSavingAlbumId(album.id);
-    const accessConfig = { freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: 'ad7686459794040702993', rewardedAdCount: 1, ...album.accessConfig };
+    const accessConfig = { freeEpisodeCount: 0, rewardedAdEnabled: true, rewardedPlacementId: defaultPlacementId, rewardedAdCount: 1, ...album.accessConfig };
     try {
       const updatedAlbum = await api<Album>(`/admin/albums/${album.id}`, { method: 'PATCH', body: JSON.stringify({ accessConfig }) });
       setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, ...updatedAlbum, episodeCount: item.episodeCount } : item));
@@ -713,7 +729,7 @@ function AdminApp() {
     }
   };
   const authorizeSharedAlbum = async (sharedAlbum: SharedAlbum, targetMiniAppKey: MiniApp) => {
-    const localAlbumId = window.prompt(`请输入 ${targetMiniAppKey === 'xu03' ? 'TaleTV' : 'QuicK ReeLS'} 目标剧目的本地 ID。目标剧目需要先在对应小程序后台创建。`)?.trim();
+    const localAlbumId = window.prompt(`请输入 ${targetMiniAppKey === 'taletv' ? 'TaleTV' : 'QuicK ReeLS'} 目标剧目的本地 ID。目标剧目需要先在对应小程序后台创建。`)?.trim();
     if (!localAlbumId) return;
     setPlatformWorking(`${sharedAlbum.id}:authorize:${targetMiniAppKey}`);
     try {
@@ -755,7 +771,7 @@ function AdminApp() {
   return <div className="admin-layout"><aside className="sidebar"><div className="brand"><span><Film size={17} /></span>QuicK <span>ReeLS</span></div><MiniAppSelect /><p className="workspace-label">运营工作区</p><nav>
     {navItems.map(([key, Icon, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}><Icon size={17} />{label}</button>)}
   </nav><div className="sidebar-bottom"><button className={tab === 'security' ? 'active' : ''} onClick={() => setTab('security')}><Settings2 size={17} />账号安全</button><div className="account"><span className="account-avatar">{currentAdmin?.email.slice(0, 2).toUpperCase() ?? 'OP'}</span><span><strong>{currentAdmin?.email ?? '运营管理员'}</strong><small>{currentAdmin?.role ?? 'TK小程序管理后台'}</small></span><MoreHorizontal size={16} /></div></div></aside>
-    <main className="main"><header className="page-header"><div><p className="eyebrow">{activeApp === 'xu03' ? 'TaleTV' : 'QuicK ReeLS'} / {tabLabels[tab]}</p><h1>{title}</h1><p className="subhead">当前展示 {activeApp === 'xu03' ? 'TaleTV' : 'QuicK ReeLS'} 的内容和数据。</p></div><div className="header-actions"><button className="secondary" onClick={() => void loadData()} title="刷新数据"><RefreshCw size={15} className={loading ? 'spin' : ''} />刷新</button><button className="secondary" onClick={() => { sessionStorage.removeItem(adminTokenStorageKey); setLoggedIn(false); }}>退出登录</button></div></header>{message && <div className="notice"><CheckCircle2 size={16} />{message}</div>}
+    <main className="main"><header className="page-header"><div><p className="eyebrow">{activeApp === 'taletv' ? 'TaleTV' : 'QuicK ReeLS'} / {tabLabels[tab]}</p><h1>{title}</h1><p className="subhead">当前展示 {activeApp === 'taletv' ? 'TaleTV' : 'QuicK ReeLS'} 的内容和数据。</p></div><div className="header-actions"><button className="secondary" onClick={() => void loadData()} title="刷新数据"><RefreshCw size={15} className={loading ? 'spin' : ''} />刷新</button><button className="secondary" onClick={() => { sessionStorage.removeItem(adminTokenStorageKey); setLoggedIn(false); }}>退出登录</button></div></header>{message && <div className="notice"><CheckCircle2 size={16} />{message}</div>}
       {(tab === 'audience' || tab === 'playback') && <div className="toolbar"><span><CalendarDays size={15} />统计周期</span><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(7)}>近 7 天</button><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(30)}>近 30 天</button><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(90)}>近 90 天</button><label>开始<input type="date" value={analyticsFrom} max={analyticsTo} onChange={(event) => setAnalyticsFrom(event.target.value)} /></label><label>结束<input type="date" value={analyticsTo} min={analyticsFrom} max={inputDate(new Date())} onChange={(event) => setAnalyticsTo(event.target.value)} /></label><label>时区<select value={analyticsTimezone} onChange={(event) => setAnalyticsTimezone(event.target.value)}><option value="Asia/Shanghai">Asia/Shanghai</option><option value="UTC">UTC</option></select></label></div>}
       {tab === 'overview' && <><section className="metrics"><Metric label="在线剧集" value={String(overview.albums)} change="实时数据" icon={Film} tone="pink" /><Metric label="在线集数" value={String(overview.episodes)} change="已通过发布条件" icon={ListVideo} tone="cyan" /><Metric label="用户数" value={String(overview.users)} change="累计注册" icon={Users} tone="green" /><Metric label="广告解锁" value={String(overview.rewardedUnlocks)} change="累计完成" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="运营健康度" description="关键业务数据当前状态"><div className="readiness-list"><div><span className="ready-dot done"><CheckCircle2 size={15} /></span><span><strong>剧集元数据与访问策略</strong><small>{overview.albums} 部在线剧集 · {overview.episodes} 集可见</small></span><em>正常</em></div><div><span className="ready-dot done"><Database size={15} /></span><span><strong>观众行为采集</strong><small>{overview.likes} 次点赞 · {overview.favorites} 次收藏 · {overview.searches} 次搜索</small></span><em>正常</em></div><div><span className="ready-dot done"><Gauge size={15} /></span><span><strong>播放质量采集</strong><small>{playback?.totalEvents ?? 0} 条播放器事件已入库</small></span><em>正常</em></div></div></Panel><Panel title="最近上传" description="BytePlus 媒体处理任务"><div className="compact-list">{jobs.slice(0, 5).map((job) => <div className="compact-row" key={job.id}><FileVideo size={17} /><span><strong>{job.episode?.title ?? job.episodeId}</strong><small>{job.sourceName ?? job.sourceType ?? '链接'}</small></span><Status value={job.status} /></div>)}{!jobs.length && <p className="empty-copy">还没有上传任务</p>}</div></Panel></div></>}
       {tab === 'create' && <>
@@ -854,7 +870,7 @@ function AdminApp() {
       </Panel>}
       {tab === 'albums' && <Panel title="共享剧目授权" description="同一 BytePlus 账号下复用已审核的 TikTok 主剧目；目标小程序通过授权使用同一个 album_id，不重复上传或送审。">
         <div className="table-wrap"><table><thead><tr><th>主剧目</th><th>版本 / 状态</th><th>授权小程序</th><th>操作</th></tr></thead><tbody>{sharedAlbums.map((sharedAlbum) => {
-          const targetKey: MiniApp = sharedAlbum.ownerMiniAppKey === 'main' ? 'xu03' : 'main';
+          const targetKey: MiniApp = sharedAlbum.ownerMiniAppKey === 'main' ? 'taletv' : 'main';
           const targetAuthorization = sharedAlbum.authorizations.find((item) => item.miniAppKey === targetKey);
           return <tr key={sharedAlbum.id}>
             <td><strong>{sharedAlbum.tiktokAlbumId}</strong><small>主小程序：{sharedAlbum.ownerMiniAppKey}</small></td>
@@ -867,7 +883,7 @@ function AdminApp() {
           </tr>;
         })}</tbody></table>{!sharedAlbums.length && <p className="empty-copy table-empty">暂无共享主剧目；先在上方将已同步版本的剧目设为共享主剧目。</p>}</div>
       </Panel>}
-      {tab === 'ads' && <Panel title="进入广告策略" description="配置将在新的小程序启动会话生效。激励门槛模式须先在 TikTok 平台确认可用。"><form className="policy-form" onSubmit={saveEntryAdPolicy}><label className="check-row"><input type="checkbox" checked={entryAdPolicy.enabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, enabled: event.target.checked }))} />启用进入广告</label><div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, mode: event.target.value as AppEntryAdPolicy['mode'] }))}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>广告位 ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required /></label><label>每次进入广告观看次数<input type="number" min="1" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入并重试</option></select></label></div><p className="form-help">当前策略版本：{entryAdPolicy.version}。进入广告与剧集解锁广告使用独立会话和广告位。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存进入广告策略</>}</button></form></Panel>}
+      {tab === 'ads' && <Panel title="进入广告策略" description="配置将在新的小程序启动会话生效。激励门槛模式须先在 TikTok 平台确认可用。"><form className="policy-form" onSubmit={saveEntryAdPolicy}><label className="check-row"><input type="checkbox" checked={entryAdPolicy.enabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, enabled: event.target.checked }))} />启用进入广告</label><div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, mode: event.target.value as AppEntryAdPolicy['mode'] }))}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>广告位 ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required={entryAdPolicy.enabled} /></label><label>每次进入广告观看次数<input type="number" min="1" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入并重试</option></select></label></div><p className="form-help">当前策略版本：{entryAdPolicy.version}。进入广告与剧集解锁广告使用独立会话和广告位。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存进入广告策略</>}</button></form></Panel>}
       {tab === 'audience' && audience && <><section className="metrics"><Metric label="活跃观众" value={String(audience.activeUsers)} change={`${audience.from} 至 ${audience.to}`} icon={Users} tone="green" /><Metric label="新增观众" value={String(audience.newUsers)} change={`日活 ${audience.dau} · 周活 ${audience.wau} · 月活 ${audience.mau}`} icon={Database} tone="cyan" /><Metric label="观看会话" value={String(audience.watchSessions)} change="播放器会话开始次数" icon={Film} tone="pink" /><Metric label="完播集数" value={String(audience.completedEpisodes)} change="每用户每集首次完播" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="观众趋势" description="按天统计新增和活跃用户"><DailyBars title="新增观众" items={audience.dailyNewUsers} /><DailyBars title="日活用户" items={audience.dailyActiveUsers} /></Panel><Panel title="互动概览" description="帮助判断内容和运营活动表现"><BarList title="互动指标" items={[{ label: '收藏', value: audience.favorites }, { label: '分享', value: audience.shares }, { label: '搜索', value: audience.searches }]} color="cyan" /></Panel></div></>}
       {tab === 'playback' && playback && <><section className="metrics"><Metric label="播放器事件" value={String(playback.totalEvents)} change={`近 ${playback.periodDays} 天`} icon={Activity} tone="cyan" /><Metric label="首帧事件" value={String(playback.firstFrames)} change="成功启动" icon={Gauge} tone="green" /><Metric label="错误率" value={`${playback.errorRate}%`} change={`${playback.errorCount} 次错误`} icon={CircleAlert} tone="pink" /><Metric label="平均首帧" value={playback.averageStartupMs === null ? '-' : `${playback.averageStartupMs} 毫秒`} change="启动耗时" icon={Wifi} tone="yellow" /></section><div className="content-grid"><Panel title="播放事件分布" description="根据小程序播放器上报聚合"><BarList title="事件类型" items={playback.eventTypes.map((item) => ({ label: item.eventType, value: item.count }))} /><BarList title="清晰度" items={playback.definitions.map((item) => ({ label: item.definition, value: item.count }))} color="cyan" /><BarList title="网络类型" items={playback.networks.map((item) => ({ label: item.networkType, value: item.count }))} color="green" /></Panel><Panel title="最近播放错误" description="优先定位实际影响用户的剧集"><div className="compact-list">{playback.recentErrors.map((error, index) => <div className="compact-row" key={`${error.createdAt}-${index}`}><CircleAlert size={17} /><span><strong>{error.episodeTitle}</strong><small>{error.errorCode ?? '未知错误'} · {new Date(error.createdAt).toLocaleString('zh-CN')}</small></span></div>)}{!playback.recentErrors.length && <p className="empty-copy">暂无播放错误</p>}</div></Panel></div></>}
       {tab === 'security' && <div className="content-grid"><Panel title="当前管理员" description="角色和账号状态由服务端实时校验"><div className="readiness-list"><div><span className="ready-dot done"><CheckCircle2 size={15} /></span><span><strong>{currentAdmin?.email ?? '-'}</strong><small>角色：{currentAdmin?.role ?? '-'} · 状态：{currentAdmin?.status ?? '-'}</small></span></div><div><span className="ready-dot done"><CalendarDays size={15} /></span><span><strong>最近登录</strong><small>{currentAdmin?.lastLoginAt ? new Date(currentAdmin.lastLoginAt).toLocaleString('zh-CN') : '暂无记录'}</small></span></div></div></Panel><Panel title="修改密码" description="更新后当前登录令牌会立即失效"><form className="policy-form" onSubmit={changePassword}><label>当前密码<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label><label>新密码<input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label><button className="primary" type="submit" disabled={changingPassword}><Save size={17} />{changingPassword ? '更新中...' : '更新密码'}</button></form></Panel></div>}

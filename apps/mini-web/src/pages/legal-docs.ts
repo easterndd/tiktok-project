@@ -146,7 +146,7 @@ export const legalDocuments: Record<LegalDocumentType, LegalDocument> = {
   }
 };
 
-export function legalDocumentForApp(type: LegalDocumentType, app: 'quickreels' | 'xu03'): LegalDocument {
+export function legalDocumentForApp(type: LegalDocumentType, app: 'quickreels' | 'taletv'): LegalDocument {
   const source = legalDocuments[type];
   if (app === 'quickreels') return source;
   return {
