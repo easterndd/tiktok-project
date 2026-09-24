@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#75D9DC"/><stop offset=".33" stop-color="#FFF0AD"/><stop offset=".68" stop-color="#FFB39D"/><stop offset="1" stop-color="#F57AA1"/></linearGradient>
+    <radialGradient id="warm" cx=".56" cy=".49" r=".55"><stop stop-color="#FFFFFF" stop-opacity=".3"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="17" stdDeviation="20" flood-color="#A84775" flood-opacity=".2"/></filter>
+  </defs>
+  <rect width="1024" height="1024" rx="218" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="218" fill="url(#warm)"/>
+  <g filter="url(#soft)">
+    <circle cx="512" cy="512" r="261" fill="none" stroke="#FFFFFF" stroke-width="92"/>
+    <path d="M447 371C447 346 472 331 495 344L704 473C729 489 729 526 704 542L495 673C472 687 447 671 447 646V371Z" fill="#FFFFFF"/>
+    <path d="M520 439L633 508L520 578V439Z" fill="#F5989F"/>
+  </g>
+</svg>

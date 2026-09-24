@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#221C3A"/><stop offset=".58" stop-color="#151622"/><stop offset="1" stop-color="#082C38"/></linearGradient>
+    <linearGradient id="blade" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#FF536E"/><stop offset=".55" stop-color="#F93488"/><stop offset="1" stop-color="#BF34C9"/></linearGradient>
+    <linearGradient id="aqua" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#B8FFEF"/><stop offset="1" stop-color="#34C8E5"/></linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="19"/></filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="21" stdDeviation="23" flood-color="#000000" flood-opacity=".4"/></filter>
+  </defs>
+  <rect width="1024" height="1024" rx="218" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="312" fill="none" stroke="#7A748C" stroke-opacity=".26" stroke-width="3"/>
+  <path d="M240 417A293 293 0 0 1 783 397" fill="none" stroke="#FF668D" stroke-width="18" stroke-linecap="round"/>
+  <path d="M781 609A293 293 0 0 1 254 642" fill="none" stroke="url(#aqua)" stroke-width="22" stroke-linecap="round" filter="url(#glow)" opacity=".7"/>
+  <path d="M781 609A293 293 0 0 1 254 642" fill="none" stroke="url(#aqua)" stroke-width="22" stroke-linecap="round"/>
+  <g filter="url(#shadow)">
+    <path d="M343 290L617 260L741 491L695 688L405 763L286 555L343 290Z" fill="url(#blade)"/>
+    <path d="M388 325L591 301L691 484" fill="none" stroke="#FFB9C9" stroke-opacity=".75" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M397 383C397 363 419 351 437 362L667 496C684 506 684 530 667 540L437 674C419 685 397 673 397 653V383Z" fill="#FFFFFF"/>
+    <path d="M455 448L568 518L455 584V448Z" fill="#182132"/>
+  </g>
+</svg>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#F8FBF5"/><stop offset="1" stop-color="#E7F4EF"/></linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#FF886F"/><stop offset="1" stop-color="#F04470"/></linearGradient>
+    <linearGradient id="lime" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#B9ED80"/><stop offset="1" stop-color="#3BC9A5"/></linearGradient>
+    <filter id="depth" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#38887C" flood-opacity=".18"/></filter>
+  </defs>
+  <rect width="1024" height="1024" rx="218" fill="url(#bg)"/>
+  <g filter="url(#depth)">
+    <circle cx="512" cy="512" r="288" fill="#123D44"/>
+    <path d="M303 480C317 368 403 286 515 277C588 272 653 299 701 348" fill="none" stroke="url(#lime)" stroke-width="68" stroke-linecap="round"/>
+    <path d="M718 548C704 660 618 742 506 747C433 752 369 725 321 676" fill="none" stroke="url(#coral)" stroke-width="68" stroke-linecap="round"/>
+    <path d="M416 367C416 342 442 327 464 341L721 490C744 503 744 537 721 550L464 701C442 715 416 700 416 675V367Z" fill="#FFFFFF"/>
+    <path d="M486 440L622 520L486 600V440Z" fill="#123D44"/>
+  </g>
+</svg>
