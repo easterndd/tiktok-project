@@ -10,6 +10,7 @@ import {
 import { BytePlusVodService } from '../services/byteplus-vod.service';
 import { TikTokShortDramaApiService } from '../services/tiktok-short-drama-api.service';
 import { enqueueVideoSync, processPlatformSyncJobs } from '../services/platform-sync.service';
+import { processSharedPlatformOperations } from '../services/shared-platform.service';
 
 const defaultIntervalMs = 30_000;
 const defaultMaxRetries = 5;
@@ -235,6 +236,11 @@ export async function startUploadWorker() {
       : new UnconfiguredTikTokShortDramaService(),
     platformApi: new TikTokShortDramaApiService(contextEnv)
   }));
+  const sharedDatabaseUrl = env.SHARED_PLATFORM_DATABASE_URL ?? env.DATABASE_URL;
+  const sharedPrisma = sharedDatabaseUrl === env.DATABASE_URL
+    ? contexts.find((context) => context.env.MINI_APP_KEY === 'main')?.prisma
+    : new PrismaClient({ datasources: { db: { url: sharedDatabaseUrl } } });
+  if (!sharedPrisma) throw new Error('Main Prisma context is required for shared platform operations.');
   const run = async () => {
     for (const context of contexts) {
       try {
@@ -252,13 +258,24 @@ export async function startUploadWorker() {
         console.error(`${context.env.MINI_APP_KEY} worker cycle failed.`, error);
       }
     }
+    const apiByApp = Object.fromEntries(contexts.map((context) => [context.env.MINI_APP_KEY, context.platformApi]));
+    const localPrismaByApp = Object.fromEntries(contexts.map((context) => [context.env.MINI_APP_KEY, context.prisma]));
+    await processSharedPlatformOperations(sharedPrisma as any, {
+      maxRetries: env.UPLOAD_MAX_RETRIES,
+      localPrismaByApp,
+      apiByApp,
+      log: (message, details) => console.info('shared-platform', message, details)
+    });
   };
 
   await run().catch((error) => console.error('Upload worker cycle failed.', error));
   const timer = setInterval(() => void run().catch((error) => console.error('Upload worker cycle failed.', error)), env.UPLOAD_WORKER_INTERVAL_MS || defaultIntervalMs);
   const shutdown = async () => {
     clearInterval(timer);
-    await Promise.all(contexts.map((context) => context.prisma.$disconnect()));
+    await Promise.all([
+      ...contexts.map((context) => context.prisma.$disconnect()),
+      ...(sharedPrisma !== contexts.find((context) => context.env.MINI_APP_KEY === 'main')?.prisma ? [sharedPrisma.$disconnect()] : [])
+    ]);
   };
   process.once('SIGINT', () => void shutdown());
   process.once('SIGTERM', () => void shutdown());

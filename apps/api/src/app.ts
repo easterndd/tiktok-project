@@ -28,6 +28,8 @@ import { registerPrisma } from './plugins/prisma';
 declare module 'fastify' {
   interface FastifyInstance {
     config: Env;
+    sharedPrisma: PrismaClient;
+    miniAppPrisma: Record<string, PrismaClient>;
   }
 }
 
@@ -73,7 +75,7 @@ function isMiniBootstrapRequest(url: string) {
   return miniBootstrapPaths.has(url.split('?', 1)[0]);
 }
 
-export async function buildApp(env: Env, options: { prisma?: PrismaClient; xu03Prisma?: PrismaClient } = {}) {
+export async function buildApp(env: Env, options: { prisma?: PrismaClient; xu03Prisma?: PrismaClient; sharedPrisma?: PrismaClient } = {}) {
   const mainEnv: Env = { ...env, MINI_APP_KEY: 'main' };
   const app = Fastify({ logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' } });
   const xu03Env = xu03Environment(mainEnv);
@@ -117,6 +119,15 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; xu03P
   await app.register(jwt, { secret: env.JWT_SECRET });
   await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
   await registerPrisma(app, options.prisma);
+  const sharedDatabaseUrl = env.SHARED_PLATFORM_DATABASE_URL ?? mainEnv.DATABASE_URL;
+  const sharedPrisma = options.sharedPrisma
+    ?? (sharedDatabaseUrl === mainEnv.DATABASE_URL
+      ? app.prisma
+      : new DatabaseClient({ datasources: { db: { url: sharedDatabaseUrl } } }));
+  app.decorate('sharedPrisma', sharedPrisma);
+  if (!options.sharedPrisma && sharedDatabaseUrl !== mainEnv.DATABASE_URL) {
+    app.addHook('onClose', async () => sharedPrisma.$disconnect());
+  }
 
   app.get('/api/v1/assets/covers/:fileName', async (request, reply) => {
     const { fileName } = request.params as { fileName: string };
@@ -149,8 +160,10 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; xu03P
   app.get('/ready', readiness);
   app.get('/health', readiness);
 
-  const registerContext = async (context: FastifyInstance, contextEnv: Env, prisma?: PrismaClient) => {
+  const registerContext = async (context: FastifyInstance, contextEnv: Env, prisma: PrismaClient, miniAppPrisma: Record<string, PrismaClient>) => {
     context.decorate('config', contextEnv);
+    context.decorate('sharedPrisma', sharedPrisma);
+    context.decorate('miniAppPrisma', miniAppPrisma);
     await registerPrisma(context, prisma);
     await context.register(async (api) => {
       await registerAuthRoutes(api);
@@ -167,10 +180,12 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; xu03P
       await registerAdminRoutes(api);
     });
   };
-  await app.register((context) => registerContext(context, mainEnv, app.prisma), { prefix: '/api/v1' });
+  const miniAppPrisma: Record<string, PrismaClient> = { main: app.prisma };
+  await app.register((context) => registerContext(context, mainEnv, app.prisma, miniAppPrisma), { prefix: '/api/v1' });
   if (xu03Env) {
     const xu03Prisma = options.xu03Prisma ?? new DatabaseClient({ datasources: { db: { url: xu03Env.DATABASE_URL } } });
-    await app.register((context) => registerContext(context, xu03Env, xu03Prisma), { prefix: '/api/xu03/v1' });
+    miniAppPrisma.xu03 = xu03Prisma;
+    await app.register((context) => registerContext(context, xu03Env, xu03Prisma, miniAppPrisma), { prefix: '/api/xu03/v1' });
     if (!options.xu03Prisma) app.addHook('onClose', async () => xu03Prisma.$disconnect());
   }
   return app;

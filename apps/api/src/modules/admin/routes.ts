@@ -21,6 +21,15 @@ import {
   enqueueCoverSync,
   enqueueVideoSync
 } from '../../services/platform-sync.service';
+import {
+  bindEpisodeToSharedMedia,
+  createSharedAlbumFromLocal,
+  enqueueSharedAlbumAuthorization,
+  enqueueSharedAlbumReconcile,
+  getOrCreateSharedMediaAsset,
+  listSharedMediaAssets,
+  sharedMiniAppConfig
+} from '../../services/shared-platform.service';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 const episodeParams = z.object({ episodeId: z.string().min(1).max(128) });
@@ -53,6 +62,13 @@ const mediaBindingInput = z.object({
   byteplusVid: z.string().trim().min(1).max(256),
   byteplusCoverUrl: z.string().url().optional().nullable(),
   durationMs: z.number().int().positive().optional().nullable()
+});
+const sharedMediaBindingInput = z.object({
+  sharedMediaAssetId: z.string().trim().min(1).max(128)
+});
+const sharedAuthorizationInput = z.object({
+  targetMiniAppKey: z.enum(['main', 'xu03']),
+  targetLocalAlbumId: z.string().trim().min(1).max(128).optional()
 });
 const uploadInput = z.object({
   episodeId: z.string().min(1).max(128),
@@ -685,6 +701,16 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     if (!media) {
       return reply.code(404).send({ error: { code: 'BYTEPLUS_MEDIA_NOT_FOUND', message: '在配置的媒体空间中找不到 BytePlus 视频 ID。', requestId: request.id } });
     }
+    const sharedMedia = await getOrCreateSharedMediaAsset(app.sharedPrisma as any, {
+      byteplusVid: media.vid,
+      byteplusAccountId: app.config.BYTEPLUS_ACCOUNT_ID,
+      byteplusSpaceName: app.config.BYTEPLUS_SPACE_NAME,
+      byteplusRegion: app.config.BYTEPLUS_REGION,
+      miniAppKey: app.config.MINI_APP_KEY,
+      title: media.title,
+      coverUrl: input.byteplusCoverUrl ?? media.coverUrl,
+      durationMs: input.durationMs ?? media.durationMs
+    });
     const currentEpisode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { coverAsset: { select: { publicUrl: true, status: true } } } });
     const providerCoverUrl = input.byteplusCoverUrl ?? media.coverUrl;
     const episode = await app.prisma.episode.update({
@@ -702,12 +728,27 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       }
     });
     await audit(app, request.user.sub, 'BIND_BYTEPLUS_MEDIA', 'Episode', episode.id, {
-      byteplusVid: media.vid
+      byteplusVid: media.vid,
+      sharedMediaAssetId: sharedMedia.id
     });
     const syncJob = app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET
       ? await enqueueVideoSync(app.prisma as any, episode.id, request.user.sub)
       : null;
-    return { ...episode, platformSyncJob: syncJob };
+    return { ...episode, sharedMediaAsset: sharedMedia, platformSyncJob: syncJob };
+  });
+
+  app.post('/admin/episodes/:episodeId/bind-shared-media', { preHandler: requirePermission('content.write') }, async (request) => {
+    const { episodeId } = episodeParams.parse(request.params);
+    const input = sharedMediaBindingInput.parse(request.body);
+    const result = await bindEpisodeToSharedMedia(app.sharedPrisma as any, app.prisma as any, app.config, app.config.MINI_APP_KEY, episodeId, input.sharedMediaAssetId);
+    await audit(app, request.user.sub, 'BIND_SHARED_MEDIA', 'Episode', episodeId, {
+      sharedMediaAssetId: input.sharedMediaAssetId,
+      byteplusVid: result.media.byteplusVid
+    });
+    const syncJob = app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET
+      ? await enqueueVideoSync(app.prisma as any, episodeId, request.user.sub)
+      : null;
+    return { ...result.episode, sharedMediaAsset: result.media, platformSyncJob: syncJob };
   });
 
   app.patch('/admin/episodes/:episodeId/access', { preHandler: requireAdmin }, async (request) => {
@@ -905,6 +946,86 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       include: { album: { select: { id: true, title: true } }, episode: { select: { id: true, episodeNo: true, title: true } }, coverAsset: { select: { id: true, publicUrl: true } }, createdByAdminUser: { select: { id: true, email: true } } }
     });
     return { items };
+  });
+
+  app.get('/admin/shared/media-assets', { preHandler: requirePermission('content.read') }, async (request) => {
+    const query = z.object({
+      status: z.string().trim().min(1).optional(),
+      byteplusVid: z.string().trim().min(1).max(256).optional(),
+      sourceSha256: z.string().trim().min(1).max(128).optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(100)
+    }).parse(request.query);
+    return { items: await listSharedMediaAssets(app.sharedPrisma as any, { ...query, status: query.status as any }) };
+  });
+
+  app.get('/admin/shared/albums', { preHandler: requirePermission('content.read') }, async () => {
+    const items = await (app.sharedPrisma as any).sharedTikTokAlbum.findMany({
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        _count: { select: { episodes: true, authorizations: true } },
+        authorizations: true
+      }
+    });
+    return { items };
+  });
+
+  app.get('/admin/shared/albums/:sharedAlbumId', { preHandler: requirePermission('content.read') }, async (request, reply) => {
+    const { sharedAlbumId } = z.object({ sharedAlbumId: z.string().min(1).max(128) }).parse(request.params);
+    const item = await (app.sharedPrisma as any).sharedTikTokAlbum.findUnique({
+      where: { id: sharedAlbumId },
+      include: {
+        episodes: { include: { media: true }, orderBy: { episodeNo: 'asc' } },
+        authorizations: true,
+        operations: { orderBy: { createdAt: 'desc' }, take: 20 }
+      }
+    });
+    if (!item) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '共享主剧目不存在。', requestId: request.id } });
+    return item;
+  });
+
+  app.post('/admin/albums/:albumId/share', { preHandler: requirePermission('content.sync') }, async (request) => {
+    ensureTikTokPlatformConfigured(app);
+    const { albumId } = albumParams.parse(request.params);
+    const sharedAlbum = await createSharedAlbumFromLocal(app.sharedPrisma as any, app.prisma as any, app.config, app.config.MINI_APP_KEY, albumId);
+    await audit(app, request.user.sub, 'CREATE_SHARED_ALBUM', 'SharedTikTokAlbum', sharedAlbum.id, {
+      albumId,
+      tiktokAlbumId: sharedAlbum.tiktokAlbumId
+    });
+    return sharedAlbum;
+  });
+
+  app.post('/admin/shared/albums/:sharedAlbumId/authorizations', { preHandler: requirePermission('content.review') }, async (request) => {
+    ensureTikTokPlatformConfigured(app);
+    const { sharedAlbumId } = z.object({ sharedAlbumId: z.string().min(1).max(128) }).parse(request.params);
+    const input = sharedAuthorizationInput.parse(request.body);
+    const targetPrisma = app.miniAppPrisma[input.targetMiniAppKey];
+    if (!targetPrisma) throw Object.assign(new Error(`目标小程序 ${input.targetMiniAppKey} 未启用。`), { statusCode: 409 });
+    if (input.targetLocalAlbumId) {
+      const targetAlbum = await targetPrisma.album.findUnique({ where: { id: input.targetLocalAlbumId }, select: { id: true } });
+      if (!targetAlbum) throw Object.assign(new Error('目标小程序本地剧目不存在。'), { statusCode: 404 });
+    }
+    const result = await enqueueSharedAlbumAuthorization(
+      app.sharedPrisma as any,
+      app.config,
+      sharedAlbumId,
+      input.targetMiniAppKey,
+      input.targetLocalAlbumId,
+      request.user.sub
+    );
+    await audit(app, request.user.sub, 'AUTHORIZE_SHARED_ALBUM', 'SharedTikTokAlbum', sharedAlbumId, {
+      targetMiniAppKey: input.targetMiniAppKey,
+      targetLocalAlbumId: input.targetLocalAlbumId ?? null,
+      operationId: result.operation?.id ?? null
+    });
+    return result;
+  });
+
+  app.post('/admin/shared/albums/:sharedAlbumId/reconcile', { preHandler: requirePermission('content.sync') }, async (request) => {
+    ensureTikTokPlatformConfigured(app);
+    const { sharedAlbumId } = z.object({ sharedAlbumId: z.string().min(1).max(128) }).parse(request.params);
+    const operation = await enqueueSharedAlbumReconcile(app.sharedPrisma as any, sharedAlbumId, request.user.sub);
+    await audit(app, request.user.sub, 'RECONCILE_SHARED_ALBUM', 'SharedTikTokAlbum', sharedAlbumId, { operationId: operation.id });
+    return { operation };
   });
 
   app.post('/admin/cover-assets/:coverAssetId/sync', { preHandler: requirePermission('content.sync') }, async (request) => {

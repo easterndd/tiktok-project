@@ -56,6 +56,13 @@ export type TikTokEpisodeInfoInput = {
   byteplus_vid: string;
 };
 
+export type TikTokAlbumAuthorizationResult = {
+  clientKey: string;
+  authStatus?: number;
+  errorCode?: string;
+  errorMessage?: string;
+};
+
 type ServiceOptions = {
   fetch?: FetchLike;
   now?: () => Date;
@@ -249,6 +256,29 @@ export class TikTokShortDramaApiService {
       status: input.status
     });
     return { status: asNumber(data.status) ?? input.status, requestId };
+  }
+
+  async authorizeAlbum(input: { albumId: string; targetClientKeys: string[]; operateType?: 1 | 2 }) {
+    const targetClientKeys = [...new Set(input.targetClientKeys.map((value) => value.trim()).filter(Boolean))];
+    if (!targetClientKeys.length) throw new TikTokShortDramaApiError('TikTok album authorization requires at least one target client key.');
+    const { data, requestId } = await this.request<Record<string, unknown>>('/v2/sg/shortdrama/album/authorize/', 'POST', {
+      album_id: input.albumId,
+      operate_type: input.operateType ?? 1,
+      target_client_key_list: targetClientKeys
+    });
+    const rawResults = Array.isArray(data.client_key_result_list)
+      ? data.client_key_result_list.map(asRecord)
+      : [];
+    const results = rawResults.map((item) => ({
+      clientKey: asString(item.client_key) ?? '',
+      authStatus: asNumber(item.auth_status),
+      errorCode: asString(item.error_code),
+      errorMessage: asString(item.error_message)
+    })).filter((item) => Boolean(item.clientKey));
+    if (!results.length) {
+      throw new TikTokShortDramaApiError('TikTok album authorization returned no target result.', undefined, requestId, true);
+    }
+    return { results, requestId, raw: data };
   }
 
   private async request<T extends Record<string, unknown>>(path: string, method: 'GET' | 'POST', body?: Record<string, unknown>, query?: Record<string, string>) {

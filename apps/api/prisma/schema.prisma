@@ -158,6 +158,32 @@ enum UiConfigStatus {
   SUPERSEDED
 }
 
+enum SharedMediaStatus {
+  PENDING
+  UPLOADING
+  READY
+  FAILED
+  DELETED
+  CONFLICT
+}
+
+enum AlbumAuthorizationStatus {
+  PENDING
+  AUTHORIZING
+  AUTHORIZED
+  REVOKING
+  REVOKED
+  FAILED
+  CONFLICT
+}
+
+enum SharedPlatformOperationKind {
+  AUTHORIZE_ALBUM
+  REVOKE_ALBUM
+  RECONCILE_ALBUM
+  VERIFY_MEDIA
+}
+
 model User {
   id               String                   @id @default(cuid())
   identityType     UserIdentityType         @default(ANONYMOUS)
@@ -341,6 +367,125 @@ model PlatformSyncJob {
   @@index([status, nextAttemptAt])
   @@index([kind, targetId, createdAt])
   @@index([albumId, createdAt])
+}
+
+model SharedMediaAsset {
+  id                 String           @id @default(cuid())
+  byteplusVid        String           @unique
+  byteplusAccountId  String
+  byteplusSpaceName  String
+  byteplusRegion     String
+  sourceSha256       String?
+  sourceFileName     String?
+  title              String?
+  coverUrl           String?
+  durationMs         Int?
+  status             SharedMediaStatus @default(PENDING)
+  firstUploadedByApp String
+  firstUploadJobId   String?
+  lastVerifiedAt     DateTime?
+  lastError          String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  episodes           SharedTikTokEpisode[]
+
+  @@index([sourceSha256, byteplusAccountId, byteplusSpaceName])
+  @@index([status, updatedAt])
+  @@index([byteplusAccountId, byteplusSpaceName])
+}
+
+model SharedTikTokAlbum {
+  id                  String   @id @default(cuid())
+  canonicalKey        String   @unique
+  ownerMiniAppKey     String
+  ownerClientKey      String
+  tiktokAlbumId       String   @unique
+  currentVersion      Int?
+  onlineVersion       Int?
+  reviewStatus        String?
+  publishStatus       String?
+  platformPublishedAt DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  episodes            SharedTikTokEpisode[]
+  authorizations      MiniAppAlbumAuthorization[]
+  operations          SharedPlatformOperation[]
+
+  @@index([ownerMiniAppKey, updatedAt])
+}
+
+model SharedTikTokEpisode {
+  id               String   @id @default(cuid())
+  sharedAlbumId    String
+  episodeKey       String
+  episodeNo        Int
+  tiktokEpisodeId  String
+  tiktokCoverPicId String?
+  sharedMediaId    String
+  title            String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  album            SharedTikTokAlbum @relation(fields: [sharedAlbumId], references: [id], onDelete: Cascade)
+  media            SharedMediaAsset  @relation(fields: [sharedMediaId], references: [id])
+
+  @@unique([sharedAlbumId, episodeKey])
+  @@unique([sharedAlbumId, episodeNo])
+  @@unique([tiktokEpisodeId])
+}
+
+model MiniAppAlbumAuthorization {
+  id                String                    @id @default(cuid())
+  sharedAlbumId     String
+  miniAppKey        String
+  targetClientKey   String
+  targetAppId       String?
+  targetLocalAlbumId String?
+  status            AlbumAuthorizationStatus @default(PENDING)
+  providerRequestId String?
+  providerResponse  Json?
+  errorCode         String?
+  errorMessage      String?
+  authorizedAt      DateTime?
+  revokedAt         DateTime?
+  lastReconciledAt  DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  album             SharedTikTokAlbum @relation(fields: [sharedAlbumId], references: [id], onDelete: Cascade)
+
+  @@unique([sharedAlbumId, miniAppKey])
+  @@unique([sharedAlbumId, targetClientKey])
+  @@index([miniAppKey, status])
+}
+
+model SharedPlatformOperation {
+  id                String                       @id @default(cuid())
+  kind              SharedPlatformOperationKind
+  status            PlatformSyncJobStatus        @default(PENDING)
+  sharedAlbumId     String?
+  targetMiniAppKey  String?
+  dedupeKey         String                       @unique
+  snapshotHash      String?
+  snapshotJson      Json?
+  attemptCount      Int                          @default(0)
+  nextAttemptAt     DateTime?
+  providerRequestId String?
+  providerResponse  Json?
+  errorCode         String?
+  errorMessage      String?
+  createdAt         DateTime                     @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+  updatedAt         DateTime                     @updatedAt
+
+  album             SharedTikTokAlbum? @relation(fields: [sharedAlbumId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([sharedAlbumId, createdAt])
+  @@index([targetMiniAppKey, createdAt])
 }
 
 model WatchProgress {

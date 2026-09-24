@@ -51,6 +51,27 @@ describe('TikTokShortDramaApiService', () => {
     assert.equal(requests[1].url.searchParams.get('client_key'), 'mn-client-key');
   });
 
+  it('authorizes an existing album for target Mini App client keys', async () => {
+    const requests: Array<{ url: URL; body: Record<string, unknown> | null }> = [];
+    const service = new TikTokShortDramaApiService(env, {
+      fetch: async (input, init) => {
+        const url = new URL(String(input));
+        requests.push({ url, body: typeof init?.body === 'string' ? JSON.parse(init.body) : null });
+        if (url.pathname === '/v2/oauth/token/') return response({ access_token: 'token-1', expires_in: 7200 });
+        return response({
+          data: { client_key_result_list: [{ client_key: 'xu03-client-key', auth_status: 1, error_code: 0, error_message: '' }] },
+          error: { code: 'ok', log_id: 'log-auth' }
+        });
+      }
+    });
+
+    const result = await service.authorizeAlbum({ albumId: '7688551749335058439', targetClientKeys: ['xu03-client-key'] });
+    assert.equal(requests[1].url.pathname, '/v2/sg/shortdrama/album/authorize/');
+    assert.deepEqual(requests[1].body, { client_key: 'mn-client-key', album_id: '7688551749335058439', operate_type: 1, target_client_key_list: ['xu03-client-key'] });
+    assert.deepEqual(result.results, [{ clientKey: 'xu03-client-key', authStatus: 1, errorCode: '0', errorMessage: '' }]);
+    assert.equal(result.requestId, 'log-auth');
+  });
+
   it('accepts a synchronously registered BytePlus video without a polling job', async () => {
     const service = new TikTokShortDramaApiService(env, {
       fetch: async (input) => {
