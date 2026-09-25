@@ -91,7 +91,8 @@ const dramaInput = z.object({
     description: z.string().trim().max(20_000).optional(),
     sortOrder: z.number().int().positive().optional(),
     isFree: z.boolean().default(false),
-    coverAssetId: z.string().min(1).max(128).optional().nullable()
+    coverAssetId: z.string().min(1).max(128).optional().nullable(),
+    byteplusVid: z.string().trim().min(1).max(256).optional()
   })).min(1).max(500)
 });
 const appendEpisodesInput = z.object({ episodes: dramaInput.shape.episodes });
@@ -333,6 +334,23 @@ async function currentUiDraft(app: FastifyInstance) {
   return { version: null, items: await uiSnapshotFromRows(app), repaired: false };
 }
 
+async function verifiedImportedMedia(app: FastifyInstance, vids: string[]) {
+  if (!vids.length) return new Map<string, Awaited<ReturnType<BytePlusVodService['getMediaInfos']>>[number]>();
+  if (new Set(vids).size !== vids.length) throw Object.assign(new Error('同一剧目不能重复绑定相同的 BytePlus VID。'), { statusCode: 400 });
+  const service = new BytePlusVodService(app.config);
+  const media = [];
+  for (let index = 0; index < vids.length; index += 20) {
+    media.push(...await service.getMediaInfos({ vids: vids.slice(index, index + 20) }));
+  }
+  const byVid = new Map(media.map((item) => [item.vid, item]));
+  for (const vid of vids) {
+    const item = byVid.get(vid);
+    if (!item) throw Object.assign(new Error(`BytePlus VID ${vid} 不存在。`), { statusCode: 404 });
+    if (item.spaceName !== app.config.BYTEPLUS_SPACE_NAME) throw Object.assign(new Error(`BytePlus VID ${vid} 不属于当前空间。`), { statusCode: 409 });
+  }
+  return byVid;
+}
+
 async function syncUiComponentRows(tx: Prisma.TransactionClient, items: UiComponentSnapshot) {
   await Promise.all(items.map((item) => tx.uiComponent.upsert({
     where: { key: item.key },
@@ -559,6 +577,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     if (new Set(input.episodes.map((episode) => episode.episodeNo)).size !== input.episodes.length) {
       throw Object.assign(new Error('分集集号不能重复。'), { statusCode: 400 });
     }
+    const importedMedia = await verifiedImportedMedia(app, input.episodes.flatMap((episode) => episode.byteplusVid ? [episode.byteplusVid] : []));
     const albumCover = await validateReadyCover(app, input.coverAssetId);
     const episodeCoverIds = Array.from(new Set(input.episodes.flatMap((episode) => episode.coverAssetId ? [episode.coverAssetId] : [])));
     const episodeCovers = episodeCoverIds.length ? await app.prisma.coverAsset.findMany({ where: { id: { in: episodeCoverIds }, status: 'READY' } }) : [];
@@ -585,6 +604,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       });
       const episodes = await Promise.all(input.episodes.map((episode) => {
         const cover = episode.coverAssetId ? coverById.get(episode.coverAssetId) : null;
+        const media = episode.byteplusVid ? importedMedia.get(episode.byteplusVid) : null;
         return tx.episode.create({
           data: {
             albumId: album.id,
@@ -594,8 +614,12 @@ export async function registerAdminRoutes(app: FastifyInstance) {
             sortOrder: episode.sortOrder ?? episode.episodeNo,
             isFree: episode.isFree,
             coverAssetId: cover?.id,
-            coverUrl: cover?.publicUrl,
-            status: 'DRAFT'
+            coverUrl: cover?.publicUrl ?? media?.coverUrl,
+            byteplusVid: media?.vid,
+            byteplusCoverUrl: media?.coverUrl,
+            durationMs: media?.durationMs,
+            byteplusUploadStatus: media ? 'READY' : 'PENDING',
+            status: media ? 'READY' : 'DRAFT'
           }
         });
       }));
@@ -610,12 +634,13 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const { episodes: inputEpisodes } = appendEpisodesInput.parse(request.body);
     const numbers = inputEpisodes.map((episode) => episode.episodeNo);
     if (new Set(numbers).size !== numbers.length) throw Object.assign(new Error('新增分集集号不能重复。'), { statusCode: 400 });
+    const importedMedia = await verifiedImportedMedia(app, inputEpisodes.flatMap((episode) => episode.byteplusVid ? [episode.byteplusVid] : []));
     const coverIds = [...new Set(inputEpisodes.flatMap((episode) => episode.coverAssetId ? [episode.coverAssetId] : []))];
     const covers = coverIds.length ? await app.prisma.coverAsset.findMany({ where: { id: { in: coverIds }, status: 'READY' } }) : [];
     if (covers.length !== coverIds.length) throw Object.assign(new Error('一个或多个分集封面尚未准备就绪。'), { statusCode: 400 });
     const coverById = new Map(covers.map((cover) => [cover.id, cover]));
     try {
-      return await app.prisma.$transaction(async (tx) => {
+      const result = await app.prisma.$transaction(async (tx) => {
         const album = await tx.album.findUnique({ where: { id: albumId }, select: { id: true, title: true, status: true, tiktokAlbumId: true, reviewStatus: true, accessConfig: true, _count: { select: { episodes: true } } } });
         if (!album) throw Object.assign(new Error('目标剧集不存在。'), { statusCode: 404 });
         if (album.status === 'OFFLINE') throw Object.assign(new Error('下线剧集不能追加分集。'), { statusCode: 409 });
@@ -626,6 +651,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         const episodes = [];
         for (const input of inputEpisodes) {
           const cover = input.coverAssetId ? coverById.get(input.coverAssetId) : null;
+          const media = input.byteplusVid ? importedMedia.get(input.byteplusVid) : null;
           episodes.push(await tx.episode.create({ data: {
             albumId,
             episodeNo: input.episodeNo,
@@ -634,13 +660,18 @@ export async function registerAdminRoutes(app: FastifyInstance) {
             sortOrder: input.sortOrder ?? input.episodeNo,
             isFree: input.isFree,
             coverAssetId: cover?.id,
-            coverUrl: cover?.publicUrl,
-            status: 'DRAFT'
+            coverUrl: cover?.publicUrl ?? media?.coverUrl,
+            byteplusVid: media?.vid,
+            byteplusCoverUrl: media?.coverUrl,
+            durationMs: media?.durationMs,
+            byteplusUploadStatus: media ? 'READY' : 'PENDING',
+            status: media ? 'READY' : 'DRAFT'
           } }));
         }
         await tx.auditLog.create({ data: { adminUserId: request.user.sub, action: 'APPEND', resource: 'Album', resourceId: albumId, metadata: { episodeNos: numbers } as never } });
         return { album: { id: album.id, title: album.title, accessConfig: album.accessConfig }, episodes };
       });
+      return result;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw Object.assign(new Error('集号已被其他操作占用，请刷新分集列表后重试。'), { statusCode: 409 });

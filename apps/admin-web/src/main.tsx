@@ -73,8 +73,9 @@ function platformNextStep(album: Album) {
 }
 type EpisodeOption = { id: string; albumId: string; episodeNo: number; title: string; sortOrder: number; status: string; byteplusVid?: string | null; album: { title: string; status: string } };
 type CoverAsset = { id: string; publicUrl: string; status: string; width?: number | null; height?: number | null };
-type DraftEpisode = { localId: string; episodeNo: number; title: string; sortOrder: number; isFree: boolean; file?: File | null; coverFile?: File | null; coverAsset?: CoverAsset | null; coverPreviewUrl?: string; savedEpisodeId?: string; uploadStatus?: string; uploadError?: string };
+type DraftEpisode = { localId: string; episodeNo: number; title: string; sortOrder: number; isFree: boolean; file?: File | null; byteplusVid?: string; coverFile?: File | null; coverAsset?: CoverAsset | null; coverPreviewUrl?: string; savedEpisodeId?: string; uploadStatus?: string; uploadError?: string };
 type UploadJob = { id: string; episodeId: string; sourceType?: string; sourceName?: string | null; status: string; providerJobId?: string | null; errorMessage?: string | null; createdAt: string; startedAt?: string | null; completedAt?: string | null; episode?: { title: string; episodeNo: number } };
+type VodMedia = { vid: string; title: string; coverUrl?: string; durationMs?: number; createTime?: string };
 type PlatformSyncJob = { id: string; albumId?: string | null; kind: string; status: string; errorMessage?: string | null; createdAt: string; snapshotJson?: { priorityScore?: number; version?: number } | null; providerResponse?: { version?: number } | null; album?: { title: string } | null; episode?: { title: string } | null };
 type SharedAuthorization = { id: string; miniAppKey: MiniApp; targetClientKey: string; targetLocalAlbumId?: string | null; status: string; errorMessage?: string | null; authorizedAt?: string | null; lastReconciledAt?: string | null };
 type SharedAlbum = { id: string; ownerMiniAppKey: MiniApp; tiktokAlbumId: string; currentVersion?: number | null; onlineVersion?: number | null; reviewStatus?: string | null; publishStatus?: string | null; authorizations: SharedAuthorization[]; episodes?: { episodeNo: number; title: string; tiktokEpisodeId: string; media?: { byteplusVid: string } }[] };
@@ -259,6 +260,8 @@ function AdminApp() {
   const [changingPassword, setChangingPassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [vodMedia, setVodMedia] = useState<VodMedia[]>([]);
+  const [loadingVodMedia, setLoadingVodMedia] = useState(false);
 
   const loadEntryAdPolicy = async () => {
     try {
@@ -314,6 +317,18 @@ function AdminApp() {
       if (!(await entryAdPolicyRequest)) failures.push('进入广告策略');
       setMessage(failures.length ? `部分数据加载失败：${failures.join('、')}。请点击刷新重试。` : '');
       setLoading(false);
+    }
+  };
+  const loadVodMedia = async () => {
+    setLoadingVodMedia(true);
+    try {
+      const result = await api<{ items: VodMedia[] }>('/admin/byteplus/media?offset=0&pageSize=100');
+      setVodMedia(result.items);
+      setMessage(`已读取当前 BytePlus 空间 ${result.items.length} 条媒资。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '读取 BytePlus 空间媒资失败');
+    } finally {
+      setLoadingVodMedia(false);
     }
   };
 
@@ -579,7 +594,7 @@ function AdminApp() {
           setMessage(`已识别未完成的原有分集，将直接补传：${draftsToUpload.filter((episode, index) => episode.savedEpisodeId && !draftEpisodes[index]?.savedEpisodeId).map((episode) => `第${episode.episodeNo}集`).join('、')}。`);
         }
       }
-      const missingVideos = draftsToUpload.filter((episode) => !episode.file && episode.uploadStatus !== '已上传');
+      const missingVideos = draftsToUpload.filter((episode) => !episode.file && !episode.byteplusVid && episode.uploadStatus !== '已上传');
       if (missingVideos.length) throw new Error(`请先为第 ${missingVideos.map((episode) => episode.episodeNo).join('、')} 集选择视频。`);
       const pendingReconciliation = draftsToUpload.filter((episode) => episode.uploadStatus === '待对账');
       if (pendingReconciliation.length) throw new Error(`第 ${pendingReconciliation.map((episode) => episode.episodeNo).join('、')} 集上传结果未确认，请先在上传处理状态中对账或释放任务。`);
@@ -591,7 +606,8 @@ function AdminApp() {
           title: episode.title,
           sortOrder: episode.sortOrder,
           isFree: episode.isFree,
-          coverAssetId: episode.coverAsset?.id ?? null
+          coverAssetId: episode.coverAsset?.id ?? null,
+          ...(episode.byteplusVid ? { byteplusVid: episode.byteplusVid.trim() } : {})
         }));
         let result: { album: Album; episodes: { id: string; episodeNo: number }[] };
         if (createMode === 'append' || createdAlbumId) {
@@ -632,7 +648,7 @@ function AdminApp() {
       }
       const failedUploads: DraftEpisode[] = [];
       for (const draft of draftsToUpload) {
-        if (!draft.file || draft.uploadStatus === '已上传') continue;
+        if (!draft.file || draft.byteplusVid || draft.uploadStatus === '已上传') continue;
         try {
           await uploadDraftVideo(draft);
         } catch {
@@ -893,17 +909,17 @@ function AdminApp() {
             <label className="check-row"><input type="checkbox" checked={createRewardedEnabled} onChange={(event) => setCreateRewardedEnabled(event.target.checked)} />启用广告解锁</label></fieldset></>}
             <div className="episode-toolbar">
               <label>{createMode === 'append' ? '本次处理集数' : '总集数'}<input className="inline-number" type="number" min="1" max="500" value={draftEpisodes.length} onChange={(event) => applyEpisodeCount(Number(event.target.value))} /></label>
-              <label>批量选择视频<input type="file" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" multiple onChange={(event) => applyBatchFiles(event.target.files)} /></label>
+              <label>批量选择视频<input type="file" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" multiple onChange={(event) => applyBatchFiles(event.target.files)} /></label><button className="secondary" type="button" disabled={loadingVodMedia} onClick={() => void loadVodMedia()}><RefreshCw size={15} className={loadingVodMedia ? 'spin' : ''} />读取 VOD 媒资</button>
             </div>
             {batchFeedback && <p className="batch-feedback"><AlertTriangle size={15} />{batchFeedback}</p>}
-            <div className="table-wrap"><table><thead><tr><th>集号</th><th>标题</th><th>排序</th><th>单集免费</th><th>独立封面</th><th>视频文件</th><th>状态</th><th></th></tr></thead><tbody>{draftEpisodes.map((episode) => <tr key={episode.localId} className={!episode.file ? 'needs-file' : ''}>
+            <div className="table-wrap"><table><thead><tr><th>集号</th><th>标题</th><th>排序</th><th>单集免费</th><th>独立封面</th><th>视频文件或已有 VID</th><th>状态</th><th></th></tr></thead><tbody>{draftEpisodes.map((episode) => <tr key={episode.localId} className={!episode.file && !episode.byteplusVid ? 'needs-file' : ''}>
               <td><input className="inline-number" type="number" min="1" step="1" aria-label="集号" value={episode.episodeNo} disabled={Boolean(episode.savedEpisodeId)} onChange={(event) => setDraftEpisodeNo(episode.localId, Number(event.target.value))} /></td>
               <td><input className="table-input" aria-label="分集标题" value={episode.title} disabled={Boolean(episode.savedEpisodeId)} onChange={(event) => patchDraftEpisode(episode.localId, { title: event.target.value })} /></td>
               <td><input className="inline-number" type="number" min="1" aria-label="排序" value={episode.sortOrder} disabled={Boolean(episode.savedEpisodeId)} onChange={(event) => patchDraftEpisode(episode.localId, { sortOrder: Number(event.target.value) })} /></td>
               <td><input type="checkbox" aria-label="单集免费" checked={episode.isFree} disabled={Boolean(episode.savedEpisodeId)} onChange={(event) => patchDraftEpisode(episode.localId, { isFree: event.target.checked })} /></td>
               <td><div className="episode-cover-cell"><label className="file-cell">{episode.coverFile?.name ?? (episode.coverAsset ? '已保存封面' : '使用专辑封面')}<input type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" disabled={Boolean(episode.savedEpisodeId)} onChange={(event) => selectEpisodeCover(episode, event.target.files?.[0] ?? null)} /></label>{(episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl) && <img className="episode-cover-preview" src={episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl} alt={`${episode.title} 封面预览`} />}</div></td>
-              <td><label className="file-cell">{episode.file?.name ?? '选择视频'}<input type="file" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" onChange={(event) => patchDraftEpisode(episode.localId, { file: event.target.files?.[0] ?? null, uploadError: undefined })} /></label></td>
-              <td><div className="draft-upload-state"><span>{episode.uploadStatus ?? (episode.file ? '待保存' : '缺少视频')}</span>{episode.uploadError && <small className="table-error" title={episode.uploadError}>{episode.uploadError}</small>}{episode.uploadStatus === '上传失败' && episode.file && episode.savedEpisodeId && <button className="text-button retry-button" type="button" onClick={() => void uploadDraftVideo(episode).catch((error) => setMessage(error instanceof Error ? error.message : '上传失败'))}>重试上传</button>}</div></td>
+              <td><label className="file-cell">{episode.file?.name ?? (episode.byteplusVid ? '已有 BytePlus VID' : '选择视频')}<input type="file" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" onChange={(event) => patchDraftEpisode(episode.localId, { file: event.target.files?.[0] ?? null, byteplusVid: '', uploadError: undefined })} /></label><select value={episode.byteplusVid ?? ''} onChange={(event) => patchDraftEpisode(episode.localId, { byteplusVid: event.target.value, file: null, uploadError: undefined })}><option value="">选择已有 VOD 媒资</option>{vodMedia.map((media) => <option key={media.vid} value={media.vid}>{media.title} · {media.vid}</option>)}</select><input className="table-input" placeholder="或粘贴已有 BytePlus VID" value={episode.byteplusVid ?? ''} onChange={(event) => patchDraftEpisode(episode.localId, { byteplusVid: event.target.value, file: null, uploadError: undefined })} /></td>
+              <td><div className="draft-upload-state"><span>{episode.byteplusVid ? '待从 VOD 导入' : episode.uploadStatus ?? (episode.file ? '待保存' : '缺少视频')}</span>{episode.uploadError && <small className="table-error" title={episode.uploadError}>{episode.uploadError}</small>}{episode.uploadStatus === '上传失败' && episode.file && episode.savedEpisodeId && <button className="text-button retry-button" type="button" onClick={() => void uploadDraftVideo(episode).catch((error) => setMessage(error instanceof Error ? error.message : '上传失败'))}>重试上传</button>}</div></td>
               <td><button className="more" type="button" disabled={Boolean(episode.savedEpisodeId)} onClick={() => setDraftEpisodes((items) => items.filter((item) => item.localId !== episode.localId))} title={episode.savedEpisodeId ? '已保存分集不能从当前表单删除' : '删除'}><Trash2 size={15} /></button></td>
             </tr>)}</tbody></table></div>
             <button className="secondary" type="button" onClick={() => setDraftEpisodes((items) => {
