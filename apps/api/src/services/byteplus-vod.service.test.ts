@@ -59,12 +59,14 @@ describe('BytePlusVodService', () => {
       await writeFile(filePath, Buffer.from('video-data'));
       const requests: Array<{ url: URL; init: RequestInit }> = [];
       let appliedName = '';
+      let appliedSize = 0;
       let committedFunctions = '';
       const vodService = {
-        ApplyUploadInfo: async (input: { FileName: string; FileExtension?: string }) => {
+        ApplyUploadInfo: async (input: { FileName: string; FileExtension?: string; FileSize?: number }) => {
           appliedName = input.FileName;
+          appliedSize = input.FileSize ?? 0;
           assert.equal(input.FileExtension, undefined);
-          return { Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'objects/video.mp4', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } };
+          return { Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'objects/video.mp4', Auth: 'secret' }], UploadHosts: ['upload.example.com'], UploadHeader: [{ Key: 'X-Upload-Token', Value: 'upload-token' }] } } } };
         },
         CommitUploadInfo: async (input: { Functions: string }) => {
           committedFunctions = input.Functions;
@@ -80,9 +82,11 @@ describe('BytePlusVodService', () => {
       });
       const result = await service.uploadLocalVideo({ filePath, fileName: '第1集.mp4', title: 'TaleTV - 第1集', spaceName: 'space', byteplusAccountId: 'account' });
       assert.equal(result.byteplusVid, 'vid-1');
+      assert.equal(appliedSize, Buffer.byteLength('video-data'));
       assert.match(appliedName, /^1-[a-f0-9-]+\.mp4$/);
       assert.equal(JSON.parse(committedFunctions)[1].Input.Title, 'TaleTV - 第1集');
       assert.equal(requests.length, 1);
+      assert.equal((requests[0].init.headers as Record<string, string>)['X-Upload-Token'], 'upload-token');
       assert.equal(requests[0].init.headers && (requests[0].init.headers as Record<string, string>)['Content-CRC32']?.length, 8);
     } finally {
       await rm(directory, { recursive: true, force: true });

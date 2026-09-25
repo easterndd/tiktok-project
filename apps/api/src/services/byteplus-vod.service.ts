@@ -51,6 +51,7 @@ type UploadAddress = {
   SessionKey?: string;
   StoreInfos?: Array<{ StoreUri?: string; Auth?: string }>;
   UploadHosts?: string[];
+  UploadHeader?: Array<{ Key?: string; Value?: string }>;
 };
 
 type UploadStage = '直传' | '分片初始化' | '分片上传' | '分片合并';
@@ -287,7 +288,8 @@ export class BytePlusVodService implements TikTokShortDramaService {
       const applied = await service.ApplyUploadInfo({
         SpaceName: input.spaceName,
         FileType: 'media',
-        FileName: objectName
+        FileName: objectName,
+        FileSize: size
       });
       if (applied.ResponseMetadata?.Error) {
         throw new BytePlusVodError(safeProviderMessage(applied, 'BytePlus 未能签发上传地址。'), false);
@@ -297,8 +299,11 @@ export class BytePlusVodService implements TikTokShortDramaService {
       if (!address?.SessionKey || !store?.StoreUri || !store.Auth || !address.UploadHosts?.length) {
         throw new BytePlusVodError('BytePlus 未返回完整的上传地址。', true);
       }
+      const uploadHeaders = Object.fromEntries((address.UploadHeader ?? [])
+        .filter((item): item is { Key: string; Value: string } => Boolean(item.Key && item.Value))
+        .map((item) => [item.Key, item.Value]));
       stage = '上传视频文件';
-      await this.transferLocalFile(input.filePath, size, address.UploadHosts, store.StoreUri, store.Auth);
+      await this.transferLocalFile(input.filePath, size, address.UploadHosts, store.StoreUri, store.Auth, uploadHeaders);
       stage = '提交媒资';
       response = await service.CommitUploadInfo({
         SpaceName: input.spaceName,
@@ -311,8 +316,9 @@ export class BytePlusVodService implements TikTokShortDramaService {
       });
     } catch (error) {
       if (error instanceof BytePlusVodError) throw error;
+      const detail = error instanceof Error ? error.message.replace(/[\r\n\t]/g, ' ').slice(0, 240) : String(error).slice(0, 240);
       throw Object.assign(new BytePlusVodError(
-        `BytePlus ${stage}失败，请查看服务端日志。`,
+        `BytePlus ${stage}失败：${detail}`,
         true
       ), { cause: error });
     }
@@ -332,18 +338,18 @@ export class BytePlusVodService implements TikTokShortDramaService {
     };
   }
 
-  private async transferLocalFile(filePath: string, size: number, hosts: string[], objectName: string, auth: string) {
+  private async transferLocalFile(filePath: string, size: number, hosts: string[], objectName: string, auth: string, uploadHeaders: Record<string, string>) {
     const file = await open(filePath, 'r');
     try {
       if (size <= uploadPartSize) {
         const data = await this.readPart(file, 0, size);
-        await this.tryUploadHosts(hosts, objectName, auth, '直传', '', data);
+        await this.tryUploadHosts(hosts, objectName, auth, uploadHeaders, '直传', '', data);
         return;
       }
       for (const host of hosts) {
         let uploadId: string;
         try {
-          const response = await this.uploadRequest(host, objectName, auth, '分片初始化', 'uploads', undefined, true);
+          const response = await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片初始化', 'uploads', undefined, true);
           const body = await response.json() as { payload?: { uploadID?: string } };
           uploadId = body.payload?.uploadID ?? '';
           if (!uploadId) throw new BytePlusVodError('BytePlus 分片初始化未返回 uploadID。', true);
@@ -356,12 +362,12 @@ export class BytePlusVodService implements TikTokShortDramaService {
         for (let offset = 0, partNumber = 1; offset < size; offset += uploadPartSize, partNumber++) {
           const data = await this.readPart(file, offset, Math.min(uploadPartSize, size - offset));
           const checksum = crc32(data).toString(16).padStart(8, '0');
-          await this.uploadRequest(host, objectName, auth, '分片上传',
+          await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片上传',
             `partNumber=${partNumber}&uploadID=${encodeURIComponent(uploadId)}`, data, true, checksum);
           checksums.push(`${partNumber - 1}:${checksum}`);
         }
         // The BytePlus SDK uses zero-based checksum positions in the merge body.
-        await this.uploadRequest(host, objectName, auth, '分片合并', `uploadID=${encodeURIComponent(uploadId)}`,
+        await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片合并', `uploadID=${encodeURIComponent(uploadId)}`,
           checksums.join(','), true, undefined, false);
         return;
       }
@@ -381,11 +387,11 @@ export class BytePlusVodService implements TikTokShortDramaService {
     return data;
   }
 
-  private async tryUploadHosts(hosts: string[], objectName: string, auth: string, stage: UploadStage, query: string, data: Buffer) {
+  private async tryUploadHosts(hosts: string[], objectName: string, auth: string, uploadHeaders: Record<string, string>, stage: UploadStage, query: string, data: Buffer) {
     const checksum = crc32(data).toString(16).padStart(8, '0');
     for (const host of hosts) {
       try {
-        await this.uploadRequest(host, objectName, auth, stage, query, data, false, checksum);
+        await this.uploadRequest(host, objectName, auth, uploadHeaders, stage, query, data, false, checksum);
         return;
       } catch (error) {
         if (error instanceof BytePlusVodError && !error.retryable) throw error;
@@ -394,7 +400,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
     }
   }
 
-  private async uploadRequest(host: string, objectName: string, auth: string, stage: UploadStage, query: string,
+  private async uploadRequest(host: string, objectName: string, auth: string, uploadHeaders: Record<string, string>, stage: UploadStage, query: string,
     data?: Buffer | string, multipart = false, checksum?: string, retry = true): Promise<Response> {
     const url = new URL(`http://${host}/${objectName.split('/').map(encodeURIComponent).join('/')}`);
     url.search = query;
@@ -403,6 +409,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
         const response = await this.uploadFetch(url, {
           method: 'PUT',
           headers: {
+            ...uploadHeaders,
             Authorization: auth,
             ...(multipart ? { 'X-Storage-Mode': 'gateway' } : {}),
             ...(checksum ? { 'Content-CRC32': checksum } : {})
