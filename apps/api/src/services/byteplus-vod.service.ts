@@ -431,14 +431,15 @@ export class BytePlusVodService implements TikTokShortDramaService {
     url.search = query;
     for (let attempt = 1; attempt <= (retry ? uploadAttempts : 1); attempt++) {
       try {
+        const headers = new Headers(uploadHeaders);
+        if (!headers.has('Accept')) headers.set('Accept', 'application/json, text/plain, */*');
+        if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/x-www-form-urlencoded');
+        headers.set('Authorization', auth);
+        if (multipart) headers.set('X-Storage-Mode', 'gateway');
+        if (checksum) headers.set('Content-CRC32', checksum);
         const response = await this.uploadFetch(url, {
           method: 'PUT',
-          headers: {
-            ...uploadHeaders,
-            Authorization: auth,
-            ...(multipart ? { 'X-Storage-Mode': 'gateway' } : {}),
-            ...(checksum ? { 'Content-CRC32': checksum } : {})
-          },
+          headers,
           body: typeof data === 'string' ? data : data ? new Uint8Array(data) : undefined,
           signal: AbortSignal.timeout(90_000)
         });

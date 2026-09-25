@@ -86,8 +86,11 @@ describe('BytePlusVodService', () => {
       assert.match(appliedName, /^1-[a-f0-9-]+\.mp4$/);
       assert.equal(JSON.parse(committedFunctions)[1].Input.Title, 'TaleTV - 第1集');
       assert.equal(requests.length, 1);
-      assert.equal((requests[0].init.headers as Record<string, string>)['X-Upload-Token'], 'upload-token');
-      assert.equal(requests[0].init.headers && (requests[0].init.headers as Record<string, string>)['Content-CRC32']?.length, 8);
+      const headers = new Headers(requests[0].init.headers);
+      assert.equal(headers.get('X-Upload-Token'), 'upload-token');
+      assert.equal(headers.get('Content-CRC32')?.length, 8);
+      assert.equal(headers.get('Content-Type'), 'application/x-www-form-urlencoded');
+      assert.equal(headers.get('Accept'), 'application/json, text/plain, */*');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -98,7 +101,7 @@ describe('BytePlusVodService', () => {
     try {
       const filePath = join(directory, 'episode.mp4');
       await writeFile(filePath, Buffer.alloc(20 * 1024 * 1024 + 1, 1));
-      const requests: Array<{ query: string; body?: BodyInit | null }> = [];
+      const requests: Array<{ query: string; body?: BodyInit | null; headers: Headers }> = [];
       const service = new BytePlusVodService(env, {
         vodService: {
           ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'object', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
@@ -106,12 +109,17 @@ describe('BytePlusVodService', () => {
         } as never,
         uploadFetch: async (url, init) => {
           const query = new URL(String(url)).search;
-          requests.push({ query, body: init?.body });
+          requests.push({ query, body: init?.body, headers: new Headers(init?.headers) });
           return query === '?uploads' ? Response.json({ payload: { uploadID: 'upload-1' } }) : new Response('', { status: 200 });
         }
       });
       await service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: '第2集', spaceName: 'space', byteplusAccountId: 'account' });
       assert.equal(requests.length, 4);
+      for (const request of requests) {
+        assert.equal(request.headers.get('Content-Type'), 'application/x-www-form-urlencoded');
+        assert.equal(request.headers.get('Accept'), 'application/json, text/plain, */*');
+      }
+      assert.equal(requests[0].headers.get('X-Storage-Mode'), 'gateway');
       assert.match(requests[1].query, /partNumber=1/);
       assert.match(requests[2].query, /partNumber=2/);
       assert.match(String(requests[3].body), /^0:[a-f0-9]{8},1:[a-f0-9]{8}$/);
