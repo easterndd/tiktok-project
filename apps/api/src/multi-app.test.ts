@@ -4,6 +4,7 @@ import type { PrismaClient } from '@prisma/client';
 import { buildApp } from './app';
 import { loadEnv } from './config/env';
 import { taletvEnvironment } from './config/mini-apps';
+import { accessConfigSchema } from './lib/content-access';
 
 const env = loadEnv({
   NODE_ENV: 'test',
@@ -129,4 +130,37 @@ it('registers CineReels and TaleReels on independent routes and rejects duplicat
     await app.close();
   }
   assert.throws(() => taletvEnvironment({ ...expanded, TALETV_DATABASE_URL: expanded.CINEREELS_DATABASE_URL }), /different database or PostgreSQL schema/);
+});
+
+it('creates a CineReels draft with no ad placement when rewarded ads are off', async () => {
+  assert.equal(accessConfigSchema.safeParse({ rewardedAdEnabled: false, rewardedPlacementId: '' }).success, true);
+  const cineDb = databaseFor('cine-album') as any;
+  cineDb.coverAsset.findUnique = async () => ({ id: 'cover-1', publicUrl: 'https://example.com/cover.jpg', status: 'READY' });
+  cineDb.coverAsset.findMany = async () => [];
+  cineDb.album.create = async ({ data }: { data: Record<string, unknown> }) => ({ id: 'new-cine-album', ...data });
+  cineDb.episode = { create: async ({ data }: { data: Record<string, unknown> }) => ({ id: 'new-cine-episode', ...data }) };
+  cineDb.$transaction = async (callback: (tx: typeof cineDb) => Promise<unknown>) => callback(cineDb);
+  const app = await buildApp({
+    ...env,
+    CINEREELS_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=cinereels',
+    CINEREELS_REWARDED_PLACEMENT_ID: undefined
+  }, { prisma: databaseFor('main-album'), miniPrisma: { cinereels: cineDb }, sharedPrisma: databaseFor('shared-album') });
+  try {
+    await app.ready();
+    const cineToken = await app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: 'cinereels', role: 'OWNER', tokenVersion: 0 });
+    const payload = {
+      title: 'CineReels drama', coverAssetId: 'cover-1', releaseYear: 2026, dramaType: 2, tagList: [1],
+      accessConfig: { freeEpisodeCount: 1, rewardedAdEnabled: false, rewardedPlacementId: '', rewardedAdCount: 1 },
+      episodes: [{ episodeNo: 1, title: 'Episode 1', isFree: true }]
+    };
+    const headers = { authorization: `Bearer ${cineToken}` };
+    const created = await app.inject({ method: 'POST', url: '/api/cinereels/v1/admin/dramas', headers, payload });
+    assert.equal(created.statusCode, 200);
+    assert.equal(created.json().album.accessConfig.rewardedPlacementId, '');
+    const invalid = await app.inject({ method: 'POST', url: '/api/cinereels/v1/admin/dramas', headers, payload: { ...payload, accessConfig: { ...payload.accessConfig, rewardedAdEnabled: true } } });
+    assert.equal(invalid.statusCode, 400);
+    assert.match(invalid.json().error.message, /激励广告位/);
+  } finally {
+    await app.close();
+  }
 });

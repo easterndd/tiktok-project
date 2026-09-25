@@ -7,7 +7,7 @@ const fallbackRewardedPlacementId = 'ad7686459794040702993';
 export const accessConfigSchema = z.object({
   freeEpisodeCount: z.number().int().min(0).max(10_000).default(0),
   rewardedAdEnabled: z.boolean().default(true),
-  rewardedPlacementId: z.string().trim().min(1).max(128).optional(),
+  rewardedPlacementId: z.preprocess((value) => value === '' ? undefined : value, z.string().trim().min(1).max(128).optional()),
   rewardedAdCount: z.number().int().min(1).default(1)
 });
 
@@ -35,10 +35,14 @@ export function readMiniAppAccessConfig(value: unknown, env: Env): AccessConfig 
     .filter((key) => key !== env.MINI_APP_KEY)
     .map((key) => miniAppAdConfig(env, key).rewardedPlacementId)
     .filter(Boolean);
-  return {
+  const result = {
     ...parsed,
     rewardedPlacementId: otherPlacementIds.includes(parsed.rewardedPlacementId) ? adConfig.rewardedPlacementId : parsed.rewardedPlacementId
   };
+  if (result.rewardedAdEnabled && !result.rewardedPlacementId) {
+    throw Object.assign(new Error('当前小程序尚未配置激励广告位 ID，请填写广告位或关闭广告解锁。'), { statusCode: 400 });
+  }
+  return result;
 }
 
 export function isEpisodeFree(episode: { isFree: boolean; episodeNo: number }, accessConfig: unknown) {

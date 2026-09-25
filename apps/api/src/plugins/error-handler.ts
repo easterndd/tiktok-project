@@ -7,6 +7,7 @@ import { ProviderNotConfiguredError } from '../services/tiktok-short-drama.servi
 export function registerErrorHandler(app: FastifyInstance) {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
+      request.log.warn({ issues: error.issues.map((issue) => ({ path: issue.path.join('.'), code: issue.code })) }, 'Request validation failed');
       return reply.status(400).send({ error: { code: 'VALIDATION_ERROR', message: '请求参数不正确。', requestId: request.id } });
     }
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
