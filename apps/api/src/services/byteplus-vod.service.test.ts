@@ -161,6 +161,31 @@ describe('BytePlusVodService', () => {
     }
   });
 
+  it('marks commit transport failures as uncertain so the caller reconciles instead of re-uploading', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'byteplus-uncertain-'));
+    try {
+      const filePath = join(directory, 'episode.mp4');
+      await writeFile(filePath, Buffer.from('video-data'));
+      const service = new BytePlusVodService(env, {
+        vodService: {
+          ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'object', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
+          CommitUploadInfo: async () => { throw new Error('socket closed after provider accepted commit'); }
+        } as never,
+        uploadFetch: async () => new Response('', { status: 200 })
+      });
+      await assert.rejects(
+        () => service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: 'TaleTV - 第1集', spaceName: 'space', byteplusAccountId: 'account' }),
+        (error: unknown) => {
+          assert.equal((error as { uncertain?: boolean }).uncertain, true);
+          assert.equal((error as { retryable?: boolean }).retryable, true);
+          return true;
+        }
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('identifies multipart initialization errors from the upload host', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'byteplus-init-'));
     try {

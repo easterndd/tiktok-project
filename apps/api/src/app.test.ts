@@ -4,6 +4,7 @@ import type { PrismaClient } from '@prisma/client';
 import { buildApp } from './app';
 import type { Env } from './config/env';
 import { hashPassword } from './services/password';
+import { BytePlusVodService } from './services/byteplus-vod.service';
 
 const env: Env = {
   NODE_ENV: 'test',
@@ -577,6 +578,59 @@ describe('QuicK ReeLS API', () => {
     assert.equal(created.json().episodes[0].status, 'DRAFT');
     const duplicate = await app.inject({ method: 'POST', url: '/api/v1/admin/albums/album-1/episodes/batch', headers, payload: { episodes: [{ episodeNo: 1, title: 'Duplicate' }] } });
     assert.equal(duplicate.statusCode, 409);
+  });
+
+  it('rejects a local upload when another task already owns the episode', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const prisma = app.prisma as any;
+    prisma.episode.findUnique = async () => ({ id: 'episode-1', episodeNo: 1, byteplusVid: null, byteplusUploadStatus: 'FAILED', coverAsset: null, album: { title: 'Test Drama', status: 'DRAFT' } });
+    prisma.episode.updateMany = async () => ({ count: 0 });
+    prisma.uploadJob.create = async () => { throw new Error('must not create a competing upload job'); };
+    const boundary = 'upload-test-boundary';
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/admin/upload-jobs/local',
+      headers: { authorization: `Bearer ${await token(app, 'admin')}`, 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="episodeId"\r\n\r\nepisode-1\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="episode.mp4"\r\nContent-Type: video/mp4\r\n\r\nvideo-data\r\n--${boundary}--\r\n`)
+    });
+    assert.equal(response.statusCode, 409);
+    assert.match(response.json().error.message, /其他上传任务/);
+  });
+
+  it('does not release a recent or identified BytePlus upload', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const prisma = app.prisma as any;
+    const job: any = { id: 'job-1', episodeId: 'episode-1', sourceType: 'FILE', status: 'PROCESSING', providerJobId: null, startedAt: new Date() };
+    prisma.uploadJob.findUnique = async () => job;
+    prisma.uploadJob.updateMany = async () => { throw new Error('must not release the task'); };
+    const headers = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const request = () => app.inject({ method: 'POST', url: '/api/v1/admin/upload-jobs/job-1/release', headers, payload: { confirmation: 'NO_BYTEPLUS_MEDIA' } });
+    assert.equal((await request()).statusCode, 409);
+    job.startedAt = new Date(Date.now() - 3 * 60 * 60_000);
+    job.providerJobId = 'vid-1';
+    assert.equal((await request()).statusCode, 409);
+  });
+
+  it('rejects reconciliation with media from another BytePlus space', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    (app.prisma as any).uploadJob.findUnique = async () => ({
+      id: 'job-1', episodeId: 'episode-1', sourceType: 'FILE', status: 'PROCESSING', providerJobId: null,
+      episode: { byteplusVid: null, coverAsset: null, album: { title: 'Test Drama' } }
+    });
+    const original = BytePlusVodService.prototype.getMediaInfos;
+    BytePlusVodService.prototype.getMediaInfos = async () => [{ vid: 'vid-1', spaceName: 'different-space', title: 'Episode 1' }];
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/v1/admin/upload-jobs/job-1/reconcile',
+        headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { byteplusVid: 'vid-1' }
+      });
+      assert.equal(response.statusCode, 409);
+      assert.equal(response.json().error.code, 'BYTEPLUS_SPACE_MISMATCH');
+    } finally {
+      BytePlusVodService.prototype.getMediaInfos = original;
+    }
   });
 
   it('logs administrators in with a password hash and returns an admin token', async () => {

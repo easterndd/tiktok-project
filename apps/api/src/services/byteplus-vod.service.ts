@@ -25,6 +25,7 @@ type BytePlusVodOptions = {
 
 export type BytePlusMedia = {
   vid: string;
+  spaceName?: string;
   title: string;
   coverUrl?: string;
   durationMs?: number;
@@ -125,11 +126,13 @@ type QueryUploadTaskInfoResponse = BytePlusError & {
 
 export class BytePlusVodError extends Error {
   readonly retryable: boolean;
+  readonly uncertain: boolean;
 
-  constructor(message: string, retryable: boolean) {
+  constructor(message: string, retryable: boolean, uncertain = false) {
     super(message);
     this.name = 'BytePlusVodError';
     this.retryable = retryable;
+    this.uncertain = uncertain;
   }
 }
 
@@ -319,7 +322,8 @@ export class BytePlusVodService implements TikTokShortDramaService {
       const detail = error instanceof Error ? error.message.replace(/[\r\n\t]/g, ' ').slice(0, 240) : String(error).slice(0, 240);
       throw Object.assign(new BytePlusVodError(
         `BytePlus ${stage}失败：${detail}`,
-        true
+        true,
+        stage === '提交媒资'
       ), { cause: error });
     }
     const providerError = response.ResponseMetadata?.Error;
@@ -330,7 +334,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
       );
     }
     const data = response.Result?.Data;
-    if (!data?.Vid) throw new BytePlusVodError('BytePlus VOD 上传后没有返回视频 VID。', true);
+    if (!data?.Vid) throw new BytePlusVodError('BytePlus VOD 上传后没有返回视频 VID，请先对账。', true, true);
     return {
       byteplusVid: data.Vid,
       coverUrl: data.PosterUri,
@@ -476,6 +480,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
       if (!vid) return [];
       return [{
         vid,
+        spaceName: media.BasicInfo?.SpaceName,
         title: media.BasicInfo?.Title ?? vid,
         coverUrl: media.BasicInfo?.PosterUri,
         durationMs: typeof media.SourceInfo?.Duration === 'number'

@@ -11,7 +11,7 @@ import { requireAdmin, requirePermission } from '../../plugins/auth';
 import { hashPassword, verifyPassword } from '../../services/password';
 import { accessConfigSchema, readMiniAppAccessConfig } from '../../lib/content-access';
 import { publicLocaleSchema } from '../../lib/locales';
-import { BytePlusVodService, episodeMediaTitle } from '../../services/byteplus-vod.service';
+import { BytePlusVodError, BytePlusVodService, episodeMediaTitle } from '../../services/byteplus-vod.service';
 import { LocalObjectStorageService } from '../../services/object-storage.service';
 import { defaultUiComponents } from '../ui/routes';
 import { readAppEntryAdPolicy } from '../app-entry-ads/routes';
@@ -616,8 +616,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const coverById = new Map(covers.map((cover) => [cover.id, cover]));
     try {
       return await app.prisma.$transaction(async (tx) => {
-        const album = await tx.album.findUnique({ where: { id: albumId }, select: { id: true, title: true, accessConfig: true, _count: { select: { episodes: true } } } });
+        const album = await tx.album.findUnique({ where: { id: albumId }, select: { id: true, title: true, status: true, tiktokAlbumId: true, reviewStatus: true, accessConfig: true, _count: { select: { episodes: true } } } });
         if (!album) throw Object.assign(new Error('目标剧集不存在。'), { statusCode: 404 });
+        if (album.status === 'OFFLINE') throw Object.assign(new Error('下线剧集不能追加分集。'), { statusCode: 409 });
+        if (album.reviewStatus === 'REVIEWING' || album.reviewStatus === '1') throw Object.assign(new Error('剧集正在审核中，审核结束后才能追加分集。'), { statusCode: 409 });
         if (album._count.episodes + inputEpisodes.length > 500) throw Object.assign(new Error('单部剧集最多 500 集。'), { statusCode: 400 });
         const existing = await tx.episode.findMany({ where: { albumId, episodeNo: { in: numbers } }, select: { episodeNo: true } });
         if (existing.length) throw Object.assign(new Error(`集号已存在：${existing.map((episode) => episode.episodeNo).join('、')}。`), { statusCode: 409 });
@@ -845,7 +847,14 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     if (input.sourceExpiresAt && new Date(input.sourceExpiresAt) <= new Date()) {
       throw Object.assign(new Error('来源过期时间必须晚于当前时间。'), { statusCode: 400 });
     }
-    const job = await app.prisma.uploadJob.create({ data: { episodeId: input.episodeId, sourceUrl: input.sourceUrl, sourceExpiresAt: input.sourceExpiresAt ? new Date(input.sourceExpiresAt) : undefined } });
+    const job = await app.prisma.$transaction(async (tx) => {
+      const claimed = await tx.episode.updateMany({
+        where: { id: input.episodeId, byteplusVid: null, byteplusUploadStatus: { in: ['PENDING', 'FAILED'] }, uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } },
+        data: { status: 'UPLOADING', byteplusUploadStatus: 'UPLOADING' }
+      });
+      if (claimed.count !== 1) throw Object.assign(new Error('该分集已有视频或正在上传，请先处理现有任务。'), { statusCode: 409 });
+      return tx.uploadJob.create({ data: { episodeId: input.episodeId, sourceUrl: input.sourceUrl, sourceExpiresAt: input.sourceExpiresAt ? new Date(input.sourceExpiresAt) : undefined } });
+    });
     await audit(app, request.user.sub, 'CREATE', 'UploadJob', job.id, { episodeId: input.episodeId });
     return job;
   });
@@ -870,17 +879,33 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     if (!['.mp4', '.mov', '.m4v'].includes(extension)) {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'TikTok 短剧仅接受兼容的 MP4、MOV 或 M4V 视频格式。', requestId: request.id } });
     }
-    const episode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { id: true, title: true, episodeNo: true, byteplusVid: true, coverAsset: { select: { publicUrl: true, status: true } }, album: { select: { title: true, status: true } } } });
+    const episode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { id: true, title: true, episodeNo: true, byteplusVid: true, byteplusUploadStatus: true, coverAsset: { select: { publicUrl: true, status: true } }, album: { select: { title: true, status: true, tiktokAlbumId: true, tiktokVersion: true, onlineVersion: true } } } });
     if (!episode) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '分集不存在。', requestId: request.id } });
     if (episode.album.status === 'OFFLINE') return reply.code(409).send({ error: { code: 'CONFLICT', message: '下线剧集的分集不能上传。', requestId: request.id } });
     if (episode.byteplusVid) return reply.code(409).send({ error: { code: 'CONFLICT', message: '该分集已绑定 BytePlus VID，请勿重复上传。', requestId: request.id } });
+    if (episode.byteplusUploadStatus === 'UPLOADING') return reply.code(409).send({ error: { code: 'CONFLICT', message: '该分集正在上传，请等待当前任务结束后再操作。', requestId: request.id } });
 
     const tempDirectory = join(tmpdir(), 'quickreels-vod');
     const tempPath = join(tempDirectory, `${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`);
     await mkdir(tempDirectory, { recursive: true });
+    let claimedJobId: string | null = null;
+    let uploadedVid: string | null = null;
+    let saved = false;
     try {
       await pipeline(upload.file, (await import('node:fs')).createWriteStream(tempPath));
       if (upload.file.truncated) throw Object.assign(new Error('所选文件超过 2 GB 大小限制。'), { statusCode: 413 });
+      const [job] = await app.prisma.$transaction(async (tx) => {
+        const claimed = await tx.episode.updateMany({
+          where: { id: episodeId, byteplusVid: null, byteplusUploadStatus: { in: ['PENDING', 'FAILED'] }, uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } },
+          data: { status: 'UPLOADING', byteplusUploadStatus: 'UPLOADING' }
+        });
+        if (claimed.count !== 1) throw Object.assign(new Error('该分集已被其他上传任务占用，请刷新后重试。'), { statusCode: 409 });
+        const created = await tx.uploadJob.create({
+          data: { episodeId, sourceUrl: `local://${fileName}`, sourceType: 'FILE', sourceName: fileName, status: 'PROCESSING', startedAt: new Date() }
+        });
+        return [created];
+      });
+      claimedJobId = job.id;
       const service = new BytePlusVodService(app.config);
       const result = await service.uploadLocalVideo({
         filePath: tempPath,
@@ -889,18 +914,112 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         spaceName: app.config.BYTEPLUS_SPACE_NAME,
         byteplusAccountId: app.config.BYTEPLUS_ACCOUNT_ID
       });
-      const [job] = await app.prisma.$transaction([
-        app.prisma.uploadJob.create({ data: { episodeId, sourceUrl: `local://${fileName}`, sourceType: 'FILE', sourceName: fileName, status: 'SUCCEEDED', startedAt: new Date(), completedAt: new Date() } }),
-        app.prisma.episode.update({ where: { id: episodeId }, data: { status: 'READY', byteplusUploadStatus: 'READY', tiktokVideoStatus: 'NOT_STARTED', tiktokVideoJobId: null, tiktokVideoError: null, byteplusVid: result.byteplusVid, byteplusCoverUrl: result.coverUrl, coverUrl: episode.coverAsset?.status === 'READY' ? episode.coverAsset.publicUrl : result.coverUrl, durationMs: result.durationMs } })
-      ]);
+      uploadedVid = result.byteplusVid;
+      await app.prisma.$transaction(async (tx) => {
+        const changed = await tx.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING' }, data: { status: 'SUCCEEDED', providerJobId: result.byteplusVid, completedAt: new Date(), errorMessage: null } });
+        if (changed.count !== 1) throw Object.assign(new Error('上传任务状态已变化，BytePlus 视频需要人工对账。'), { statusCode: 409 });
+        const bound = await tx.episode.updateMany({ where: { id: episodeId, byteplusVid: null, byteplusUploadStatus: 'UPLOADING' }, data: { status: 'READY', byteplusUploadStatus: 'READY', tiktokVideoStatus: 'NOT_STARTED', tiktokVideoJobId: null, tiktokVideoError: null, byteplusVid: result.byteplusVid, byteplusCoverUrl: result.coverUrl, coverUrl: episode.coverAsset?.status === 'READY' ? episode.coverAsset.publicUrl : result.coverUrl, durationMs: result.durationMs } });
+        if (bound.count !== 1) throw Object.assign(new Error('分集状态已变化，BytePlus 视频需要人工对账。'), { statusCode: 409 });
+      });
+      saved = true;
       await audit(app, request.user.sub, 'UPLOAD_LOCAL', 'UploadJob', job.id, { episodeId, fileName, byteplusVid: result.byteplusVid });
       const syncJob = app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET
         ? await enqueueVideoSync(app.prisma as any, episodeId, request.user.sub)
         : null;
-      return { job, platformSyncJob: syncJob, episode: { id: episodeId, status: 'READY', byteplusVid: result.byteplusVid, durationMs: result.durationMs } };
+      return { job: { ...job, status: 'SUCCEEDED', providerJobId: result.byteplusVid, completedAt: new Date(), errorMessage: null }, platformSyncJob: syncJob, episode: { id: episodeId, status: 'READY', byteplusVid: result.byteplusVid, durationMs: result.durationMs } };
+    } catch (error) {
+      const message = error instanceof Error ? error.message.slice(0, 500) : '本地视频上传失败。';
+      const uncertain = error instanceof BytePlusVodError && error.uncertain;
+      if (claimedJobId && !saved) {
+        await app.prisma.$transaction(async (tx) => {
+          const changed = await tx.uploadJob.updateMany({ where: { id: claimedJobId!, status: 'PROCESSING' }, data: { ...(uploadedVid ? { providerJobId: uploadedVid } : {}), status: uncertain || uploadedVid ? 'PROCESSING' : 'FAILED', errorMessage: uncertain || uploadedVid ? `需要对账：${message}` : message, completedAt: uncertain || uploadedVid ? null : new Date() } });
+          if (changed.count) await tx.episode.updateMany({ where: { id: episodeId, byteplusVid: null, byteplusUploadStatus: 'UPLOADING' }, data: { status: uncertain || uploadedVid ? 'UPLOADING' : 'ERROR', byteplusUploadStatus: uncertain || uploadedVid ? 'UPLOADING' : 'FAILED' } });
+        }).catch((persistError) => app.log.error({ err: persistError, jobId: claimedJobId, uploadedVid }, 'Could not persist local upload failure; manual reconciliation required'));
+      }
+      throw error;
     } finally {
       await unlink(tempPath).catch(() => undefined);
     }
+  });
+
+  app.post('/admin/upload-jobs/:jobId/reconcile', { preHandler: requireAdmin }, async (request, reply) => {
+    const { jobId } = jobParams.parse(request.params);
+    const input = z.object({ byteplusVid: z.string().trim().min(1).max(256) }).parse(request.body);
+    const job = await app.prisma.uploadJob.findUnique({
+      where: { id: jobId },
+      include: { episode: { include: { coverAsset: true, album: true } } }
+    });
+    if (!job) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Upload job not found.', requestId: request.id } });
+    if (job.sourceType !== 'FILE' || job.status !== 'PROCESSING') {
+      return reply.code(409).send({ error: { code: 'CONFLICT', message: '只有待对账的本地上传任务可以对账。', requestId: request.id } });
+    }
+    if (job.providerJobId && job.providerJobId !== input.byteplusVid) {
+      return reply.code(409).send({ error: { code: 'CONFLICT', message: '该任务已记录另一个 BytePlus VID，请先确认后再操作。', requestId: request.id } });
+    }
+    const mediaService = new BytePlusVodService(app.config);
+    const [media] = await mediaService.getMediaInfos({ vids: [input.byteplusVid] });
+    if (!media) return reply.code(404).send({ error: { code: 'BYTEPLUS_MEDIA_NOT_FOUND', message: '在配置的媒体空间中找不到这个 BytePlus VID。', requestId: request.id } });
+    if (media.spaceName !== app.config.BYTEPLUS_SPACE_NAME) {
+      return reply.code(409).send({ error: { code: 'BYTEPLUS_SPACE_MISMATCH', message: '无法确认该视频属于当前 BytePlus 空间，不能绑定到当前小程序。', requestId: request.id } });
+    }
+    if (job.episode.byteplusVid && job.episode.byteplusVid !== media.vid) {
+      return reply.code(409).send({ error: { code: 'CONFLICT', message: '该分集已经绑定了另一个 BytePlus VID。', requestId: request.id } });
+    }
+    const sharedMedia = await getOrCreateSharedMediaAsset(app.sharedPrisma as any, {
+      byteplusVid: media.vid,
+      byteplusAccountId: app.config.BYTEPLUS_ACCOUNT_ID,
+      byteplusSpaceName: app.config.BYTEPLUS_SPACE_NAME,
+      byteplusRegion: app.config.BYTEPLUS_REGION,
+      miniAppKey: app.config.MINI_APP_KEY,
+      title: media.title,
+      coverUrl: media.coverUrl,
+      durationMs: media.durationMs
+    });
+    const episode = await app.prisma.$transaction(async (tx) => {
+      const updatedJob = await tx.uploadJob.updateMany({
+        where: { id: job.id, status: 'PROCESSING' },
+        data: { status: 'SUCCEEDED', providerJobId: media.vid, errorMessage: null, completedAt: new Date() }
+      });
+      if (updatedJob.count !== 1) throw Object.assign(new Error('该对账任务已被其他操作处理，请刷新后查看。'), { statusCode: 409 });
+      const bound = await tx.episode.updateMany({
+        where: { id: job.episodeId, byteplusVid: null, byteplusUploadStatus: 'UPLOADING' },
+        data: {
+          byteplusVid: media.vid,
+          byteplusCoverUrl: media.coverUrl,
+          coverUrl: job.episode.coverAsset?.status === 'READY' ? job.episode.coverAsset.publicUrl : media.coverUrl,
+          durationMs: media.durationMs,
+          status: 'READY',
+          byteplusUploadStatus: 'READY',
+          tiktokVideoStatus: 'NOT_STARTED',
+          tiktokVideoJobId: null,
+          tiktokVideoError: null
+        }
+      });
+      if (bound.count !== 1) throw Object.assign(new Error('分集状态已变化，请刷新后检查 VID。'), { statusCode: 409 });
+      return tx.episode.findUniqueOrThrow({ where: { id: job.episodeId } });
+    });
+    await audit(app, request.user.sub, 'RECONCILE_LOCAL_UPLOAD', 'UploadJob', job.id, { episodeId: job.episodeId, byteplusVid: media.vid });
+    const syncJob = app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET
+      ? await enqueueVideoSync(app.prisma as any, job.episodeId, request.user.sub)
+      : null;
+    return { job: { ...job, status: 'SUCCEEDED', providerJobId: media.vid, errorMessage: null, completedAt: new Date() }, episode, sharedMediaAsset: sharedMedia, platformSyncJob: syncJob };
+  });
+
+  app.post('/admin/upload-jobs/:jobId/release', { preHandler: requireAdmin }, async (request, reply) => {
+    const { jobId } = jobParams.parse(request.params);
+    z.object({ confirmation: z.literal('NO_BYTEPLUS_MEDIA') }).parse(request.body);
+    const job = await app.prisma.uploadJob.findUnique({ where: { id: jobId } });
+    if (!job) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Upload job not found.', requestId: request.id } });
+    if (job.sourceType !== 'FILE' || job.status !== 'PROCESSING' || job.providerJobId || !job.startedAt || Date.now() - job.startedAt.getTime() < 2 * 60 * 60_000) {
+      return reply.code(409).send({ error: { code: 'CONFLICT', message: '只能释放已超过两小时、未记录 VID 的本地待对账任务。', requestId: request.id } });
+    }
+    await app.prisma.$transaction(async (tx) => {
+      const changed = await tx.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', providerJobId: null }, data: { status: 'FAILED', errorMessage: '管理员确认 BytePlus 无对应媒资后释放任务；请重新选择文件上传。', completedAt: new Date() } });
+      if (changed.count !== 1) throw Object.assign(new Error('任务状态已变化，请刷新后重试。'), { statusCode: 409 });
+      await tx.episode.updateMany({ where: { id: job.episodeId, byteplusVid: null, byteplusUploadStatus: 'UPLOADING' }, data: { status: 'ERROR', byteplusUploadStatus: 'FAILED' } });
+    });
+    await audit(app, request.user.sub, 'RELEASE_LOCAL_UPLOAD', 'UploadJob', job.id, { episodeId: job.episodeId });
+    return { released: true };
   });
 
   app.get('/admin/upload-jobs/:jobId', { preHandler: requireAdmin }, async (request, reply) => {

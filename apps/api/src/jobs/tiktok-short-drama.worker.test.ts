@@ -15,6 +15,7 @@ function createWorkerPrisma() {
       episodeId: 'episode-1',
       providerJobId: null,
       sourceUrl: 'https://example.com/video.mp4',
+      sourceType: 'URL',
       sourceExpiresAt: null,
       status: 'PENDING',
       errorMessage: null,
@@ -29,7 +30,9 @@ function createWorkerPrisma() {
   };
   const prisma: any = {
     uploadJob: {
-      findMany: async () => state.job.status === 'FAILED' || state.job.status === 'SUCCEEDED' ? [] : [structuredClone(state.job)],
+      findMany: async (args: { where?: { sourceType?: string } } = {}) => args.where?.sourceType === 'URL' && state.job.sourceType !== 'URL'
+        ? []
+        : state.job.status === 'FAILED' || state.job.status === 'SUCCEEDED' ? [] : [structuredClone(state.job)],
       update: async (args: { data: Record<string, unknown> }) => { Object.assign(state.job, args.data); return state.job; }
     },
     episode: {
@@ -76,5 +79,19 @@ describe('upload worker', () => {
     await processJobs(prisma, service, { maxRetries: 1, now: () => new Date('2026-09-10T00:01:01.000Z') }, env);
     assert.equal(state.job.status, 'FAILED');
     assert.equal(state.episode.status, 'ERROR');
+  });
+
+  it('does not process local FILE upload jobs', async () => {
+    const { prisma, state } = createWorkerPrisma();
+    state.job.sourceType = 'FILE';
+    let providerCalls = 0;
+    const service: TikTokShortDramaService = {
+      createVideoUpload: async () => { providerCalls++; return { providerJobId: 'unexpected' }; },
+      getVideoUploadStatus: async () => { providerCalls++; return { status: 'PROCESSING' }; },
+      getPlayAuthToken: async () => 'unused'
+    };
+    const processed = await processJobs(prisma, service, { maxRetries: 2 }, env);
+    assert.equal(processed, 0);
+    assert.equal(providerCalls, 0);
   });
 });

@@ -211,6 +211,7 @@ export async function processJobs(
   const currentTime = now();
   const jobs = await prisma.uploadJob.findMany({
     where: {
+      sourceType: 'URL',
       status: { in: ['PENDING', 'PROCESSING'] },
       retryCount: { lte: maxRetries },
       OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: currentTime } }]
