@@ -89,8 +89,8 @@ describe('BytePlusVodService', () => {
       const headers = new Headers(requests[0].init.headers);
       assert.equal(headers.get('X-Upload-Token'), 'upload-token');
       assert.equal(headers.get('Content-CRC32')?.length, 8);
-      assert.equal(headers.get('Content-Type'), 'application/x-www-form-urlencoded');
-      assert.equal(headers.get('Accept'), 'application/json, text/plain, */*');
+      assert.equal(headers.get('Content-Type'), null);
+      assert.equal(headers.get('Accept'), null);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -116,8 +116,8 @@ describe('BytePlusVodService', () => {
       await service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: '第2集', spaceName: 'space', byteplusAccountId: 'account' });
       assert.equal(requests.length, 4);
       for (const request of requests) {
-        assert.equal(request.headers.get('Content-Type'), 'application/x-www-form-urlencoded');
-        assert.equal(request.headers.get('Accept'), 'application/json, text/plain, */*');
+        assert.equal(request.headers.get('Content-Type'), null);
+        assert.equal(request.headers.get('Accept'), null);
       }
       assert.equal(requests[0].headers.get('X-Storage-Mode'), 'gateway');
       assert.match(requests[1].query, /partNumber=1/);
