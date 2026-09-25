@@ -15,3 +15,19 @@ rewrite @taleTvPrivacy /taletv/privacy/index.html
 rewrite @taleTvTerms /taletv/terms/index.html
 
 header /taletv/* Cache-Control "public, max-age=300"
+
+@cineReelsPrivacy path /cinereels/privacy
+rewrite @cineReelsPrivacy /cinereels/privacy/index.html
+
+@cineReelsTerms path /cinereels/terms
+rewrite @cineReelsTerms /cinereels/terms/index.html
+
+header /cinereels/* Cache-Control "public, max-age=300"
+
+@taleReelsPrivacy path /talereels/privacy
+rewrite @taleReelsPrivacy /talereels/privacy/index.html
+
+@taleReelsTerms path /talereels/terms
+rewrite @taleReelsTerms /talereels/terms/index.html
+
+header /talereels/* Cache-Control "public, max-age=300"
