@@ -288,6 +288,21 @@ export class BytePlusVodService implements TikTokShortDramaService {
     let response: Awaited<ReturnType<typeof service.CommitUploadInfo>>;
     let stage = '申请上传地址';
     try {
+      // Use the vendor SDK in production. It owns the exact HTTP client behavior
+      // for ApplyUploadInfo, multipart init/parts/merge, and CommitUploadInfo.
+      if (typeof service.UploadMedia === 'function') {
+        stage = '上传视频文件';
+        response = await service.UploadMedia({
+          SpaceName: input.spaceName,
+          FilePath: input.filePath,
+          FileName: objectName,
+          CallbackArgs: JSON.stringify({ byteplusAccountId: input.byteplusAccountId }),
+          Functions: JSON.stringify([
+            { Name: 'GetMeta' },
+            { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128) } }
+          ])
+        });
+      } else {
       const applied = await service.ApplyUploadInfo({
         SpaceName: input.spaceName,
         FileType: 'media',
@@ -317,6 +332,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
           { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128) } }
         ])
       });
+      }
     } catch (error) {
       if (error instanceof BytePlusVodError) throw error;
       const detail = error instanceof Error ? error.message.replace(/[\r\n\t]/g, ' ').slice(0, 240) : String(error).slice(0, 240);

@@ -52,6 +52,31 @@ function okJson(body: unknown) {
 }
 
 describe('BytePlusVodService', () => {
+  it('uses the official SDK UploadMedia path when available', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'byteplus-sdk-upload-'));
+    try {
+      const filePath = join(directory, 'episode.mp4');
+      await writeFile(filePath, Buffer.from('video-data'));
+      let request: Record<string, unknown> | undefined;
+      const service = new BytePlusVodService(env, {
+        vodService: {
+          UploadMedia: async (input: Record<string, unknown>) => {
+            request = input;
+            return { Result: { Data: { Vid: 'vid-sdk', PosterUri: 'cover', SourceInfo: { Duration: 12 } } } };
+          }
+        } as never
+      });
+      const result = await service.uploadLocalVideo({ filePath, fileName: '第1集.mp4', title: 'TaleTV - 第1集', spaceName: 'space', byteplusAccountId: 'account' });
+      assert.equal(result.byteplusVid, 'vid-sdk');
+      assert.equal(request?.SpaceName, 'space');
+      assert.equal(request?.FilePath, filePath);
+      assert.match(String(request?.FileName), /^1-[a-f0-9-]+\.mp4$/);
+      assert.equal(JSON.parse(String(request?.Functions))[1].Input.Title, 'TaleTV - 第1集');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('uploads a local file with a unique object name and a visible media title', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'byteplus-upload-'));
     try {
