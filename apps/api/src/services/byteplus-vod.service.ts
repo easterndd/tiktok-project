@@ -1,5 +1,7 @@
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { open, stat } from 'node:fs/promises';
 import { vodOpenapi } from '@byteplus/vcloud-sdk-nodejs';
+import { crc32 } from 'crc';
 import type { Env } from '../config/env';
 import {
   ProviderNotConfiguredError,
@@ -17,6 +19,8 @@ type FetchLike = typeof fetch;
 type BytePlusVodOptions = {
   fetch?: FetchLike;
   now?: () => Date;
+  uploadFetch?: FetchLike;
+  vodService?: vodOpenapi.VodService;
 };
 
 export type BytePlusMedia = {
@@ -31,8 +35,22 @@ export type BytePlusMedia = {
 type LocalUploadInput = {
   filePath: string;
   fileName: string;
+  title: string;
   spaceName: string;
   byteplusAccountId: string;
+};
+
+const uploadPartSize = 20 * 1024 * 1024;
+const uploadAttempts = 3;
+
+export function episodeMediaTitle(albumTitle: string, episodeNo: number) {
+  return `${albumTitle.trim()} - 第${episodeNo}集`.slice(0, 128);
+}
+
+type UploadAddress = {
+  SessionKey?: string;
+  StoreInfos?: Array<{ StoreUri?: string; Auth?: string }>;
+  UploadHosts?: string[];
 };
 
 type BytePlusError = {
@@ -170,11 +188,15 @@ function sanitizeFileName(title: string, nowMs: number) {
 
 export class BytePlusVodService implements TikTokShortDramaService {
   private readonly fetch: FetchLike;
+  private readonly uploadFetch: FetchLike;
   private readonly now: () => Date;
+  private readonly vodService?: vodOpenapi.VodService;
 
   constructor(private readonly env: Env, options: BytePlusVodOptions = {}) {
     this.fetch = options.fetch ?? fetch;
+    this.uploadFetch = options.uploadFetch ?? fetch;
     this.now = options.now ?? (() => new Date());
+    this.vodService = options.vodService;
   }
 
   async createVideoUpload(input: { sourceUrl: string; title: string; spaceName: string; byteplusAccountId: string }): Promise<{ providerJobId: string }> {
@@ -222,25 +244,39 @@ export class BytePlusVodService implements TikTokShortDramaService {
   async uploadLocalVideo(input: LocalUploadInput) {
     const service = this.createSdkService();
     const extension = input.fileName.includes('.') ? input.fileName.slice(input.fileName.lastIndexOf('.')) : '.mp4';
-    let response: Awaited<ReturnType<typeof service.UploadMedia>>;
+    const safeName = input.fileName.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'episode';
+    const objectName = `${safeName}-${randomUUID()}${extension.toLowerCase()}`;
+    const size = (await stat(input.filePath)).size;
+    if (!size) throw new BytePlusVodError('视频文件为空。', false);
+    let response: Awaited<ReturnType<typeof service.CommitUploadInfo>>;
     try {
-      response = await service.UploadMedia({
+      const applied = await service.ApplyUploadInfo({
         SpaceName: input.spaceName,
-        FilePath: input.filePath,
-        FileName: input.fileName,
-        FileExtension: extension,
+        FileType: 'media',
+        FileName: objectName
+      });
+      if (applied.ResponseMetadata?.Error) {
+        throw new BytePlusVodError(safeProviderMessage(applied, 'BytePlus 未能签发上传地址。'), false);
+      }
+      const address: UploadAddress | undefined = applied.Result?.Data?.UploadAddress;
+      const store = address?.StoreInfos?.[0];
+      if (!address?.SessionKey || !store?.StoreUri || !store.Auth || !address.UploadHosts?.length) {
+        throw new BytePlusVodError('BytePlus 未返回完整的上传地址。', true);
+      }
+      await this.transferLocalFile(input.filePath, size, address.UploadHosts, store.StoreUri, store.Auth);
+      response = await service.CommitUploadInfo({
+        SpaceName: input.spaceName,
+        SessionKey: address.SessionKey,
         CallbackArgs: JSON.stringify({ byteplusAccountId: input.byteplusAccountId }),
-        Functions: JSON.stringify([{ Name: 'GetMeta' }]),
-        // The VOD SDK opens four parallel HTTP part uploads by default. A single
-        // server-side upload is more reliable on restricted cloud egress paths.
-        maxConcurrency: 1
+        Functions: JSON.stringify([
+          { Name: 'GetMeta' },
+          { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128) } }
+        ])
       });
     } catch (error) {
       if (error instanceof BytePlusVodError) throw error;
-      // SDK transport errors can include request details; keep the client message
-      // free of credentials while still distinguishing this from a provider rejection.
       throw Object.assign(new BytePlusVodError(
-        'BytePlus VOD 未能完成上传请求。请检查服务器网络、BYTEPLUS_REGION、空间名称及访问密钥权限。',
+        'BytePlus 上传地址申请或提交失败，请查看服务端日志。',
         true
       ), { cause: error });
     }
@@ -258,6 +294,104 @@ export class BytePlusVodService implements TikTokShortDramaService {
       coverUrl: data.PosterUri,
       durationMs: typeof data.SourceInfo?.Duration === 'number' ? Math.round(data.SourceInfo.Duration * 1000) : undefined
     };
+  }
+
+  private async transferLocalFile(filePath: string, size: number, hosts: string[], objectName: string, auth: string) {
+    const file = await open(filePath, 'r');
+    try {
+      if (size <= uploadPartSize) {
+        const data = await this.readPart(file, 0, size);
+        await this.tryUploadHosts(hosts, objectName, auth, '', data);
+        return;
+      }
+      for (const host of hosts) {
+        let uploadId: string;
+        try {
+          const response = await this.uploadRequest(host, objectName, auth, 'uploads', undefined, true);
+          const body = await response.json() as { payload?: { uploadID?: string } };
+          uploadId = body.payload?.uploadID ?? '';
+          if (!uploadId) throw new BytePlusVodError('BytePlus 分片初始化未返回 uploadID。', true);
+        } catch (error) {
+          if (error instanceof BytePlusVodError && !error.retryable) throw error;
+          if (host === hosts.at(-1)) throw error;
+          continue;
+        }
+        const checksums: string[] = [];
+        for (let offset = 0, partNumber = 1; offset < size; offset += uploadPartSize, partNumber++) {
+          const data = await this.readPart(file, offset, Math.min(uploadPartSize, size - offset));
+          const checksum = crc32(data).toString(16).padStart(8, '0');
+          await this.uploadRequest(host, objectName, auth,
+            `partNumber=${partNumber}&uploadID=${encodeURIComponent(uploadId)}`, data, true, checksum);
+          checksums.push(`${partNumber - 1}:${checksum}`);
+        }
+        // The BytePlus SDK uses zero-based checksum positions in the merge body.
+        await this.uploadRequest(host, objectName, auth, `uploadID=${encodeURIComponent(uploadId)}`,
+          checksums.join(','), true, undefined, false);
+        return;
+      }
+    } finally {
+      await file.close();
+    }
+  }
+
+  private async readPart(file: Awaited<ReturnType<typeof open>>, offset: number, length: number) {
+    const data = Buffer.allocUnsafe(length);
+    let read = 0;
+    while (read < length) {
+      const result = await file.read(data, read, length - read, offset + read);
+      if (!result.bytesRead) throw new BytePlusVodError('视频文件读取不完整。', false);
+      read += result.bytesRead;
+    }
+    return data;
+  }
+
+  private async tryUploadHosts(hosts: string[], objectName: string, auth: string, query: string, data: Buffer) {
+    const checksum = crc32(data).toString(16).padStart(8, '0');
+    for (const host of hosts) {
+      try {
+        await this.uploadRequest(host, objectName, auth, query, data, false, checksum);
+        return;
+      } catch (error) {
+        if (error instanceof BytePlusVodError && !error.retryable) throw error;
+        if (host === hosts.at(-1)) throw error;
+      }
+    }
+  }
+
+  private async uploadRequest(host: string, objectName: string, auth: string, query: string,
+    data?: Buffer | string, multipart = false, checksum?: string, retry = true): Promise<Response> {
+    const url = new URL(`http://${host}/${objectName.split('/').map(encodeURIComponent).join('/')}`);
+    url.search = query;
+    for (let attempt = 1; attempt <= (retry ? uploadAttempts : 1); attempt++) {
+      try {
+        const response = await this.uploadFetch(url, {
+          method: 'PUT',
+          headers: {
+            Authorization: auth,
+            ...(multipart ? { 'X-Storage-Mode': 'gateway' } : {}),
+            ...(checksum ? { 'Content-CRC32': checksum } : {})
+          },
+          body: typeof data === 'string' ? data : data ? new Uint8Array(data) : undefined,
+          signal: AbortSignal.timeout(90_000)
+        });
+        if (response.ok) return response;
+        const body = await response.text();
+        const providerCode = body.match(/"(?:Code|code)"\s*:\s*"([a-zA-Z0-9_.-]{1,80})"/)?.[1];
+        const requestId = response.headers.get('x-request-id')?.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+        const retryable = isRetryableStatus(response.status);
+        if (!retryable || attempt === uploadAttempts || !retry) {
+          throw new BytePlusVodError(`BytePlus 上传主机 ${host} 返回 HTTP ${response.status}${providerCode ? ` (${providerCode})` : ''}${requestId ? `，请求 ID ${requestId}` : ''}。`, retryable);
+        }
+      } catch (error) {
+        if (error instanceof BytePlusVodError && !error.retryable) throw error;
+        if (attempt === uploadAttempts || !retry) {
+          if (error instanceof BytePlusVodError) throw error;
+          throw Object.assign(new BytePlusVodError(`连接 BytePlus 上传主机 ${host} 失败。`, true), { cause: error });
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    }
+    throw new BytePlusVodError('BytePlus 上传未完成。', true);
   }
 
   async getPlayAuthToken(input: { vid: string }): Promise<string> {
@@ -313,6 +447,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
   }
 
   private createSdkService() {
+    if (this.vodService) return this.vodService;
     if (!this.env.BYTEPLUS_ACCESS_KEY || !this.env.BYTEPLUS_SECRET_KEY) throw new ProviderNotConfiguredError();
     const service = new vodOpenapi.VodService({
       region: this.env.BYTEPLUS_REGION,

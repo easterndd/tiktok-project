@@ -63,6 +63,9 @@ importers:
       '@quickreels/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      crc:
+        specifier: 4.1.0
+        version: 4.1.0(buffer@6.0.3)
       fastify:
         specifier: ^5.7.0
         version: 5.12.3
@@ -1533,6 +1536,12 @@ packages:
   crc32-stream@6.0.0:
     resolution: {integrity: sha512-piICUB6ei4IlTv1+653yq5+KoqfBYmj9bw6LqXoOneTMDXk5nM1qt12mFW1caG3LlJXEKW1Bp0WggEmIfQB34g==}
     engines: {node: '>= 14'}
+
+  crc@4.1.0:
+    resolution: {integrity: sha512-xl6/PgOWZCDOA9mnytKzg2ftRS2YT/SUnNPPiCMoD6KWuiJayRjHcaLmBzGWNZGHSXDSrDuLNUEIljLRMbn7vA==}
+    engines: {node: '>=12'}
+    peerDependencies:
+      buffer: '>=6.0.3'
 
   crc@4.3.2:
     resolution: {integrity: sha512-uGDHf4KLLh2zsHa8D8hIQ1H/HtFQhyHrc0uhHBcoKGol/Xnb+MPYfUMw7cvON6ze/GUESTudKayDcJC5HnJv1A==}
@@ -4464,6 +4473,10 @@ snapshots:
     dependencies:
       crc-32: 1.2.2
       readable-stream: 4.7.0
+
+  crc@4.1.0(buffer@6.0.3):
+    dependencies:
+      buffer: 6.0.3
 
   crc@4.3.2(buffer@6.0.3):
     optionalDependencies:

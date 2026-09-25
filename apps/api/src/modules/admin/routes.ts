@@ -11,7 +11,7 @@ import { requireAdmin, requirePermission } from '../../plugins/auth';
 import { hashPassword, verifyPassword } from '../../services/password';
 import { accessConfigSchema, readMiniAppAccessConfig } from '../../lib/content-access';
 import { publicLocaleSchema } from '../../lib/locales';
-import { BytePlusVodService } from '../../services/byteplus-vod.service';
+import { BytePlusVodService, episodeMediaTitle } from '../../services/byteplus-vod.service';
 import { LocalObjectStorageService } from '../../services/object-storage.service';
 import { defaultUiComponents } from '../ui/routes';
 import { readAppEntryAdPolicy } from '../app-entry-ads/routes';
@@ -870,9 +870,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     if (!['.mp4', '.mov', '.m4v'].includes(extension)) {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'TikTok 短剧仅接受兼容的 MP4、MOV 或 M4V 视频格式。', requestId: request.id } });
     }
-    const episode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { id: true, title: true, coverAsset: { select: { publicUrl: true, status: true } }, album: { select: { status: true } } } });
+    const episode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { id: true, title: true, episodeNo: true, byteplusVid: true, coverAsset: { select: { publicUrl: true, status: true } }, album: { select: { title: true, status: true } } } });
     if (!episode) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '分集不存在。', requestId: request.id } });
     if (episode.album.status === 'OFFLINE') return reply.code(409).send({ error: { code: 'CONFLICT', message: '下线剧集的分集不能上传。', requestId: request.id } });
+    if (episode.byteplusVid) return reply.code(409).send({ error: { code: 'CONFLICT', message: '该分集已绑定 BytePlus VID，请勿重复上传。', requestId: request.id } });
 
     const tempDirectory = join(tmpdir(), 'quickreels-vod');
     const tempPath = join(tempDirectory, `${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`);
@@ -884,6 +885,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       const result = await service.uploadLocalVideo({
         filePath: tempPath,
         fileName,
+        title: episodeMediaTitle(episode.album.title, episode.episodeNo),
         spaceName: app.config.BYTEPLUS_SPACE_NAME,
         byteplusAccountId: app.config.BYTEPLUS_ACCOUNT_ID
       });
