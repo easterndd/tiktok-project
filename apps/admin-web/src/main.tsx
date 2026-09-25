@@ -5,10 +5,13 @@ import {
 } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { defaultEpisodeTitle, nextEpisodeNo, renumberEpisodes } from './episode-draft';
+import { defaultEpisodeTitle, nextEpisodeNo, renumberEpisodes, resolveAppendEpisodes } from './episode-draft';
 import './styles.css';
 
-type MiniApp = 'main' | 'taletv';
+type MiniApp = 'main' | 'taletv' | 'cinereels' | 'talereels';
+const miniAppNames: Record<MiniApp, string> = { main: 'QuicK ReeLS', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels' };
+const miniAppPaths: Record<Exclude<MiniApp, 'main'>, string> = { taletv: 'taletv', cinereels: 'cinereels', talereels: 'talereels' };
+const miniAppEnvPrefixes: Record<Exclude<MiniApp, 'main'>, string> = { taletv: 'TALETV', cinereels: 'CINEREELS', talereels: 'TALEREELS' };
 if (localStorage.getItem('quickreels_active_app') === 'xu03') localStorage.setItem('quickreels_active_app', 'taletv');
 for (const suffix of ['content_draft', 'content_templates']) {
   const oldKey = `quickreels_xu03_${suffix}`;
@@ -20,26 +23,24 @@ for (const suffix of ['content_draft', 'content_templates']) {
   }
 }
 sessionStorage.removeItem('quickreels_xu03_admin_token');
-const activeApp: MiniApp = localStorage.getItem('quickreels_active_app') === 'taletv' ? 'taletv' : 'main';
+const savedApp = localStorage.getItem('quickreels_active_app');
+const activeApp: MiniApp = savedApp && savedApp in miniAppNames ? savedApp as MiniApp : 'main';
 const primaryApi = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/api/v1';
-const taletvApi = new URL('/api/taletv/v1', primaryApi).toString().replace(/\/$/, '');
-const API = activeApp === 'taletv'
-  ? import.meta.env.VITE_TALETV_API_BASE_URL || taletvApi
-  : primaryApi;
-const adminTokenStorageKey = activeApp === 'main' ? 'quickreels_admin_token' : 'quickreels_taletv_admin_token';
-const defaultPlacementId = activeApp === 'main'
-  ? import.meta.env.VITE_REWARDED_PLACEMENT_ID ?? 'ad7686459794040702993'
-  : import.meta.env.VITE_TALETV_REWARDED_PLACEMENT_ID ?? 'ad7688599028879722512';
-const defaultEntryPlacementId = activeApp === 'main'
-  ? import.meta.env.VITE_APP_ENTRY_PLACEMENT_ID ?? 'ad7686459458972829697'
-  : import.meta.env.VITE_TALETV_APP_ENTRY_PLACEMENT_ID ?? '';
+const env = import.meta.env as Record<string, string | undefined>;
+const appPrefix = activeApp === 'main' ? '' : miniAppEnvPrefixes[activeApp];
+const API = activeApp === 'main'
+  ? primaryApi
+  : env[`VITE_${appPrefix}_API_BASE_URL`] || new URL(`/api/${miniAppPaths[activeApp]}/v1`, primaryApi).toString().replace(/\/$/, '');
+const adminTokenStorageKey = activeApp === 'main' ? 'quickreels_admin_token' : `quickreels_${activeApp}_admin_token`;
+const defaultPlacementId = activeApp === 'main' ? env.VITE_REWARDED_PLACEMENT_ID ?? 'ad7686459794040702993' : env[`VITE_${appPrefix}_REWARDED_PLACEMENT_ID`] ?? '';
+const defaultEntryPlacementId = activeApp === 'main' ? env.VITE_APP_ENTRY_PLACEMENT_ID ?? 'ad7686459458972829697' : env[`VITE_${appPrefix}_APP_ENTRY_PLACEMENT_ID`] ?? '';
 function selectMiniApp(value: MiniApp) {
   if (value === activeApp) return;
   localStorage.setItem('quickreels_active_app', value);
   window.location.reload();
 }
 function MiniAppSelect() {
-  return <label className="mini-app-select">当前小程序<select value={activeApp} onChange={(event) => selectMiniApp(event.target.value as MiniApp)}><option value="main">QuicK ReeLS</option><option value="taletv">TaleTV</option></select></label>;
+  return <label className="mini-app-select">当前小程序<select value={activeApp} onChange={(event) => selectMiniApp(event.target.value as MiniApp)}>{Object.entries(miniAppNames).map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select></label>;
 }
 let adminSessionRecoveryStarted = false;
 
@@ -87,8 +88,8 @@ type AdminRole = 'OWNER' | 'EDITOR' | 'ANALYST' | 'SUPPORT';
 type AdminPermission = 'content.write' | 'content.sync' | 'content.review' | 'content.publish' | 'ads.write';
 type AdminProfile = { id: string; email: string; role: AdminRole; status: string; lastLoginAt?: string | null; passwordChangedAt?: string | null };
 type Tab = 'overview' | 'create' | 'albums' | 'ads' | 'audience' | 'playback' | 'security';
-const contentDraftStorageKey = activeApp === 'main' ? 'quickreels_content_draft' : 'quickreels_taletv_content_draft';
-const contentTemplateStorageKey = activeApp === 'main' ? 'quickreels_content_templates' : 'quickreels_taletv_content_templates';
+const contentDraftStorageKey = activeApp === 'main' ? 'quickreels_content_draft' : `quickreels_${activeApp}_content_draft`;
+const contentTemplateStorageKey = activeApp === 'main' ? 'quickreels_content_templates' : `quickreels_${activeApp}_content_templates`;
 
 const rolePermissions: Record<AdminRole, readonly AdminPermission[]> = {
   OWNER: ['content.write', 'content.sync', 'content.review', 'content.publish', 'ads.write'],
@@ -245,6 +246,7 @@ function AdminApp() {
   const [batchFeedback, setBatchFeedback] = useState('');
   const [draftReady, setDraftReady] = useState(false);
   const [message, setMessage] = useState('');
+  const [createError, setCreateError] = useState('');
   const [loading, setLoading] = useState(false);
   const [savingEntryAdPolicy, setSavingEntryAdPolicy] = useState(false);
   const [savingAlbumId, setSavingAlbumId] = useState<string | null>(null);
@@ -327,6 +329,20 @@ function AdminApp() {
     }
   }, [draftReady, createdAlbumId, targetAlbumId, episodes, draftEpisodes]);
   useEffect(() => {
+    if (!draftReady || createMode !== 'append' || !targetAlbumId || !episodes.length) return;
+    const existing = episodes.filter((episode) => episode.albumId === targetAlbumId);
+    if (!existing.length) return;
+    setDraftEpisodes((current) => {
+      const resolved = resolveAppendEpisodes(current, existing);
+      if (resolved.some((draft, index) => draft !== current[index])) return resolved;
+      if (current.length !== 1 || current[0].file || current[0].savedEpisodeId) return current;
+      if (!existing.some((episode) => episode.episodeNo === current[0].episodeNo && episode.byteplusVid)) return current;
+      const episodeNo = Math.max(...existing.map((episode) => episode.episodeNo)) + 1;
+      const sortOrder = Math.max(...existing.map((episode) => episode.sortOrder)) + 1;
+      return [{ localId: `draft-${Date.now()}`, episodeNo, title: defaultEpisodeTitle(episodeNo), sortOrder, isFree: false }];
+    });
+  }, [draftReady, createMode, targetAlbumId, episodes]);
+  useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(contentDraftStorageKey) ?? 'null') as { title?: string; description?: string; releaseYear?: number; dramaType?: number; tagList?: string; cover?: CoverAsset | null; freeCount?: number; rewardedEnabled?: boolean; placementId?: string; rewardedCount?: number; episodes?: DraftEpisode[]; mode?: 'new' | 'append'; targetAlbumId?: string; createdAlbumId?: string } | null;
       if (saved) {
@@ -360,6 +376,7 @@ function AdminApp() {
   if (!loggedIn) return <Login onLogin={() => setLoggedIn(true)} />;
 
   const resetCreateForm = () => {
+    setCreateError('');
     setCreateMode('new');
     setTargetAlbumId('');
     setCreatedAlbumId('');
@@ -394,10 +411,12 @@ function AdminApp() {
   const selectTargetAlbum = (albumId: string) => {
     if (draftEpisodes.some((episode) => episode.file || episode.savedEpisodeId) && !window.confirm('切换目标剧集将清空当前分集编辑，确定继续吗？')) return;
     setTargetAlbumId(albumId);
+    setCreateError('');
     const existing = episodes.filter((episode) => episode.albumId === albumId);
     const episodeNo = Math.max(0, ...existing.map((episode) => episode.episodeNo)) + 1;
     const sortOrder = Math.max(0, ...existing.map((episode) => episode.sortOrder ?? episode.episodeNo)) + 1;
     setDraftEpisodes(albumId ? [{ localId: `draft-${Date.now()}`, episodeNo, title: defaultEpisodeTitle(episodeNo), sortOrder, isFree: false }] : []);
+    setMessage(albumId ? `已选择目标剧集，新增分集将从第 ${episodeNo} 集开始。` : '');
   };
 
   const saveTemplate = () => {
@@ -453,8 +472,9 @@ function AdminApp() {
     const safeCount = Math.max(1, Math.min(count, 500));
     setDraftEpisodes((current) => {
       const finalCount = Math.max(safeCount, current.filter((episode) => episode.savedEpisodeId).length);
-      const firstNewNo = nextEpisodeNo(current);
-      const firstNewOrder = (current.at(-1)?.sortOrder ?? 0) + 1;
+      const existing = createMode === 'append' ? episodes.filter((episode) => episode.albumId === targetAlbumId) : [];
+      const firstNewNo = Math.max(nextEpisodeNo(current), Math.max(0, ...existing.map((episode) => episode.episodeNo)) + 1);
+      const firstNewOrder = Math.max(current.at(-1)?.sortOrder ?? 0, ...existing.map((episode) => episode.sortOrder)) + 1;
       return Array.from({ length: finalCount }, (_, index) => {
         if (index < current.length) return current[index];
         const episodeNo = firstNewNo + index - current.length;
@@ -469,12 +489,24 @@ function AdminApp() {
   const applyBatchFiles = (files: FileList | null) => {
     const selected = Array.from(files ?? []);
     if (!selected.length) return;
-    const configuredEpisodeNos = new Set(draftEpisodes.map((episode) => episode.episodeNo));
+    const existing = createMode === 'append' ? episodes.filter((episode) => episode.albumId === targetAlbumId) : [];
+    const existingByNo = new Map(existing.map((episode) => [episode.episodeNo, episode]));
+    const selectedNos = selected.map((file) => episodeNoFromName(file.name));
+    const replacePlaceholder = draftEpisodes.length === 1 && !draftEpisodes[0].file && !draftEpisodes[0].savedEpisodeId
+      && !selectedNos.includes(draftEpisodes[0].episodeNo)
+      && selectedNos.some((number) => number && existingByNo.get(number) && !existingByNo.get(number)?.byteplusVid);
+    const next = replacePlaceholder ? [] : [...draftEpisodes];
     const matchedByEpisode = new Map<number, File[]>();
     const unmatchedNames: string[] = [];
+    const alreadyUploaded: number[] = [];
     for (const file of selected) {
       const episodeNo = episodeNoFromName(file.name);
-      if (!episodeNo || !configuredEpisodeNos.has(episodeNo)) {
+      const saved = episodeNo ? existingByNo.get(episodeNo) : undefined;
+      if (saved?.byteplusVid) {
+        alreadyUploaded.push(episodeNo!);
+        continue;
+      }
+      if (!episodeNo || (!next.some((episode) => episode.episodeNo === episodeNo) && !saved)) {
         unmatchedNames.push(file.name);
         continue;
       }
@@ -483,18 +515,21 @@ function AdminApp() {
       matchedByEpisode.set(episodeNo, matches);
     }
     const duplicateEpisodeNos = [...matchedByEpisode.entries()].filter(([, matches]) => matches.length > 1).map(([episodeNo]) => episodeNo);
-    const missingEpisodeNos = draftEpisodes.filter((episode) => !episode.file && !matchedByEpisode.has(episode.episodeNo)).map((episode) => episode.episodeNo);
-    setBatchFeedback([unmatchedNames.length ? `未匹配文件：${unmatchedNames.join('、')}` : '', duplicateEpisodeNos.length ? `重复匹配集数：${duplicateEpisodeNos.join('、')}` : '', missingEpisodeNos.length ? `未选择视频的集数：${missingEpisodeNos.join('、')}` : '所有已选择文件都已按集号匹配。'].filter(Boolean).join('；'));
-    setDraftEpisodes((items) => {
-      const used = new Set<File>();
-      return items.map((episode) => {
-        if (episode.file) return episode;
-        const match = selected.find((file) => !used.has(file) && episodeNoFromName(file.name) === episode.episodeNo);
-        if (!match) return episode;
-        used.add(match);
-        return { ...episode, file: match };
-      });
-    });
+    for (const [episodeNo, matches] of matchedByEpisode) {
+      if (matches.length !== 1) continue;
+      const index = next.findIndex((episode) => episode.episodeNo === episodeNo);
+      if (index >= 0) {
+        next[index] = { ...next[index], file: matches[0], uploadError: undefined };
+      } else {
+        const saved = existingByNo.get(episodeNo)!;
+        next.push({ localId: `draft-${Date.now()}-${episodeNo}`, episodeNo, title: saved.title,
+          sortOrder: saved.sortOrder, isFree: false, savedEpisodeId: saved.id, file: matches[0] });
+      }
+    }
+    const missingEpisodeNos = next.filter((episode) => !episode.file && episode.uploadStatus !== '已上传').map((episode) => episode.episodeNo);
+    setBatchFeedback([alreadyUploaded.length ? `已有视频的集数已跳过：${alreadyUploaded.join('、')}` : '', unmatchedNames.length ? `未匹配文件：${unmatchedNames.join('、')}` : '', duplicateEpisodeNos.length ? `重复匹配集数：${duplicateEpisodeNos.join('、')}` : '', missingEpisodeNos.length ? `未选择视频的集数：${missingEpisodeNos.join('、')}` : '已按集号匹配视频。'].filter(Boolean).join('；'));
+    setDraftEpisodes(next.length ? next : draftEpisodes);
+    setCreateError('');
   };
 
   const uploadDraftVideo = async (draft: DraftEpisode) => {
@@ -517,21 +552,29 @@ function AdminApp() {
     event.preventDefault();
     setCreating(true);
     setMessage('');
+    setCreateError('');
     try {
       if (createMode === 'new' && !createdAlbumId && draftEpisodes.some((episode) => episode.savedEpisodeId)) throw new Error('当前草稿包含已保存分集，但无法确认所属剧集；请刷新数据或重置后新建。');
       if (createMode === 'append' && !targetAlbumId) throw new Error('请先选择要追加分集的剧集。');
       if (!draftEpisodes.length) throw new Error('请至少添加一集。');
       if (new Set(draftEpisodes.map((episode) => episode.episodeNo)).size !== draftEpisodes.length) throw new Error('当前分集集号不能重复。');
       if (draftEpisodes.some((episode) => !Number.isSafeInteger(episode.episodeNo) || episode.episodeNo < 1 || !episode.title.trim())) throw new Error('请检查集号和标题。');
-      const missingVideos = draftEpisodes.filter((episode) => !episode.file && episode.uploadStatus !== '已上传');
-      if (missingVideos.length) throw new Error(`请先为第 ${missingVideos.map((episode) => episode.episodeNo).join('、')} 集选择视频。`);
-      if (createMode === 'append') {
-        const existingNos = new Set(episodes.filter((episode) => episode.albumId === targetAlbumId).map((episode) => episode.episodeNo));
-        const duplicate = draftEpisodes.find((episode) => !episode.savedEpisodeId && existingNos.has(episode.episodeNo));
-        if (duplicate) throw new Error(`第 ${duplicate.episodeNo} 集已存在，请修改集号。`);
-      }
       let draftsToUpload = draftEpisodes;
-      const unsaved = draftEpisodes.filter((episode) => !episode.savedEpisodeId);
+      if (createMode === 'append') {
+        const existing = episodes.filter((episode) => episode.albumId === targetAlbumId);
+        draftsToUpload = resolveAppendEpisodes(draftEpisodes, existing);
+        const duplicate = draftsToUpload.find((episode) => !episode.savedEpisodeId && existing.some((item) => item.episodeNo === episode.episodeNo && Boolean(item.byteplusVid)));
+        if (duplicate) throw new Error(`第 ${duplicate.episodeNo} 集已经有 BytePlus 视频，请选择未上传的集数或从第 ${Math.max(...existing.map((item) => item.episodeNo)) + 1} 集开始。`);
+        const alreadyBound = draftsToUpload.find((episode) => episode.savedEpisodeId && existing.some((item) => item.id === episode.savedEpisodeId && Boolean(item.byteplusVid)));
+        if (alreadyBound) throw new Error(`第 ${alreadyBound.episodeNo} 集已经绑定 BytePlus 视频，无需再次上传。`);
+        if (draftsToUpload.some((episode, index) => episode.savedEpisodeId !== draftEpisodes[index]?.savedEpisodeId)) {
+          setDraftEpisodes(draftsToUpload);
+          setMessage(`已识别未完成的原有分集，将直接补传：${draftsToUpload.filter((episode, index) => episode.savedEpisodeId && !draftEpisodes[index]?.savedEpisodeId).map((episode) => `第${episode.episodeNo}集`).join('、')}。`);
+        }
+      }
+      const missingVideos = draftsToUpload.filter((episode) => !episode.file && episode.uploadStatus !== '已上传');
+      if (missingVideos.length) throw new Error(`请先为第 ${missingVideos.map((episode) => episode.episodeNo).join('、')} 集选择视频。`);
+      const unsaved = draftsToUpload.filter((episode) => !episode.savedEpisodeId);
       if (unsaved.length) {
         const draftsWithCovers = await Promise.all(unsaved.map(async (episode) => ({ ...episode, coverAsset: await uploadEpisodeCover(episode) })));
         const payloadEpisodes = draftsWithCovers.map((episode) => ({
@@ -588,13 +631,23 @@ function AdminApp() {
         }
       }
       const resultMessage = failedUploads.length
-        ? `${createMode === 'append' ? '新增分集已保存' : '短剧草稿已创建'}，但有 ${failedUploads.length} 个视频上传失败，可在对应行单独重试。`
-        : createMode === 'append' ? '新增分集已保存，视频已提交处理。' : '短剧草稿已创建，视频已提交处理。';
-      if (!failedUploads.length) resetCreateForm();
+        ? `${createMode === 'append' ? (unsaved.length ? '新增分集已保存' : '原有分集已识别') : '短剧草稿已创建'}，但有 ${failedUploads.length} 个视频上传失败，可在对应行单独重试。`
+        : createMode === 'append' ? (unsaved.length ? '新增分集已保存，视频已上传。' : '原有分集的缺失视频已上传。') : '短剧草稿已创建，视频已提交处理。';
+      if (!failedUploads.length) {
+        if (createMode === 'append') {
+          const existing = episodes.filter((episode) => episode.albumId === targetAlbumId);
+          const episodeNo = Math.max(0, ...existing.map((episode) => episode.episodeNo), ...draftsToUpload.map((episode) => episode.episodeNo)) + 1;
+          const sortOrder = Math.max(0, ...existing.map((episode) => episode.sortOrder), ...draftsToUpload.map((episode) => episode.sortOrder)) + 1;
+          setDraftEpisodes([{ localId: `draft-${Date.now()}`, episodeNo, title: defaultEpisodeTitle(episodeNo), sortOrder, isFree: false }]);
+          setBatchFeedback('');
+        } else resetCreateForm();
+      }
       await loadData();
       setMessage(resultMessage);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '内容创建失败');
+      const detail = error instanceof Error ? error.message : '内容创建失败';
+      setCreateError(detail);
+      setMessage(detail);
     } finally {
       setCreating(false);
     }
@@ -729,7 +782,7 @@ function AdminApp() {
     }
   };
   const authorizeSharedAlbum = async (sharedAlbum: SharedAlbum, targetMiniAppKey: MiniApp) => {
-    const localAlbumId = window.prompt(`请输入 ${targetMiniAppKey === 'taletv' ? 'TaleTV' : 'QuicK ReeLS'} 目标剧目的本地 ID。目标剧目需要先在对应小程序后台创建。`)?.trim();
+    const localAlbumId = window.prompt(`请输入 ${miniAppNames[targetMiniAppKey]} 目标剧目的本地 ID。目标剧目需要先在对应小程序后台创建。`)?.trim();
     if (!localAlbumId) return;
     setPlatformWorking(`${sharedAlbum.id}:authorize:${targetMiniAppKey}`);
     try {
@@ -771,7 +824,7 @@ function AdminApp() {
   return <div className="admin-layout"><aside className="sidebar"><div className="brand"><span><Film size={17} /></span>QuicK <span>ReeLS</span></div><MiniAppSelect /><p className="workspace-label">运营工作区</p><nav>
     {navItems.map(([key, Icon, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}><Icon size={17} />{label}</button>)}
   </nav><div className="sidebar-bottom"><button className={tab === 'security' ? 'active' : ''} onClick={() => setTab('security')}><Settings2 size={17} />账号安全</button><div className="account"><span className="account-avatar">{currentAdmin?.email.slice(0, 2).toUpperCase() ?? 'OP'}</span><span><strong>{currentAdmin?.email ?? '运营管理员'}</strong><small>{currentAdmin?.role ?? 'TK小程序管理后台'}</small></span><MoreHorizontal size={16} /></div></div></aside>
-    <main className="main"><header className="page-header"><div><p className="eyebrow">{activeApp === 'taletv' ? 'TaleTV' : 'QuicK ReeLS'} / {tabLabels[tab]}</p><h1>{title}</h1><p className="subhead">当前展示 {activeApp === 'taletv' ? 'TaleTV' : 'QuicK ReeLS'} 的内容和数据。</p></div><div className="header-actions"><button className="secondary" onClick={() => void loadData()} title="刷新数据"><RefreshCw size={15} className={loading ? 'spin' : ''} />刷新</button><button className="secondary" onClick={() => { sessionStorage.removeItem(adminTokenStorageKey); setLoggedIn(false); }}>退出登录</button></div></header>{message && <div className="notice"><CheckCircle2 size={16} />{message}</div>}
+    <main className="main"><header className="page-header"><div><p className="eyebrow">{miniAppNames[activeApp]} / {tabLabels[tab]}</p><h1>{title}</h1><p className="subhead">当前展示 {miniAppNames[activeApp]} 的内容和数据。</p></div><div className="header-actions"><button className="secondary" onClick={() => void loadData()} title="刷新数据"><RefreshCw size={15} className={loading ? 'spin' : ''} />刷新</button><button className="secondary" onClick={() => { sessionStorage.removeItem(adminTokenStorageKey); setLoggedIn(false); }}>退出登录</button></div></header>{message && <div className="notice"><CheckCircle2 size={16} />{message}</div>}
       {(tab === 'audience' || tab === 'playback') && <div className="toolbar"><span><CalendarDays size={15} />统计周期</span><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(7)}>近 7 天</button><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(30)}>近 30 天</button><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(90)}>近 90 天</button><label>开始<input type="date" value={analyticsFrom} max={analyticsTo} onChange={(event) => setAnalyticsFrom(event.target.value)} /></label><label>结束<input type="date" value={analyticsTo} min={analyticsFrom} max={inputDate(new Date())} onChange={(event) => setAnalyticsTo(event.target.value)} /></label><label>时区<select value={analyticsTimezone} onChange={(event) => setAnalyticsTimezone(event.target.value)}><option value="Asia/Shanghai">Asia/Shanghai</option><option value="UTC">UTC</option></select></label></div>}
       {tab === 'overview' && <><section className="metrics"><Metric label="在线剧集" value={String(overview.albums)} change="实时数据" icon={Film} tone="pink" /><Metric label="在线集数" value={String(overview.episodes)} change="已通过发布条件" icon={ListVideo} tone="cyan" /><Metric label="用户数" value={String(overview.users)} change="累计注册" icon={Users} tone="green" /><Metric label="广告解锁" value={String(overview.rewardedUnlocks)} change="累计完成" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="运营健康度" description="关键业务数据当前状态"><div className="readiness-list"><div><span className="ready-dot done"><CheckCircle2 size={15} /></span><span><strong>剧集元数据与访问策略</strong><small>{overview.albums} 部在线剧集 · {overview.episodes} 集可见</small></span><em>正常</em></div><div><span className="ready-dot done"><Database size={15} /></span><span><strong>观众行为采集</strong><small>{overview.likes} 次点赞 · {overview.favorites} 次收藏 · {overview.searches} 次搜索</small></span><em>正常</em></div><div><span className="ready-dot done"><Gauge size={15} /></span><span><strong>播放质量采集</strong><small>{playback?.totalEvents ?? 0} 条播放器事件已入库</small></span><em>正常</em></div></div></Panel><Panel title="最近上传" description="BytePlus 媒体处理任务"><div className="compact-list">{jobs.slice(0, 5).map((job) => <div className="compact-row" key={job.id}><FileVideo size={17} /><span><strong>{job.episode?.title ?? job.episodeId}</strong><small>{job.sourceName ?? job.sourceType ?? '链接'}</small></span><Status value={job.status} /></div>)}{!jobs.length && <p className="empty-copy">还没有上传任务</p>}</div></Panel></div></>}
       {tab === 'create' && <>
@@ -801,7 +854,7 @@ function AdminApp() {
             </div>
             <label className="check-row"><input type="checkbox" checked={createRewardedEnabled} onChange={(event) => setCreateRewardedEnabled(event.target.checked)} />启用广告解锁</label></fieldset></>}
             <div className="episode-toolbar">
-              <label>总集数<input className="inline-number" type="number" min="1" max="500" value={draftEpisodes.length} onChange={(event) => applyEpisodeCount(Number(event.target.value))} /></label>
+              <label>{createMode === 'append' ? '本次处理集数' : '总集数'}<input className="inline-number" type="number" min="1" max="500" value={draftEpisodes.length} onChange={(event) => applyEpisodeCount(Number(event.target.value))} /></label>
               <label>批量选择视频<input type="file" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" multiple onChange={(event) => applyBatchFiles(event.target.files)} /></label>
             </div>
             {batchFeedback && <p className="batch-feedback"><AlertTriangle size={15} />{batchFeedback}</p>}
@@ -816,10 +869,13 @@ function AdminApp() {
               <td><button className="more" type="button" disabled={Boolean(episode.savedEpisodeId)} onClick={() => setDraftEpisodes((items) => items.filter((item) => item.localId !== episode.localId))} title={episode.savedEpisodeId ? '已保存分集不能从当前表单删除' : '删除'}><Trash2 size={15} /></button></td>
             </tr>)}</tbody></table></div>
             <button className="secondary" type="button" onClick={() => setDraftEpisodes((items) => {
-              const episodeNo = nextEpisodeNo(items);
-              return [...items, { localId: `draft-${Date.now()}`, episodeNo, title: defaultEpisodeTitle(episodeNo), sortOrder: (items.at(-1)?.sortOrder ?? 0) + 1, isFree: false }];
+              const existing = createMode === 'append' ? episodes.filter((episode) => episode.albumId === targetAlbumId) : [];
+              const episodeNo = Math.max(nextEpisodeNo(items), Math.max(0, ...existing.map((episode) => episode.episodeNo)) + 1);
+              const sortOrder = Math.max(items.at(-1)?.sortOrder ?? 0, ...existing.map((episode) => episode.sortOrder)) + 1;
+              return [...items, { localId: `draft-${Date.now()}`, episodeNo, title: defaultEpisodeTitle(episodeNo), sortOrder, isFree: false }];
             })}><Plus size={15} />添加分集</button>
-            <button className="primary" type="submit" disabled={creating || (createMode === 'append' && !targetAlbumId) || !draftEpisodes.length}><Save size={17} />{creating ? '处理中...' : createMode === 'append' ? '保存新增分集并上传视频' : draftEpisodes.some((episode) => episode.savedEpisodeId) ? '保存新增分集并上传视频' : '保存草稿并上传视频'}</button>
+            {createError && <p className="form-error create-error"><CircleAlert size={15} />{createError}</p>}
+            <button className="primary" type="submit" disabled={creating || (createMode === 'append' && !targetAlbumId) || !draftEpisodes.length}><Save size={17} />{creating ? '处理中...' : createMode === 'append' ? '保存并上传视频' : draftEpisodes.some((episode) => episode.savedEpisodeId) ? '保存新增分集并上传视频' : '保存草稿并上传视频'}</button>
           </form>
         </Panel>
         <Panel title="上传处理状态" description="所有由内容创建产生的上传记录集中显示；链接任务失败后可重新加入处理队列。"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>来源</th><th>状态</th><th>处理信息</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td><strong>{job.episode?.title ?? job.episodeId}</strong></td><td>{job.sourceName ?? job.sourceType ?? '链接'}</td><td><Status value={job.status} /></td><td>{job.errorMessage ? <small className="table-error" title={job.errorMessage}>{job.errorMessage}</small> : job.providerJobId ?? '本地上传已确认'}</td><td>{new Date(job.createdAt).toLocaleString('zh-CN')}</td><td>{job.status === 'FAILED' && job.sourceType !== 'FILE' ? <button className="secondary retry-button" type="button" disabled={retryingJobId === job.id} onClick={() => void retryUploadJob(job)}><RefreshCw size={14} className={retryingJobId === job.id ? 'spin' : ''} />{retryingJobId === job.id ? '排队中...' : '重新排队'}</button> : '—'}</td></tr>)}</tbody></table>{!jobs.length && <p className="empty-copy table-empty">暂无上传记录</p>}</div></Panel>
@@ -870,16 +926,15 @@ function AdminApp() {
       </Panel>}
       {tab === 'albums' && <Panel title="共享剧目授权" description="同一 BytePlus 账号下复用已审核的 TikTok 主剧目；目标小程序通过授权使用同一个 album_id，不重复上传或送审。">
         <div className="table-wrap"><table><thead><tr><th>主剧目</th><th>版本 / 状态</th><th>授权小程序</th><th>操作</th></tr></thead><tbody>{sharedAlbums.map((sharedAlbum) => {
-          const targetKey: MiniApp = sharedAlbum.ownerMiniAppKey === 'main' ? 'taletv' : 'main';
-          const targetAuthorization = sharedAlbum.authorizations.find((item) => item.miniAppKey === targetKey);
+          const targets = (Object.keys(miniAppNames) as MiniApp[]).filter((key) => key !== sharedAlbum.ownerMiniAppKey);
           return <tr key={sharedAlbum.id}>
             <td><strong>{sharedAlbum.tiktokAlbumId}</strong><small>主小程序：{sharedAlbum.ownerMiniAppKey}</small></td>
             <td>当前 {sharedAlbum.currentVersion ?? '-'} · 线上 {sharedAlbum.onlineVersion ?? '-'}<small>审核：{sharedAlbum.reviewStatus ?? '未对账'} · 上架：{sharedAlbum.publishStatus ?? '未对账'}</small></td>
             <td>{sharedAlbum.authorizations.map((authorization) => <span className="shared-auth" key={authorization.id}>{authorization.miniAppKey}<Status value={authorization.status} />{authorization.targetLocalAlbumId && <small>{authorization.targetLocalAlbumId}</small>}</span>)}</td>
             <td><div className="button-row">
-              {canReviewContent && <button className="secondary" disabled={platformWorking !== null || targetAuthorization?.status === 'AUTHORIZED'} onClick={() => void authorizeSharedAlbum(sharedAlbum, targetKey)}>{platformWorking === `${sharedAlbum.id}:authorize:${targetKey}` ? '授权中...' : `授权到 ${targetKey}`}</button>}
+              {canReviewContent && targets.map((targetKey) => <button key={targetKey} className="secondary" disabled={platformWorking !== null || sharedAlbum.authorizations.some((item) => item.miniAppKey === targetKey && item.status === 'AUTHORIZED')} onClick={() => void authorizeSharedAlbum(sharedAlbum, targetKey)}>{platformWorking === `${sharedAlbum.id}:authorize:${targetKey}` ? '授权中...' : `授权到 ${miniAppNames[targetKey]}`}</button>)}
               {canSyncContent && <button className="secondary" disabled={platformWorking !== null} onClick={() => void reconcileSharedAlbum(sharedAlbum)}>{platformWorking === `${sharedAlbum.id}:shared-reconcile` ? '对账中...' : '共享对账'}</button>}
-            </div>{targetAuthorization?.errorMessage && <small className="table-error" title={targetAuthorization.errorMessage}>{targetAuthorization.errorMessage}</small>}</td>
+            </div>{sharedAlbum.authorizations.filter((item) => item.errorMessage).map((item) => <small key={item.id} className="table-error" title={item.errorMessage ?? ''}>{miniAppNames[item.miniAppKey]}：{item.errorMessage}</small>)}</td>
           </tr>;
         })}</tbody></table>{!sharedAlbums.length && <p className="empty-copy table-empty">暂无共享主剧目；先在上方将已同步版本的剧目设为共享主剧目。</p>}</div>
       </Panel>}

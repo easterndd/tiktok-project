@@ -120,6 +120,7 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .episode-cover-preview { width: 28px; height: 38px; object-fit: cover; border: 1px solid var(--line); border-radius: 4px; }
 .needs-file td { background: #fffaf0; }
 .batch-feedback { display: flex; align-items: flex-start; gap: 7px; margin: -4px 0 0; padding: 9px 11px; color: #9a6500; border: 1px solid #f1d8a0; border-radius: 6px; background: #fff8e8; font-size: 12px; font-weight: 700; }
+.create-error { display: flex; align-items: flex-start; gap: 7px; margin: -4px 0 0; padding: 9px 11px; color: #b4233c; border: 1px solid #f0b8c2; border-radius: 6px; background: #fff1f3; font-size: 12px; font-weight: 700; }
 .primary:disabled { cursor: wait; opacity: .65; }
 .file-hint { display: flex; align-items: center; gap: 7px; margin: -7px 0 0; color: var(--cyan); font-size: 12px; font-weight: 700; }
 .toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin: -12px 0 18px; color: var(--muted); font-size: 12px; font-weight: 800; }
