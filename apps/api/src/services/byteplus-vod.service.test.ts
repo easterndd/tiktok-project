@@ -128,10 +128,44 @@ describe('BytePlusVodService', () => {
           ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'object', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
           CommitUploadInfo: async () => { commits++; return { Result: { Data: { Vid: 'unexpected' } } }; }
         } as never,
-        uploadFetch: async () => { uploads++; return Response.json({ code: 'InvalidPart' }, { status: 400 }); }
+        uploadFetch: async () => {
+          uploads++;
+          return Response.json({ code: 'InvalidPart', message: 'Invalid part size Authorization=private-value' }, { status: 400 });
+        }
       });
-      await assert.rejects(() => service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: '第3集', spaceName: 'space', byteplusAccountId: 'account' }), /HTTP 400/);
+      await assert.rejects(
+        () => service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: '第3集', spaceName: 'space', byteplusAccountId: 'account' }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /直传失败.*HTTP 400 \(InvalidPart\).*Invalid part size/);
+          assert.doesNotMatch(error.message, /private-value/);
+          return true;
+        }
+      );
       assert.equal(uploads, 1);
+      assert.equal(commits, 0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('identifies multipart initialization errors from the upload host', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'byteplus-init-'));
+    try {
+      const filePath = join(directory, 'episode.mp4');
+      await writeFile(filePath, Buffer.alloc(20 * 1024 * 1024 + 1, 1));
+      let commits = 0;
+      const service = new BytePlusVodService(env, {
+        vodService: {
+          ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'object', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
+          CommitUploadInfo: async () => { commits++; return { Result: { Data: { Vid: 'unexpected' } } }; }
+        } as never,
+        uploadFetch: async () => new Response('<Error><Code>InvalidArgument</Code><Message>Missing storage mode</Message></Error>', { status: 400 })
+      });
+      await assert.rejects(
+        () => service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: '第1集', spaceName: 'space', byteplusAccountId: 'account' }),
+        /分片初始化失败.*HTTP 400 \(InvalidArgument\).*Missing storage mode/
+      );
       assert.equal(commits, 0);
     } finally {
       await rm(directory, { recursive: true, force: true });

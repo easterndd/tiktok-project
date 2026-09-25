@@ -53,6 +53,39 @@ type UploadAddress = {
   UploadHosts?: string[];
 };
 
+type UploadStage = '直传' | '分片初始化' | '分片上传' | '分片合并';
+
+function uploadHostError(body: string, headers: Headers) {
+  let code: string | undefined;
+  let message: string | undefined;
+  try {
+    const value = JSON.parse(body) as unknown;
+    const parsed = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown> : {};
+    const candidates = [parsed, parsed.error, parsed.payload, parsed.ResponseMetadata,
+      (parsed.ResponseMetadata as Record<string, unknown> | undefined)?.Error];
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== 'object') continue;
+      const entry = candidate as Record<string, unknown>;
+      code ??= typeof entry.Code === 'string' || typeof entry.Code === 'number' ? String(entry.Code)
+        : typeof entry.code === 'string' || typeof entry.code === 'number' ? String(entry.code) : undefined;
+      message ??= typeof entry.Message === 'string' ? entry.Message
+        : typeof entry.message === 'string' ? entry.message : undefined;
+    }
+  } catch {
+    code = body.match(/<Code>([^<]{1,80})<\/Code>/i)?.[1];
+    message = body.match(/<Message>([^<]{1,240})<\/Message>/i)?.[1];
+  }
+  const safeCode = code?.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 80);
+  const safeMessage = message?.replace(/[\r\n\t]/g, ' ')
+    .replace(/https?:\/\/\S+/gi, '[url]')
+    .replace(/(?:Authorization|Auth|Token|Signature|Secret|SessionKey)\s*[:=]\s*\S+/gi, '[redacted]')
+    .replace(/[a-zA-Z0-9_+=/-]{40,}/g, '[id]').slice(0, 180);
+  const requestId = ['x-request-id', 'x-tos-request-id', 'x-tt-logid']
+    .map((name) => headers.get(name)).find(Boolean)?.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+  return { code: safeCode, message: safeMessage, requestId };
+}
+
 type BytePlusError = {
   ResponseMetadata?: {
     RequestId?: string;
@@ -249,6 +282,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
     const size = (await stat(input.filePath)).size;
     if (!size) throw new BytePlusVodError('视频文件为空。', false);
     let response: Awaited<ReturnType<typeof service.CommitUploadInfo>>;
+    let stage = '申请上传地址';
     try {
       const applied = await service.ApplyUploadInfo({
         SpaceName: input.spaceName,
@@ -263,7 +297,9 @@ export class BytePlusVodService implements TikTokShortDramaService {
       if (!address?.SessionKey || !store?.StoreUri || !store.Auth || !address.UploadHosts?.length) {
         throw new BytePlusVodError('BytePlus 未返回完整的上传地址。', true);
       }
+      stage = '上传视频文件';
       await this.transferLocalFile(input.filePath, size, address.UploadHosts, store.StoreUri, store.Auth);
+      stage = '提交媒资';
       response = await service.CommitUploadInfo({
         SpaceName: input.spaceName,
         SessionKey: address.SessionKey,
@@ -276,7 +312,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
     } catch (error) {
       if (error instanceof BytePlusVodError) throw error;
       throw Object.assign(new BytePlusVodError(
-        'BytePlus 上传地址申请或提交失败，请查看服务端日志。',
+        `BytePlus ${stage}失败，请查看服务端日志。`,
         true
       ), { cause: error });
     }
@@ -301,13 +337,13 @@ export class BytePlusVodService implements TikTokShortDramaService {
     try {
       if (size <= uploadPartSize) {
         const data = await this.readPart(file, 0, size);
-        await this.tryUploadHosts(hosts, objectName, auth, '', data);
+        await this.tryUploadHosts(hosts, objectName, auth, '直传', '', data);
         return;
       }
       for (const host of hosts) {
         let uploadId: string;
         try {
-          const response = await this.uploadRequest(host, objectName, auth, 'uploads', undefined, true);
+          const response = await this.uploadRequest(host, objectName, auth, '分片初始化', 'uploads', undefined, true);
           const body = await response.json() as { payload?: { uploadID?: string } };
           uploadId = body.payload?.uploadID ?? '';
           if (!uploadId) throw new BytePlusVodError('BytePlus 分片初始化未返回 uploadID。', true);
@@ -320,12 +356,12 @@ export class BytePlusVodService implements TikTokShortDramaService {
         for (let offset = 0, partNumber = 1; offset < size; offset += uploadPartSize, partNumber++) {
           const data = await this.readPart(file, offset, Math.min(uploadPartSize, size - offset));
           const checksum = crc32(data).toString(16).padStart(8, '0');
-          await this.uploadRequest(host, objectName, auth,
+          await this.uploadRequest(host, objectName, auth, '分片上传',
             `partNumber=${partNumber}&uploadID=${encodeURIComponent(uploadId)}`, data, true, checksum);
           checksums.push(`${partNumber - 1}:${checksum}`);
         }
         // The BytePlus SDK uses zero-based checksum positions in the merge body.
-        await this.uploadRequest(host, objectName, auth, `uploadID=${encodeURIComponent(uploadId)}`,
+        await this.uploadRequest(host, objectName, auth, '分片合并', `uploadID=${encodeURIComponent(uploadId)}`,
           checksums.join(','), true, undefined, false);
         return;
       }
@@ -345,11 +381,11 @@ export class BytePlusVodService implements TikTokShortDramaService {
     return data;
   }
 
-  private async tryUploadHosts(hosts: string[], objectName: string, auth: string, query: string, data: Buffer) {
+  private async tryUploadHosts(hosts: string[], objectName: string, auth: string, stage: UploadStage, query: string, data: Buffer) {
     const checksum = crc32(data).toString(16).padStart(8, '0');
     for (const host of hosts) {
       try {
-        await this.uploadRequest(host, objectName, auth, query, data, false, checksum);
+        await this.uploadRequest(host, objectName, auth, stage, query, data, false, checksum);
         return;
       } catch (error) {
         if (error instanceof BytePlusVodError && !error.retryable) throw error;
@@ -358,7 +394,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
     }
   }
 
-  private async uploadRequest(host: string, objectName: string, auth: string, query: string,
+  private async uploadRequest(host: string, objectName: string, auth: string, stage: UploadStage, query: string,
     data?: Buffer | string, multipart = false, checksum?: string, retry = true): Promise<Response> {
     const url = new URL(`http://${host}/${objectName.split('/').map(encodeURIComponent).join('/')}`);
     url.search = query;
@@ -375,18 +411,16 @@ export class BytePlusVodService implements TikTokShortDramaService {
           signal: AbortSignal.timeout(90_000)
         });
         if (response.ok) return response;
-        const body = await response.text();
-        const providerCode = body.match(/"(?:Code|code)"\s*:\s*"([a-zA-Z0-9_.-]{1,80})"/)?.[1];
-        const requestId = response.headers.get('x-request-id')?.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+        const details = uploadHostError(await response.text(), response.headers);
         const retryable = isRetryableStatus(response.status);
         if (!retryable || attempt === uploadAttempts || !retry) {
-          throw new BytePlusVodError(`BytePlus 上传主机 ${host} 返回 HTTP ${response.status}${providerCode ? ` (${providerCode})` : ''}${requestId ? `，请求 ID ${requestId}` : ''}。`, retryable);
+          throw new BytePlusVodError(`BytePlus ${stage}失败：上传主机 ${host} 返回 HTTP ${response.status}${details.code ? ` (${details.code})` : ''}${details.message ? `：${details.message}` : ''}${details.requestId ? `，请求 ID ${details.requestId}` : ''}。`, retryable);
         }
       } catch (error) {
         if (error instanceof BytePlusVodError && !error.retryable) throw error;
         if (attempt === uploadAttempts || !retry) {
           if (error instanceof BytePlusVodError) throw error;
-          throw Object.assign(new BytePlusVodError(`连接 BytePlus 上传主机 ${host} 失败。`, true), { cause: error });
+          throw Object.assign(new BytePlusVodError(`BytePlus ${stage}失败：无法连接上传主机 ${host}。`, true), { cause: error });
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
