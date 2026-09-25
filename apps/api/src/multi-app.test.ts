@@ -104,3 +104,29 @@ it('requires taletv to use a separate PostgreSQL schema or database', () => {
   assert.equal(taletvEnvironment(env)?.TIKTOK_CLIENT_KEY, 'taletv-key');
   assert.equal(taletvEnvironment(env)?.BYTEPLUS_SPACE_NAME, 'shared-space');
 });
+
+it('registers CineReels and TaleReels on independent routes and rejects duplicate schemas', async () => {
+  const expanded = {
+    ...env,
+    CINEREELS_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=cinereels',
+    TALEREELS_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=talereels',
+    CINEREELS_TIKTOK_CLIENT_KEY: 'cinereels-key',
+    TALEREELS_TIKTOK_CLIENT_KEY: 'talereels-key'
+  };
+  const app = await buildApp(expanded, {
+    prisma: databaseFor('main-album'),
+    miniPrisma: { cinereels: databaseFor('cine-album'), talereels: databaseFor('tale-album') },
+    sharedPrisma: databaseFor('shared-album')
+  });
+  try {
+    await app.ready();
+    assert.equal((await app.inject('/api/cinereels/v1/albums')).json().items[0].id, 'cine-album');
+    assert.equal((await app.inject('/api/talereels/v1/albums')).json().items[0].id, 'tale-album');
+    const cineToken = await app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: 'cinereels', role: 'OWNER', tokenVersion: 0 });
+    assert.equal((await app.inject({ url: '/api/cinereels/v1/admin/albums', headers: { authorization: `Bearer ${cineToken}` } })).statusCode, 200);
+    assert.equal((await app.inject({ url: '/api/talereels/v1/admin/albums', headers: { authorization: `Bearer ${cineToken}` } })).statusCode, 401);
+  } finally {
+    await app.close();
+  }
+  assert.throws(() => taletvEnvironment({ ...expanded, TALETV_DATABASE_URL: expanded.CINEREELS_DATABASE_URL }), /different database or PostgreSQL schema/);
+});

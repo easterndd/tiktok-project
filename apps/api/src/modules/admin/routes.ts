@@ -67,7 +67,7 @@ const sharedMediaBindingInput = z.object({
   sharedMediaAssetId: z.string().trim().min(1).max(128)
 });
 const sharedAuthorizationInput = z.object({
-  targetMiniAppKey: z.enum(['main', 'taletv']),
+  targetMiniAppKey: z.enum(['main', 'taletv', 'cinereels', 'talereels']),
   targetLocalAlbumId: z.string().trim().min(1).max(128).optional()
 });
 const uploadInput = z.object({

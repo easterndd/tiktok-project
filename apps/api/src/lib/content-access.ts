@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Env } from '../config/env';
-import { miniAppAdConfig } from '../config/mini-apps';
+import { miniAppAdConfig, type MiniAppKey } from '../config/mini-apps';
 
 const fallbackRewardedPlacementId = 'ad7686459794040702993';
 
@@ -31,10 +31,13 @@ export function readAccessConfig(value: unknown, defaultRewardedPlacementId = fa
 export function readMiniAppAccessConfig(value: unknown, env: Env): AccessConfig {
   const adConfig = miniAppAdConfig(env);
   const parsed = readAccessConfig(value, adConfig.rewardedPlacementId);
-  const otherPlacementId = env.MINI_APP_KEY === 'main' ? env.TALETV_REWARDED_PLACEMENT_ID : env.REWARDED_PLACEMENT_ID;
+  const otherPlacementIds = (['main', 'taletv', 'cinereels', 'talereels'] as MiniAppKey[])
+    .filter((key) => key !== env.MINI_APP_KEY)
+    .map((key) => miniAppAdConfig(env, key).rewardedPlacementId)
+    .filter(Boolean);
   return {
     ...parsed,
-    rewardedPlacementId: parsed.rewardedPlacementId === otherPlacementId ? adConfig.rewardedPlacementId : parsed.rewardedPlacementId
+    rewardedPlacementId: otherPlacementIds.includes(parsed.rewardedPlacementId) ? adConfig.rewardedPlacementId : parsed.rewardedPlacementId
   };
 }
 

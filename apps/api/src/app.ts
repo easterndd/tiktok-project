@@ -8,7 +8,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 import type { Env } from './config/env';
-import { taletvEnvironment } from './config/mini-apps';
+import { configuredMiniAppKeys, miniAppEnvironment, miniAppPath, type MiniAppKey } from './config/mini-apps';
 import { PrismaClient as DatabaseClient } from '@prisma/client';
 import { registerAlbumRoutes } from './modules/albums/routes';
 import { registerAuthRoutes } from './modules/auth/routes';
@@ -75,10 +75,9 @@ function isMiniBootstrapRequest(url: string) {
   return miniBootstrapPaths.has(url.split('?', 1)[0]);
 }
 
-export async function buildApp(env: Env, options: { prisma?: PrismaClient; taletvPrisma?: PrismaClient; sharedPrisma?: PrismaClient } = {}) {
+export async function buildApp(env: Env, options: { prisma?: PrismaClient; taletvPrisma?: PrismaClient; miniPrisma?: Partial<Record<MiniAppKey, PrismaClient>>; sharedPrisma?: PrismaClient } = {}) {
   const mainEnv: Env = { ...env, MINI_APP_KEY: 'main' };
   const app = Fastify({ logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' } });
-  const taletvEnv = taletvEnvironment(mainEnv);
   registerErrorHandler(app);
   const configuredCorsOrigins = env.API_CORS_ORIGIN.split(',');
   await app.register(cors, {
@@ -182,11 +181,14 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
   };
   const miniAppPrisma: Record<string, PrismaClient> = { main: app.prisma };
   await app.register((context) => registerContext(context, mainEnv, app.prisma, miniAppPrisma), { prefix: '/api/v1' });
-  if (taletvEnv) {
-    const taletvPrisma = options.taletvPrisma ?? new DatabaseClient({ datasources: { db: { url: taletvEnv.DATABASE_URL } } });
-    miniAppPrisma.taletv = taletvPrisma;
-    await app.register((context) => registerContext(context, taletvEnv, taletvPrisma, miniAppPrisma), { prefix: '/api/taletv/v1' });
-    if (!options.taletvPrisma) app.addHook('onClose', async () => taletvPrisma.$disconnect());
+  for (const key of configuredMiniAppKeys(mainEnv).filter((item): item is Exclude<MiniAppKey, 'main'> => item !== 'main')) {
+    const contextEnv = miniAppEnvironment(mainEnv, key);
+    if (!contextEnv) continue;
+    const providedPrisma = options.miniPrisma?.[key] ?? (key === 'taletv' ? options.taletvPrisma : undefined);
+    const prisma = providedPrisma ?? new DatabaseClient({ datasources: { db: { url: contextEnv.DATABASE_URL } } });
+    miniAppPrisma[key] = prisma;
+    await app.register((context) => registerContext(context, contextEnv, prisma, miniAppPrisma), { prefix: `/api/${miniAppPath(key)}/v1` });
+    if (!providedPrisma) app.addHook('onClose', async () => prisma.$disconnect());
   }
   return app;
 }
