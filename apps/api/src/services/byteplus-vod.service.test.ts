@@ -176,6 +176,61 @@ describe('BytePlusVodService', () => {
     }
   });
 
+  it('reports an empty multipart initialization response with status and content type', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'byteplus-empty-init-'));
+    try {
+      const filePath = join(directory, 'episode.mp4');
+      await writeFile(filePath, Buffer.alloc(20 * 1024 * 1024 + 1, 1));
+      let requests = 0;
+      let commits = 0;
+      const service = new BytePlusVodService(env, {
+        vodService: {
+          ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'object', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
+          CommitUploadInfo: async () => { commits++; return { Result: { Data: { Vid: 'unexpected' } } }; }
+        } as never,
+        uploadFetch: async () => { requests++; return new Response('', { status: 200, headers: { 'content-type': 'text/plain' } }); }
+      });
+      await assert.rejects(
+        () => service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: '第1集', spaceName: 'space', byteplusAccountId: 'account' }),
+        /分片初始化返回空响应：主机 upload\.example\.com，HTTP 200，Content-Type text\/plain/
+      );
+      assert.equal(requests, 3);
+      assert.equal(commits, 0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('retries an empty initialization response before uploading file parts', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'byteplus-empty-retry-'));
+    try {
+      const filePath = join(directory, 'episode.mp4');
+      await writeFile(filePath, Buffer.alloc(20 * 1024 * 1024 + 1, 1));
+      let initializations = 0;
+      let commits = 0;
+      const service = new BytePlusVodService(env, {
+        vodService: {
+          ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'object', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
+          CommitUploadInfo: async () => { commits++; return { Result: { Data: { Vid: 'vid-recovered' } } }; }
+        } as never,
+        uploadFetch: async (url) => {
+          if (new URL(String(url)).search === '?uploads') {
+            initializations++;
+            return initializations === 1 ? new Response('', { status: 200 })
+              : Response.json({ payload: { uploadID: 'upload-1' } });
+          }
+          return new Response('', { status: 200 });
+        }
+      });
+      const result = await service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: '第1集', spaceName: 'space', byteplusAccountId: 'account' });
+      assert.equal(initializations, 2);
+      assert.equal(commits, 1);
+      assert.equal(result.byteplusVid, 'vid-recovered');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to the next upload host when the first host is unavailable', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'byteplus-fallback-'));
     try {

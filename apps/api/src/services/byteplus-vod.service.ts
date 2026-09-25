@@ -349,10 +349,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
       for (const host of hosts) {
         let uploadId: string;
         try {
-          const response = await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片初始化', 'uploads', undefined, true);
-          const body = await response.json() as { payload?: { uploadID?: string } };
-          uploadId = body.payload?.uploadID ?? '';
-          if (!uploadId) throw new BytePlusVodError('BytePlus 分片初始化未返回 uploadID。', true);
+          uploadId = await this.initializeMultipart(host, objectName, auth, uploadHeaders);
         } catch (error) {
           if (error instanceof BytePlusVodError && !error.retryable) throw error;
           if (host === hosts.at(-1)) throw error;
@@ -374,6 +371,34 @@ export class BytePlusVodService implements TikTokShortDramaService {
     } finally {
       await file.close();
     }
+  }
+
+  private async initializeMultipart(host: string, objectName: string, auth: string, uploadHeaders: Record<string, string>) {
+    for (let attempt = 1; attempt <= uploadAttempts; attempt++) {
+      const response = await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片初始化', 'uploads', undefined, true);
+      const rawBody = await response.text();
+      if (rawBody.trim()) {
+        let body: { payload?: { uploadID?: string } };
+        try {
+          body = JSON.parse(rawBody) as { payload?: { uploadID?: string } };
+        } catch {
+          throw new BytePlusVodError(`BytePlus 分片初始化返回无法解析的响应：HTTP ${response.status}。`, false);
+        }
+        if (body.payload?.uploadID) return body.payload.uploadID;
+      }
+      const responseType = response.headers.get('content-type')?.replace(/[^a-zA-Z0-9/+;=._ -]/g, '').slice(0, 80) ?? 'unknown';
+      const requestId = ['x-request-id', 'x-tos-request-id', 'x-tt-logid']
+        .map((name) => response.headers.get(name)).find(Boolean)?.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+      const reason = rawBody.trim() ? '未返回 uploadID' : '返回空响应';
+      if (attempt === uploadAttempts) {
+        throw new BytePlusVodError(
+          `BytePlus 分片初始化${reason}：主机 ${host}，HTTP ${response.status}，Content-Type ${responseType}${requestId ? `，请求 ID ${requestId}` : ''}。`,
+          true
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    }
+    throw new BytePlusVodError('BytePlus 分片初始化未完成。', true);
   }
 
   private async readPart(file: Awaited<ReturnType<typeof open>>, offset: number, length: number) {
