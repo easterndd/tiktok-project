@@ -216,6 +216,13 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .multi-release-table th:nth-child(4) { width: 20%; }
 .multi-release-table th:nth-child(5) { width: 24%; }
 .multi-release-table td { overflow-wrap: anywhere; }
+.multi-release-log-table { min-width: 880px; table-layout: fixed; }
+.multi-release-log-table th:nth-child(1) { width: 20%; }
+.multi-release-log-table th:nth-child(2) { width: 14%; }
+.multi-release-log-table th:nth-child(3) { width: 14%; }
+.multi-release-log-table th:nth-child(4) { width: 22%; }
+.multi-release-log-table th:nth-child(5) { width: 30%; }
+.multi-release-log-table td { overflow-wrap: anywhere; }
 .component-list { display: grid; padding: 0 22px 18px; }
 .component-row { display: grid; grid-template-columns: minmax(0, 1fr) 54px 58px; align-items: center; gap: 14px; min-height: 70px; border-bottom: 1px solid #edf0f4; }
 .component-row:last-child { border-bottom: 0; }.component-row > span { display: grid; gap: 4px; }.component-row strong { color: var(--ink); font-size: 13px; }.component-row small { color: var(--muted); font-size: 11px; }.component-row em { color: var(--green); font-size: 11px; font-style: normal; font-weight: 800; }.component-row em.disabled-text { color: #99a4b3; }

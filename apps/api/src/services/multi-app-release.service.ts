@@ -12,9 +12,9 @@ export function targetReleaseAlbumId(sourceApp: MiniAppKey, sourceAlbumId: strin
   return `release_${createHash('sha256').update(`${sourceApp}:${sourceAlbumId}`).digest('hex').slice(0, 24)}`;
 }
 
-async function ownerInTarget(db: Db, email: string) {
-  const admin = await db.adminUser.findUnique({ where: { email }, select: { id: true, role: true, status: true } });
-  if (!admin || admin.status !== 'ACTIVE' || admin.role !== 'OWNER') throw new Error('目标小程序缺少相同邮箱的 ACTIVE OWNER 管理员。');
+async function ownerInTarget(db: Db, email: string, authorizedAdminId?: string) {
+  const admin = await db.adminUser.findUnique({ where: authorizedAdminId ? { id: authorizedAdminId } : { email }, select: { id: true, role: true, status: true } });
+  if (!admin || admin.status !== 'ACTIVE' || admin.role !== 'OWNER') throw new Error('目标小程序需要 ACTIVE OWNER 授权：可使用同邮箱 OWNER，或先切换到目标小程序以其 OWNER 账号登录。');
   return admin.id as string;
 }
 
@@ -121,6 +121,7 @@ export async function runMultiAppRelease(input: {
   sourceAlbumId: string;
   targetApps: MiniAppKey[];
   operatorEmail: string;
+  authorizedAdminIds?: Partial<Record<MiniAppKey, string>>;
   action: 'PREPARE' | ReleaseAction;
   priorityScore?: 1 | 2;
 }) {
@@ -134,7 +135,7 @@ export async function runMultiAppRelease(input: {
       const db = input.dbByApp[target];
       const platform = miniAppPlatformConfig(input.env, target);
       if (!db || !platform.clientKey || !platform.clientSecret) throw new Error('目标小程序数据库或 TikTok Client Key/Secret 未配置。');
-      const adminId = await ownerInTarget(db, input.operatorEmail);
+      const adminId = await ownerInTarget(db, input.operatorEmail, input.authorizedAdminIds?.[target]);
       const albumId = input.action === 'PREPARE'
         ? await prepareTarget(db, input.env, source, input.sourceApp, target)
         : target === input.sourceApp ? source.id as string : targetReleaseAlbumId(input.sourceApp, source.id);
@@ -164,17 +165,17 @@ export async function runMultiAppRelease(input: {
   return { items };
 }
 
-export async function multiAppReleaseStatus(input: { dbByApp: Record<string, Db>; sourceApp: MiniAppKey; sourceAlbumId: string; targetApps: MiniAppKey[]; operatorEmail: string }) {
+export async function multiAppReleaseStatus(input: { dbByApp: Record<string, Db>; sourceApp: MiniAppKey; sourceAlbumId: string; targetApps: MiniAppKey[]; operatorEmail: string; authorizedAdminIds?: Partial<Record<MiniAppKey, string>> }) {
   const items = [];
   for (const target of [...new Set(input.targetApps)]) {
     try {
       const db = input.dbByApp[target];
       if (!db) throw new Error('目标小程序数据库未配置。');
-      await ownerInTarget(db, input.operatorEmail);
+      await ownerInTarget(db, input.operatorEmail, input.authorizedAdminIds?.[target]);
       const albumId = target === input.sourceApp ? input.sourceAlbumId : targetReleaseAlbumId(input.sourceApp, input.sourceAlbumId);
       const album = await db.album.findUnique({ where: { id: albumId }, select: { id: true, title: true, tiktokAlbumId: true, tiktokVersion: true, onlineVersion: true, reviewStatus: true, publishStatus: true, status: true, coverAsset: { select: { providerImageId: true } }, episodes: { select: { tiktokVideoStatus: true, coverAssetId: true, coverAsset: { select: { providerImageId: true } } } } } });
-      if (!album) { items.push({ miniAppKey: target, prepared: false }); continue; }
-      const jobs = await db.platformSyncJob.findMany({ where: { albumId }, orderBy: { createdAt: 'desc' }, take: 30, select: { id: true, kind: true, status: true, errorMessage: true, providerRequestId: true, providerResponse: true, completedAt: true } });
+      if (!album) { items.push({ miniAppKey: target, prepared: false, reason: 'NOT_PREPARED' }); continue; }
+      const jobs = await db.platformSyncJob.findMany({ where: { albumId }, orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, kind: true, status: true, errorMessage: true, providerRequestId: true, providerResponse: true, createdAt: true, completedAt: true, episode: { select: { episodeNo: true, title: true } } } });
       items.push({
         miniAppKey: target, prepared: true, albumId, title: album.title, tiktokAlbumId: album.tiktokAlbumId,
         version: album.tiktokVersion, onlineVersion: album.onlineVersion, reviewStatus: album.reviewStatus,
@@ -184,7 +185,7 @@ export async function multiAppReleaseStatus(input: { dbByApp: Record<string, Db>
         episodeCount: album.episodes.length, jobs
       });
     } catch (error) {
-      items.push({ miniAppKey: target, prepared: false, error: error instanceof Error ? error.message : '状态读取失败。' });
+      items.push({ miniAppKey: target, prepared: false, reason: 'ACCESS_ERROR', error: error instanceof Error ? error.message : '状态读取失败。' });
     }
   }
   return { items };

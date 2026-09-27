@@ -106,6 +106,34 @@ it('requires taletv to use a separate PostgreSQL schema or database', () => {
   assert.equal(taletvEnvironment(env)?.BYTEPLUS_SPACE_NAME, 'shared-space');
 });
 
+it('accepts a different-email target OWNER session for multi-app release status', async () => {
+  const mainDb = databaseFor('source-album') as any;
+  mainDb.adminUser.findUnique = async () => ({ id: 'source-owner', email: 'source@example.com', role: 'OWNER', status: 'ACTIVE', tokenVersion: 0 });
+  const targetDb = databaseFor('target-album') as any;
+  targetDb.adminUser.findUnique = async ({ where }: any) => where.id === 'target-owner'
+    ? { id: 'target-owner', email: 'target@example.com', role: 'OWNER', status: 'ACTIVE', tokenVersion: 0 }
+    : null;
+  targetDb.album.findUnique = async () => null;
+  const app = await buildApp(env, { prisma: mainDb, taletvPrisma: targetDb });
+  try {
+    await app.ready();
+    const sourceToken = await app.jwt.sign({ sub: 'source-owner', kind: 'admin', appKey: 'main', role: 'OWNER', tokenVersion: 0 });
+    const targetToken = await app.jwt.sign({ sub: 'target-owner', kind: 'admin', appKey: 'taletv', role: 'OWNER', tokenVersion: 0 });
+    const url = '/api/v1/admin/multi-app-releases/source-album?targetApps=taletv';
+    const withoutApproval = await app.inject({ url, headers: { authorization: `Bearer ${sourceToken}` } });
+    assert.equal(withoutApproval.statusCode, 200);
+    assert.equal(withoutApproval.json().items[0].reason, 'ACCESS_ERROR');
+    const withApproval = await app.inject({ url, headers: {
+      authorization: `Bearer ${sourceToken}`,
+      'x-multi-app-tokens': JSON.stringify({ taletv: targetToken })
+    } });
+    assert.equal(withApproval.statusCode, 200);
+    assert.equal(withApproval.json().items[0].reason, 'NOT_PREPARED');
+  } finally {
+    await app.close();
+  }
+});
+
 it('registers CineReels and TaleReels on independent routes and rejects duplicate schemas', async () => {
   const expanded = {
     ...env,

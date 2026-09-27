@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, unlink } from 'node:fs/promises';
@@ -78,6 +78,29 @@ const multiAppReleaseInput = z.object({
   action: z.enum(['PREPARE', 'SYNC_MEDIA', 'SYNC_VERSION', 'SUBMIT_REVIEW', 'RECONCILE', 'SET_ONLINE_VERSION', 'PUBLISH']),
   priorityScore: z.union([z.literal(1), z.literal(2)]).optional()
 }).strict();
+
+async function releaseAdminIds(app: FastifyInstance, request: FastifyRequest, targets: MiniAppKey[]) {
+  const ids: Partial<Record<MiniAppKey, string>> = { [app.config.MINI_APP_KEY]: request.user.sub };
+  const header = request.headers['x-multi-app-tokens'];
+  if (typeof header !== 'string') return ids;
+  if (header.length > 16_000) throw Object.assign(new Error('目标小程序授权信息过长。'), { statusCode: 400 });
+  let tokens: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(header) as unknown;
+    tokens = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    throw Object.assign(new Error('目标小程序授权信息格式错误。'), { statusCode: 400 });
+  }
+  for (const target of targets) {
+    if (target === app.config.MINI_APP_KEY || typeof tokens[target] !== 'string') continue;
+    let payload: { sub?: string; kind?: string; appKey?: string; tokenVersion?: number };
+    try { payload = app.jwt.verify(tokens[target] as string) as typeof payload; } catch { continue; }
+    if (payload?.kind !== 'admin' || payload.appKey !== target || payload.tokenVersion === undefined || !payload.sub) continue;
+    const admin = await app.miniAppPrisma[target]?.adminUser.findUnique({ where: { id: payload.sub }, select: { role: true, status: true, tokenVersion: true } });
+    if (admin?.role === 'OWNER' && admin.status === 'ACTIVE' && admin.tokenVersion === payload.tokenVersion) ids[target] = payload.sub;
+  }
+  return ids;
+}
 const uploadInput = z.object({
   episodeId: z.string().min(1).max(128),
   sourceUrl: z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), '来源地址必须使用 HTTP 或 HTTPS。'),
@@ -1164,7 +1187,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const targets = releaseTargetsInput.parse(targetApps.split(','));
     const operator = await app.prisma.adminUser.findUnique({ where: { id: request.user.sub }, select: { email: true } });
     if (!operator) throw Object.assign(new Error('当前管理员不存在。'), { statusCode: 403 });
-    return multiAppReleaseStatus({ dbByApp: app.miniAppPrisma as any, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: targets, operatorEmail: operator.email });
+    return multiAppReleaseStatus({ dbByApp: app.miniAppPrisma as any, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: targets, operatorEmail: operator.email, authorizedAdminIds: await releaseAdminIds(app, request, targets) });
   });
 
   app.post('/admin/multi-app-releases/:albumId', { preHandler: requirePermission('content.publish') }, async (request) => {
@@ -1172,7 +1195,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const input = multiAppReleaseInput.parse(request.body);
     const operator = await app.prisma.adminUser.findUnique({ where: { id: request.user.sub }, select: { email: true } });
     if (!operator) throw Object.assign(new Error('当前管理员不存在。'), { statusCode: 403 });
-    const result = await runMultiAppRelease({ sourceDb: app.prisma as any, dbByApp: app.miniAppPrisma as any, env: app.rootConfig, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: input.targetApps, operatorEmail: operator.email, action: input.action, priorityScore: input.priorityScore });
+    const result = await runMultiAppRelease({ sourceDb: app.prisma as any, dbByApp: app.miniAppPrisma as any, env: app.rootConfig, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: input.targetApps, operatorEmail: operator.email, authorizedAdminIds: await releaseAdminIds(app, request, input.targetApps), action: input.action, priorityScore: input.priorityScore });
     await audit(app, request.user.sub, `MULTI_APP_${input.action}`, 'Album', albumId, { targets: result.items.map((item) => ({ miniAppKey: item.miniAppKey, accepted: item.accepted })) });
     return result;
   });

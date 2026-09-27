@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Env } from '../config/env';
-import { runMultiAppRelease, targetReleaseAlbumId } from './multi-app-release.service';
+import { multiAppReleaseStatus, runMultiAppRelease, targetReleaseAlbumId } from './multi-app-release.service';
 
 const env = {
   TIKTOK_CLIENT_KEY: 'main-key', TIKTOK_CLIENT_SECRET: 'main-secret',
@@ -126,4 +126,20 @@ test('queues both album and episode covers for an independent target', async () 
   const result = await runMultiAppRelease({ sourceDb: { album: { findUnique: async () => ({ id: source.id }) } } as any, dbByApp: { taletv: target }, env, sourceApp: 'main', sourceAlbumId: source.id, targetApps: ['taletv'], operatorEmail: 'owner@example.com', action: 'SYNC_MEDIA' });
   assert.equal(result.items[0].accepted, true);
   assert.deepEqual(queued, ['COVER:album-cover', 'COVER:episode-cover', 'VIDEO:episode-1']);
+});
+
+test('returns target-app jobs for the cross-app log after a different-email owner authorizes', async () => {
+  const target: any = {
+    adminUser: { findUnique: async ({ where }: any) => where.id === 'other-owner' ? { id: 'other-owner', role: 'OWNER', status: 'ACTIVE' } : null },
+    album: { findUnique: async () => ({
+      id: targetReleaseAlbumId('main', source.id), title: source.title, tiktokAlbumId: 'target-platform-album',
+      tiktokVersion: 1, onlineVersion: null, reviewStatus: 'REVIEWING', publishStatus: '0', status: 'REVIEWING',
+      coverAsset: { providerImageId: 'target-cover-id' }, episodes: [{ tiktokVideoStatus: 'READY', coverAssetId: null }]
+    }) },
+    platformSyncJob: { findMany: async () => [{ id: 'review-job', kind: 'REVIEW', status: 'SUCCEEDED', createdAt: new Date('2026-09-27T10:00:00Z'), providerResponse: { review_status: 1 } }] }
+  };
+  const result = await multiAppReleaseStatus({ dbByApp: { taletv: target }, sourceApp: 'main', sourceAlbumId: source.id, targetApps: ['taletv'], operatorEmail: 'source@example.com', authorizedAdminIds: { taletv: 'other-owner' } });
+  assert.equal(result.items[0].prepared, true);
+  assert.equal(result.items[0].jobs?.[0].kind, 'REVIEW');
+  assert.equal(result.items[0].reviewStatus, 'REVIEWING');
 });
