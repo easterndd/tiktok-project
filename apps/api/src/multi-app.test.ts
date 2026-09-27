@@ -183,7 +183,7 @@ it('registers CineReels and TaleReels on independent routes and rejects duplicat
 it('handles Mini bootstrap preflights for all apps and logs the actual allowlist decision before CORS', async () => {
   const app = await buildApp({
     ...env,
-    API_CORS_ORIGIN: 'https://admin.example.com,https://*.tiktok-minis.us',
+    API_CORS_ORIGIN: 'https://admin.example.com,https://*.tiktokminis.us,https://*.tiktok-minis.us',
     CINEREELS_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=cinereels',
     TALEREELS_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=talereels'
   }, { prisma: databaseFor('main'), taletvPrisma: databaseFor('taletv'), miniPrisma: {
@@ -201,7 +201,15 @@ it('handles Mini bootstrap preflights for all apps and logs the actual allowlist
     for (const prefix of ['/api/v1', '/api/taletv/v1', '/api/cinereels/v1', '/api/talereels/v1']) {
       for (const path of ['/auth/anonymous/session', '/app-entry-ad-sessions']) {
         const url = `${prefix}${path}`;
-        for (const [origin, allowed] of [['https://preview.tiktok-minis.us', true], ['https://untrusted.example', false], ['null', false]] as const) {
+        for (const [origin, allowed] of [
+          ['https://minis-mnph4s4euzsjk6w6-3hr0tnbqgepq9-3.tiktokminis.us', true],
+          ['https://preview.tiktok-minis.us', true],
+          ['https://preview.tiktokminis.us.evil.example', false],
+          ['https://fake-tiktokminis.us', false],
+          ['http://preview.tiktokminis.us', false],
+          ['https://untrusted.example', false],
+          ['null', false]
+        ] as const) {
           logs.length = 0;
           const response = await app.inject({ method: 'OPTIONS', url, headers: {
             origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type,authorization'
