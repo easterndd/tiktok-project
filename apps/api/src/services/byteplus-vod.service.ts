@@ -481,7 +481,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
   }
 
   async getPlayAuthToken(input: { vid: string }): Promise<string> {
-    return this.createSdkService().GetPlayAuthToken({ Vid: input.vid }, 900);
+    return this.createSdkService().GetPlayAuthToken({ Vid: input.vid, Ssl: '1' }, 900);
   }
 
   async getMediaInfos(input: { vids: string[] }): Promise<BytePlusMedia[]> {

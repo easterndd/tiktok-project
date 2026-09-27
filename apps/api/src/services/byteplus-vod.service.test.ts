@@ -52,6 +52,25 @@ function okJson(body: unknown) {
 }
 
 describe('BytePlusVodService', () => {
+  it('requests HTTPS playback URLs in the signed play auth token', async () => {
+    let signed: { query: unknown; expires?: number } | undefined;
+    const service = new BytePlusVodService(env, {
+      vodService: {
+        GetPlayAuthToken: (query: unknown, expires: number) => {
+          signed = { query, expires };
+          return 'signed-token';
+        }
+      } as never
+    });
+
+    assert.equal(await service.getPlayAuthToken({ vid: 'vid-1' }), 'signed-token');
+    assert.deepEqual(signed, { query: { Vid: 'vid-1', Ssl: '1' }, expires: 900 });
+
+    const realSdkToken = await new BytePlusVodService(env).getPlayAuthToken({ vid: 'vid-1' });
+    const decoded = JSON.parse(Buffer.from(realSdkToken, 'base64').toString('utf8')) as { GetPlayInfoToken: string };
+    assert.match(decoded.GetPlayInfoToken, /(?:^|&)Ssl=1(?:&|$)/);
+  });
+
   it('uses the official SDK UploadMedia path when available', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'byteplus-sdk-upload-'));
     try {
