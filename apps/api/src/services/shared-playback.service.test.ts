@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Env } from '../config/env';
 import { authorizeSharedPlayback, preparePlaybackTarget, verifyPlaybackSource } from './shared-playback.service';
-import { processSharedPlatformOperations, projectSharedAlbumToLocal } from './shared-platform.service';
+import { processSharedPlatformOperations, projectSharedAlbumToLocal, retryUnknownAuthorizationOnce } from './shared-platform.service';
 import { TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
 
 const env = { MINI_APP_KEY: 'main', TIKTOK_CLIENT_KEY: 'main-key', TIKTOK_CLIENT_SECRET: 'main-secret', TALETV_TIKTOK_CLIENT_KEY: 'target-key', TALETV_TIKTOK_CLIENT_SECRET: 'target-secret', BYTEPLUS_ACCOUNT_ID: 'account', BYTEPLUS_SPACE_NAME: 'space', BYTEPLUS_REGION: 'region', REWARDED_PLACEMENT_ID: 'main-ad', TALETV_REWARDED_PLACEMENT_ID: 'target-ad' } as Env;
@@ -39,6 +39,12 @@ function fixture() {
       updateMany: async ({ where, data }: any) => { const item = where.id ? [...state.auths.values()].find((entry: any) => entry.id === where.id && (!where.targetClientKey || entry.targetClientKey === where.targetClientKey)) : state.auths.get(where.miniAppKey); if (item) Object.assign(item, data); return { count: item ? 1 : 0 }; }
     },
     sharedPlatformOperation: {
+      findUnique: async ({ where }: any) => state.ops.find((entry: any) => where.id ? entry.id === where.id : entry.dedupeKey === where.dedupeKey) ?? null,
+      findUniqueOrThrow: async ({ where }: any) => state.ops.find((entry: any) => entry.id === where.id),
+      create: async ({ data }: any) => {
+        if (state.ops.some((entry: any) => entry.dedupeKey === data.dedupeKey)) throw new Error('Duplicate maintenance request');
+        const op = { id: `manual-op-${state.ops.length}`, attemptCount: 0, ...data }; state.ops.push(op); return op;
+      },
       findFirst: async ({ where }: any) => state.ops.find((entry: any) => entry.kind === where.kind && ['PENDING', 'PROCESSING'].includes(entry.status)) ?? null,
       upsert: async ({ create, update, where }: any) => { let op = state.ops.find((entry: any) => entry.dedupeKey === where.dedupeKey); if (op) Object.assign(op, update); else { op = { id: 'grant-op', attemptCount: 0, ...create }; state.ops.push(op); } return op; },
       findMany: async () => state.ops.filter((entry: any) => ['PENDING', 'PROCESSING'].includes(entry.status)),
@@ -141,6 +147,82 @@ test('stops automatic replay after an ambiguous platform grant timeout', async (
   assert.equal(f.state.ops[0].status, 'CONFLICT');
   assert.equal(f.state.auths.get('taletv').status, 'CONFLICT');
   assert.equal(f.state.ops[0].providerRequestId, 'timeout-log');
+});
+
+test('saves missing-result evidence without opening target playback or retrying automatically', async () => {
+  const f = fixture(); await f.prepare();
+  const evidence = { httpStatus: 200, providerEnvelope: { data: {}, error: { code: 'ok', log_id: 'empty-log' } } };
+  f.api.authorizeAlbum = async () => { f.state.grantCalls += 1; throw new TikTokShortDramaApiError('missing results', 'AUTHORIZATION_RESULT_UNCONFIRMED', 'empty-log', true, evidence); };
+  await f.run(); await f.run();
+  assert.equal(f.state.grantCalls, 1);
+  assert.equal(f.state.ops[0].status, 'CONFLICT');
+  assert.deepEqual(f.state.ops[0].providerResponse, evidence);
+  assert.equal(f.state.targetAlbum.status, 'OFFLINE');
+});
+
+function maintenanceOptions(f: ReturnType<typeof fixture>) {
+  return { env, localPrismaByApp: { main: f.sourceDb, taletv: f.targetDb }, apiByApp: { main: f.api, taletv: f.api } };
+}
+
+async function uncertainFixture() {
+  const f = fixture(); await f.prepare();
+  const authorize = f.api.authorizeAlbum;
+  f.api.authorizeAlbum = async () => { throw new TikTokShortDramaApiError('missing results', undefined, 'original-log', true); };
+  await f.run();
+  f.api.authorizeAlbum = authorize;
+  return f;
+}
+
+test('manual recovery requires exact target and confirmation and a still active target OWNER', async () => {
+  const f = await uncertainFixture(); const options = maintenanceOptions(f);
+  await assert.rejects(() => retryUnknownAuthorizationOnce(f.sharedDb, options, 'grant-op', 'taletv', ''), /明确确认/);
+  await assert.rejects(() => retryUnknownAuthorizationOnce(f.sharedDb, options, 'grant-op', 'main', 'REAUTHORIZE_ONE_TARGET'), /不是该目标/);
+  f.targetDb.adminUser.findUnique = async () => ({ role: 'OWNER', status: 'DISABLED' });
+  await assert.rejects(() => retryUnknownAuthorizationOnce(f.sharedDb, options, 'grant-op', 'taletv', 'REAUTHORIZE_ONE_TARGET'), /批准已失效/);
+  assert.equal(f.state.ops.length, 1);
+  assert.equal(f.state.grantCalls, 0);
+});
+
+test('manual recovery refuses an already pending target authorization', async () => {
+  const f = await uncertainFixture();
+  f.state.ops.push({ id: 'active-op', kind: 'AUTHORIZE_ALBUM', status: 'PENDING' });
+  await assert.rejects(() => retryUnknownAuthorizationOnce(f.sharedDb, maintenanceOptions(f), 'grant-op', 'taletv', 'REAUTHORIZE_ONE_TARGET'), /处理中/);
+  assert.equal(f.state.grantCalls, 0);
+});
+
+test('manual recovery preserves the original conflict and only calls the platform once per original job', async () => {
+  const f = await uncertainFixture(); const original = { ...f.state.ops[0] };
+  const result = await retryUnknownAuthorizationOnce(f.sharedDb, maintenanceOptions(f), original.id, 'taletv', 'REAUTHORIZE_ONE_TARGET');
+  assert.equal(result.status, 'SUCCEEDED');
+  assert.equal((result.snapshotJson as any).manualRetryOfOperationId, original.id);
+  assert.equal((result.snapshotJson as any).originalProviderRequestId, 'original-log');
+  assert.deepEqual(f.state.ops[0], original);
+  assert.equal(f.state.grantCalls, 1);
+  assert.equal(f.state.targetAlbum.status, 'ONLINE');
+  await assert.rejects(() => retryUnknownAuthorizationOnce(f.sharedDb, maintenanceOptions(f), original.id, 'taletv', 'REAUTHORIZE_ONE_TARGET'));
+  assert.equal(f.state.grantCalls, 1);
+});
+
+test('an unconfirmed manual response keeps new evidence and does not automatically repeat the call', async () => {
+  const f = await uncertainFixture();
+  const evidence = { providerEnvelope: { data: { client_key_result_list: [] } } };
+  f.api.authorizeAlbum = async () => { f.state.grantCalls += 1; throw new TikTokShortDramaApiError('empty results', 'AUTHORIZATION_RESULT_UNCONFIRMED', 'new-log', true, evidence); };
+  const result = await retryUnknownAuthorizationOnce(f.sharedDb, maintenanceOptions(f), 'grant-op', 'taletv', 'REAUTHORIZE_ONE_TARGET');
+  await f.run();
+  assert.equal(result.status, 'CONFLICT');
+  assert.equal(result.providerRequestId, 'new-log');
+  assert.deepEqual(result.providerResponse, evidence);
+  assert.equal(result.nextAttemptAt, null);
+  assert.equal(f.state.grantCalls, 1);
+  assert.equal(f.state.targetAlbum.status, 'OFFLINE');
+});
+
+test('concurrent maintenance calls for the same original task cannot both submit authorization', async () => {
+  const f = await uncertainFixture();
+  const results = await Promise.allSettled([0, 1].map(() => retryUnknownAuthorizationOnce(f.sharedDb, maintenanceOptions(f), 'grant-op', 'taletv', 'REAUTHORIZE_ONE_TARGET')));
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(f.state.grantCalls, 1);
+  assert.equal(f.state.ops.length, 2);
 });
 
 test('refuses to overwrite a separately published target drama', async () => {

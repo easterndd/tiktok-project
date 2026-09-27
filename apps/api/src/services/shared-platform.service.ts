@@ -420,7 +420,8 @@ async function failSharedOperation(sharedPrisma: Db, operation: any, error: unkn
       completedAt: retry ? null : now,
       errorCode: typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : null,
       errorMessage: uncertain ? `${message} 平台授权结果未知，停止自动重复授权；请带请求 ID 核实。` : message,
-      providerRequestId: (error as { requestId?: string }).requestId
+      providerRequestId: (error as { requestId?: string }).requestId,
+      ...(error instanceof TikTokShortDramaApiError && error.responseData ? { providerResponse: error.responseData as Prisma.InputJsonValue } : {})
     }
   });
   if (operation.kind === 'AUTHORIZE_ALBUM' && operation.targetMiniAppKey) await sharedPrisma.miniAppAlbumAuthorization.updateMany({
@@ -569,6 +570,32 @@ export async function enqueueDueSharedReconciliations(sharedPrisma: Db, now = ne
     const recent = await sharedPrisma.sharedPlatformOperation.findFirst({ where: { sharedAlbumId: album.id, kind: 'RECONCILE_ALBUM', OR: [{ status: { in: ['PENDING', 'PROCESSING'] } }, { createdAt: { gte: new Date(now.getTime() - 10 * 60_000) } }] } });
     if (!recent) await enqueueSharedAlbumReconcile(sharedPrisma, album.id);
   }
+}
+
+export async function retryUnknownAuthorizationOnce(sharedPrisma: Db, options: SharedWorkerOptions, operationId: string, target: string, confirmation: string) {
+  if (confirmation !== 'REAUTHORIZE_ONE_TARGET') throw conflict('需要明确确认再次授权一个目标。');
+  const original = await sharedPrisma.sharedPlatformOperation.findUnique({ where: { id: operationId } });
+  if (!original || original.kind !== 'AUTHORIZE_ALBUM' || original.status !== 'CONFLICT' || original.targetMiniAppKey !== target) throw conflict('原任务不是该目标的结果未知授权任务。');
+  const active = await sharedPrisma.sharedPlatformOperation.findFirst({ where: { sharedAlbumId: original.sharedAlbumId, targetMiniAppKey: target, kind: 'AUTHORIZE_ALBUM', status: { in: ['PENDING', 'PROCESSING'] } } });
+  if (active) throw conflict('该目标已有处理中授权任务，不能再次提交。');
+  const ownerId = (original.snapshotJson as any)?.targetOwnerAdminId;
+  const owner = ownerId ? await options.localPrismaByApp[target]?.adminUser.findUnique({ where: { id: ownerId } }) : null;
+  if (!owner || owner.status !== 'ACTIVE' || owner.role !== 'OWNER') throw conflict('原任务的目标 OWNER 批准已失效，不能通过维护工具绕过。');
+  const now = options.now?.() ?? new Date();
+  const dedupeKey = `MANUAL_AUTHORIZATION:${original.id}`;
+  if (await sharedPrisma.sharedPlatformOperation.findUnique({ where: { dedupeKey } })) throw conflict('该原任务已执行过一次维护授权，请检查新任务的响应，不要重复执行。');
+  const operation = await sharedPrisma.sharedPlatformOperation.create({ data: {
+    kind: 'AUTHORIZE_ALBUM', status: 'PROCESSING', sharedAlbumId: original.sharedAlbumId, targetMiniAppKey: target,
+    dedupeKey,
+    snapshotJson: { ...(original.snapshotJson as any), manualRetryOfOperationId: original.id, originalProviderRequestId: original.providerRequestId },
+    startedAt: now, nextAttemptAt: null
+  } });
+  try {
+    await processSharedAuthorization(sharedPrisma, operation, options, now);
+  } catch (error) {
+    await failSharedOperation(sharedPrisma, operation, error, now, 0);
+  }
+  return sharedPrisma.sharedPlatformOperation.findUniqueOrThrow({ where: { id: operation.id } });
 }
 
 export async function processSharedPlatformOperations(sharedPrisma: Db, options: SharedWorkerOptions) {

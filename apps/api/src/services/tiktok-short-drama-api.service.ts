@@ -28,7 +28,8 @@ export class TikTokShortDramaApiError extends Error {
     message: string,
     readonly code?: string,
     readonly requestId?: string,
-    readonly retryable = false
+    readonly retryable = false,
+    readonly responseData?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'TikTokShortDramaApiError';
@@ -74,6 +75,18 @@ function isRetryableStatus(status: number) {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+export function redactTikTokAuthorizationResponse(value: unknown, depth = 0): unknown {
+  if (depth > 8) return '[depth limit]';
+  if (Array.isArray(value)) return value.slice(0, 100).map((item) => redactTikTokAuthorizationResponse(item, depth + 1));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).slice(0, 100).map(([key, item]) => [key,
+    /^(token|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|secretAccessKey|authorization|signature|password|api[_-]?key|access[_-]?key(?:[_-]?id)?)$/i.test(key)
+      ? '[redacted]' : redactTikTokAuthorizationResponse(item, depth + 1)
+  ]));
+  if (typeof value === 'string') return value.replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/([?&](?:token|access_token|signature|secret)=)[^&\s]+/gi, '$1[redacted]').slice(0, 4096);
+  return value ?? null;
 }
 
 function asString(value: unknown) {
@@ -264,7 +277,7 @@ export class TikTokShortDramaApiService {
   async authorizeAlbum(input: { albumId: string; targetClientKeys: string[]; operateType?: 1 | 2 }) {
     const targetClientKeys = [...new Set(input.targetClientKeys.map((value) => value.trim()).filter(Boolean))];
     if (!targetClientKeys.length) throw new TikTokShortDramaApiError('TikTok album authorization requires at least one target client key.');
-    const { data, requestId } = await this.request<Record<string, unknown>>('/v2/sg/shortdrama/album/authorize/', 'POST', {
+    const { data, requestId, envelope, httpStatus } = await this.request<Record<string, unknown>>('/v2/sg/shortdrama/album/authorize/', 'POST', {
       album_id: input.albumId,
       operate_type: input.operateType ?? 1,
       target_client_key_list: targetClientKeys
@@ -278,8 +291,18 @@ export class TikTokShortDramaApiService {
       errorCode: asString(item.error_code),
       errorMessage: asString(item.error_message)
     })).filter((item) => Boolean(item.clientKey));
-    if (!results.length) {
-      throw new TikTokShortDramaApiError('TikTok album authorization returned no target result.', undefined, requestId, true);
+    let issue: string | undefined;
+    const view = asRecord(data);
+    if (!Object.hasOwn(view, 'client_key_result_list')) issue = '响应 data 缺少 client_key_result_list 字段';
+    else if (!Array.isArray(view.client_key_result_list)) issue = 'client_key_result_list 不是文档规定的数组';
+    else if (!rawResults.length) issue = '平台返回的 client_key_result_list 是空数组';
+    else if (targetClientKeys.some((key) => !results.some((item) => item.clientKey === key))) issue = '结果列表未包含全部请求的目标 client_key';
+    else if (results.some((item) => targetClientKeys.includes(item.clientKey) && ![1, 2].includes(item.authStatus ?? 0) && (!item.errorCode || item.errorCode === '0'))) issue = '目标结果缺少可确认的 auth_status';
+    if (issue) {
+      throw new TikTokShortDramaApiError(`TikTok 授权结果未确认：${issue}。已附带脱敏平台响应供诊断，不将请求成功当作授权成功。`, 'AUTHORIZATION_RESULT_UNCONFIRMED', requestId, true, {
+        httpStatus, issue, requestedAlbumId: input.albumId, requestedClientKeys: targetClientKeys,
+        providerEnvelope: redactTikTokAuthorizationResponse(envelope)
+      });
     }
     return { results, requestId, raw: data };
   }
@@ -305,16 +328,20 @@ export class TikTokShortDramaApiService {
       }))
       .catch(() => null) as TikTokApiEnvelope<T> | null;
     const requestId = envelope?.error?.log_id ?? response.headers.get('x-tt-logid') ?? undefined;
+    const authorizationResponse = path === '/v2/sg/shortdrama/album/authorize/'
+      ? { httpStatus: response.status, contentType: response.headers.get('content-type'), providerEnvelope: redactTikTokAuthorizationResponse(envelope) }
+      : undefined;
     if (!response.ok || (envelope?.error?.code && envelope.error.code !== 'ok')) {
       throw new TikTokShortDramaApiError(
         envelope?.error?.message ?? 'TikTok Short Drama request failed.',
         envelope?.error?.code,
         requestId,
-        isRetryableStatus(response.status)
+        isRetryableStatus(response.status),
+        authorizationResponse
       );
     }
-    if (!envelope?.data) throw new TikTokShortDramaApiError('TikTok Short Drama response did not contain data.', undefined, requestId, true);
-    return { data: envelope.data, requestId };
+    if (!envelope?.data) throw new TikTokShortDramaApiError('TikTok Short Drama response did not contain data.', undefined, requestId, true, authorizationResponse);
+    return { data: envelope.data, requestId, envelope, httpStatus: response.status };
   }
 
   private async getAccessToken() {

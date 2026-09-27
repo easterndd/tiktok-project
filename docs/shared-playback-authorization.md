@@ -33,6 +33,32 @@
 
 平台明确拒绝授权时任务为 FAILED。平台请求超时、执行中断而结果未知时任务为 CONFLICT，不自动重放授权 POST。已保存的平台成功证明包含目标 Client Key；本地映射失败时保留证明，恢复只重做映射。Client Key 变化会使旧成功证明失效。
 
+## 授权结果未知的排查
+
+后台返回的 `items[].accepted=false` 和“上次授权结果未知”是本地防重复提交的保护，不是 TikTok 的原始返回，不能用它判断平台是否已授权。`error.code=ok` 也不能替代文档要求的逐目标结果。
+
+新代码在授权返回缺少目标结果、格式不完整或被平台拒绝时，将脱敏响应保存在任务 `providerResponse.providerEnvelope`，同时记录 HTTP 状态和 TikTok 请求 ID。不会猜测其他字段名、伪造授权成功或自动重新上传视频。旧代码已经丢弃的原响应无法通过更新代码恢复，应先凭原请求 ID 向 TikTok 核实。
+
+先执行只读诊断（不提交授权，不修改任务或数据库）：
+
+```bash
+cd /opt/quickreels
+sudo docker compose --env-file .env.production -f compose.production.self-hosted.yml exec -T api \
+  node dist/scripts/inspect-shared-authorization.js 2026092716233501C488377D002D3BBB21
+```
+
+输出 `originalResponseSaved=false` 表示没有已保存的平台响应。将 `response.providerEnvelope` 提供给维护人员；不要提供 token、Secret、Authorization 请求头或完整环境文件。
+
+确需重新发出一次授权请求获取最新结果时，维护工具要求显式确认，并且一次只处理原请求对应的目标。以下 `TARGET_APP_KEY` 必须替换为只读输出的 `targetMiniAppKey`，不能猜测或同时重试所有目标：
+
+```bash
+sudo docker compose --env-file .env.production -f compose.production.self-hosted.yml exec -T api \
+  node dist/scripts/inspect-shared-authorization.js 2026092716233501C488377D002D3BBB21 \
+  --retry-target TARGET_APP_KEY --confirm REAUTHORIZE_ONE_TARGET
+```
+
+该命令可能重新调用平台授权接口，并非只读对账。它重新检查目标 OWNER、当前凭据及源剧目线上版本，创建独立审计任务并保留原 CONFLICT 记录。每个原任务最多创建一次维护任务，数据库唯一键阻止并发重复执行；新返回仍无法确认时继续标为 CONFLICT，保存新响应，不自动重复调用、不开放目标播放。已有匹配的成功证明时只恢复本地映射。更新部署本身不会解除旧 CONFLICT。
+
 ## 部署
 
 本次使用已有共享平台表，无数据库结构变更。更新代码后重建并重启 api、worker、admin，worker 必须更新以执行新的授权和周期对账逻辑。上线前核实所有配置库已经有既有共享平台表。

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Env } from '../config/env';
-import { TikTokShortDramaApiService } from './tiktok-short-drama-api.service';
+import { redactTikTokAuthorizationResponse, TikTokShortDramaApiError, TikTokShortDramaApiService } from './tiktok-short-drama-api.service';
 
 const env: Env = {
   NODE_ENV: 'test', PORT: 3000, HOST: '127.0.0.1', DATABASE_URL: 'postgresql://test:test@localhost:5432/test', MINI_APP_KEY: 'main', API_CORS_ORIGIN: 'http://localhost:5173', TRUST_GEO_COUNTRY_HEADER: false,
@@ -90,6 +90,83 @@ describe('TikTokShortDramaApiService', () => {
     assert.deepEqual(requests[1].body, { client_key: 'mn-client-key', album_id: '7688551749335058439', operate_type: 1, target_client_key_list: ['taletv-client-key'] });
     assert.deepEqual(result.results, [{ clientKey: 'taletv-client-key', authStatus: 1, errorCode: '0', errorMessage: '' }]);
     assert.equal(result.requestId, 'log-auth');
+  });
+
+  for (const [data, issue] of [
+    [{}, '缺少 client_key_result_list'],
+    [{ client_key_result_list: {} }, '不是文档规定的数组'],
+    [{ client_key_result_list: [] }, '空数组'],
+    [{ client_key_result_list: [{ client_key: 'wrong-key', auth_status: 1 }] }, '未包含全部请求'],
+    [{ client_key_result_list: [{ client_key: 'target-key' }] }, '缺少可确认的 auth_status']
+  ] as const) {
+    it(`keeps authorization unconfirmed and retains evidence: ${issue}`, async () => {
+      const envelope = { data, error: { code: 'ok', log_id: 'unknown-auth-log' }, access_token: 'must-not-leak' };
+      const service = new TikTokShortDramaApiService(env, { fetch: async (input) => {
+        if (new URL(String(input)).pathname === '/v2/oauth/token/') return response({ access_token: 'token', expires_in: 7200 });
+        return response(envelope);
+      } });
+      await assert.rejects(() => service.authorizeAlbum({ albumId: 'album', targetClientKeys: ['target-key'] }), (error: unknown) => {
+        assert.ok(error instanceof TikTokShortDramaApiError);
+        assert.equal(error.code, 'AUTHORIZATION_RESULT_UNCONFIRMED');
+        assert.equal(error.requestId, 'unknown-auth-log');
+        assert.equal(error.retryable, true);
+        assert.ok(error.message.includes(issue));
+        assert.equal(error.responseData?.httpStatus, 200);
+        assert.deepEqual(error.responseData?.providerEnvelope, { ...envelope, access_token: '[redacted]' });
+        return true;
+      });
+    });
+  }
+
+  it('retains explicit target rejection even if auth_status is absent', async () => {
+    const service = new TikTokShortDramaApiService(env, { fetch: async (input) => {
+      if (new URL(String(input)).pathname === '/v2/oauth/token/') return response({ access_token: 'token', expires_in: 7200 });
+      return response({ data: { client_key_result_list: [{ client_key: 'target-key', error_code: 22011, error_message: 'not permitted' }] }, error: { code: 'ok' } });
+    } });
+    const result = await service.authorizeAlbum({ albumId: 'album', targetClientKeys: ['target-key'] });
+    assert.equal(result.results[0].errorCode, '22011');
+    assert.equal(result.results[0].authStatus, undefined);
+  });
+
+  it('retains a sanitized provider envelope on authorization HTTP rejection', async () => {
+    const service = new TikTokShortDramaApiService(env, { fetch: async (input) => {
+      if (new URL(String(input)).pathname === '/v2/oauth/token/') return response({ access_token: 'token', expires_in: 7200 });
+      return new Response(JSON.stringify({ error: { code: 'denied', message: 'Not permitted', log_id: 'rejection-log' }, client_secret: 'secret' }), { status: 403 });
+    } });
+    await assert.rejects(() => service.authorizeAlbum({ albumId: 'album', targetClientKeys: ['target-key'] }), (error: unknown) => {
+      assert.ok(error instanceof TikTokShortDramaApiError);
+      assert.equal(error.requestId, 'rejection-log');
+      assert.equal(error.retryable, false);
+      assert.equal(error.responseData?.httpStatus, 403);
+      assert.equal((error.responseData?.providerEnvelope as any).client_secret, '[redacted]');
+      return true;
+    });
+  });
+
+  it('retains the log ID and envelope when authorization returns no data', async () => {
+    const service = new TikTokShortDramaApiService(env, { fetch: async (input) => {
+      if (new URL(String(input)).pathname === '/v2/oauth/token/') return response({ access_token: 'token', expires_in: 7200 });
+      return new Response(JSON.stringify({ error: { code: 'ok' }, token: 'must-not-leak' }), { headers: { 'x-tt-logid': 'header-log' } });
+    } });
+    await assert.rejects(() => service.authorizeAlbum({ albumId: 'album', targetClientKeys: ['target-key'] }), (error: unknown) => {
+      assert.ok(error instanceof TikTokShortDramaApiError);
+      assert.equal(error.requestId, 'header-log');
+      assert.equal(error.retryable, true);
+      assert.deepEqual(error.responseData?.providerEnvelope, { error: { code: 'ok' }, token: '[redacted]' });
+      return true;
+    });
+  });
+
+  it('redacts nested credentials while preserving public target identity and statuses', () => {
+    assert.deepEqual(redactTikTokAuthorizationResponse({
+      client_key: 'public-target', auth_status: 1,
+      nested: [{ client_secret: 'secret', Authorization: 'Bearer token', accessToken: 'token', refresh_token: 'refresh', secretAccessKey: 'secret' }],
+      message: 'Bearer token https://example.com/?access_token=token&signature=sig'
+    }), {
+      client_key: 'public-target', auth_status: 1,
+      nested: [{ client_secret: '[redacted]', Authorization: '[redacted]', accessToken: '[redacted]', refresh_token: '[redacted]', secretAccessKey: '[redacted]' }],
+      message: 'Bearer [redacted] https://example.com/?access_token=[redacted]&signature=[redacted]'
+    });
   });
 
   it('accepts a synchronously registered BytePlus video without a polling job', async () => {
