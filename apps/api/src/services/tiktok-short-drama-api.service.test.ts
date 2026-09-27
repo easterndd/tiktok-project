@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Env } from '../config/env';
-import { redactTikTokAuthorizationResponse, TikTokShortDramaApiError, TikTokShortDramaApiService } from './tiktok-short-drama-api.service';
+import { isTikTokAlbumAuthorized, parseTikTokAlbumAuthorizationResults, redactTikTokAuthorizationResponse, TikTokShortDramaApiError, TikTokShortDramaApiService } from './tiktok-short-drama-api.service';
 
 const env: Env = {
   NODE_ENV: 'test', PORT: 3000, HOST: '127.0.0.1', DATABASE_URL: 'postgresql://test:test@localhost:5432/test', MINI_APP_KEY: 'main', API_CORS_ORIGIN: 'http://localhost:5173', TRUST_GEO_COUNTRY_HEADER: false,
@@ -126,6 +126,33 @@ describe('TikTokShortDramaApiService', () => {
     const result = await service.authorizeAlbum({ albumId: 'album', targetClientKeys: ['target-key'] });
     assert.equal(result.results[0].errorCode, '22011');
     assert.equal(result.results[0].authStatus, undefined);
+  });
+
+  it('parses the actual production client_key_result and already-authorized response', async () => {
+    const envelope = { data: { client_key_result: [{ client_key: 'mnsh0xg9b2xbx6pl', error_code: 22010, auth_status: 1, error_message: 'Short drama album authorization already exists' }] } };
+    const service = new TikTokShortDramaApiService(env, { fetch: async (input) => {
+      if (new URL(String(input)).pathname === '/v2/oauth/token/') return response({ access_token: 'token', expires_in: 7200 });
+      return new Response(JSON.stringify(envelope), { headers: { 'x-tt-logid': '20260927170821D7134200A786ED3630C1' } });
+    } });
+    const result = await service.authorizeAlbum({ albumId: '7689143420837382162', targetClientKeys: ['mnsh0xg9b2xbx6pl'] });
+    assert.equal(isTikTokAlbumAuthorized(result.results[0]), true);
+    assert.equal(result.requestId, '20260927170821D7134200A786ED3630C1');
+    assert.deepEqual(result.raw, envelope.data);
+  });
+
+  it('requires an explicit authorized state and a known success code, not an English message', () => {
+    assert.equal(isTikTokAlbumAuthorized({ clientKey: 'target', authStatus: 1, errorCode: '22010', errorMessage: 'different wording' }), true);
+    assert.equal(isTikTokAlbumAuthorized({ clientKey: 'target', errorCode: '22010', errorMessage: 'Short drama album authorization already exists' }), false);
+    assert.equal(isTikTokAlbumAuthorized({ clientKey: 'target', authStatus: 2, errorCode: '22010' }), false);
+    assert.equal(isTikTokAlbumAuthorized({ clientKey: 'target', authStatus: 1, errorCode: '22011' }), false);
+  });
+
+  it('rejects conflicting aliases and duplicate results rather than accepting the first result', () => {
+    const granted = { client_key: 'target', auth_status: 1 };
+    const removed = { client_key: 'target', auth_status: 2 };
+    assert.throws(() => parseTikTokAlbumAuthorizationResults({ client_key_result_list: [granted], client_key_result: [removed] }, ['target']), /内容不一致/);
+    assert.throws(() => parseTikTokAlbumAuthorizationResults({ client_key_result: [granted, removed] }, ['target']), /重复结果/);
+    assert.equal(parseTikTokAlbumAuthorizationResults({ client_key_result_list: [granted], client_key_result: [granted] }, ['target']).length, 1);
   });
 
   it('retains a sanitized provider envelope on authorization HTTP rejection', async () => {

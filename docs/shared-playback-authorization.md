@@ -37,7 +37,7 @@
 
 后台返回的 `items[].accepted=false` 和“上次授权结果未知”是本地防重复提交的保护，不是 TikTok 的原始返回，不能用它判断平台是否已授权。`error.code=ok` 也不能替代文档要求的逐目标结果。
 
-新代码在授权返回缺少目标结果、格式不完整或被平台拒绝时，将脱敏响应保存在任务 `providerResponse.providerEnvelope`，同时记录 HTTP 状态和 TikTok 请求 ID。不会猜测其他字段名、伪造授权成功或自动重新上传视频。旧代码已经丢弃的原响应无法通过更新代码恢复，应先凭原请求 ID 向 TikTok 核实。
+新代码在授权返回缺少目标结果、格式不完整或被平台拒绝时，将脱敏响应保存在任务 `providerResponse.providerEnvelope`，同时记录 HTTP 状态和 TikTok 请求 ID。不会凭空猜测字段名、伪造授权成功或自动重新上传视频。旧代码已经丢弃的原响应无法通过更新代码恢复，应先凭原请求 ID 向 TikTok 核实。
 
 先执行只读诊断（不提交授权，不修改任务或数据库）：
 
@@ -58,6 +58,24 @@ sudo docker compose --env-file .env.production -f compose.production.self-hosted
 ```
 
 该命令可能重新调用平台授权接口，并非只读对账。它重新检查目标 OWNER、当前凭据及源剧目线上版本，创建独立审计任务并保留原 CONFLICT 记录。每个原任务最多创建一次维护任务，数据库唯一键阻止并发重复执行；新返回仍无法确认时继续标为 CONFLICT，保存新响应，不自动重复调用、不开放目标播放。已有匹配的成功证明时只恢复本地映射。更新部署本身不会解除旧 CONFLICT。
+
+### 已保存响应确认授权后的恢复
+
+2026-09-27 实际平台响应（请求 ID `20260927170821D7134200A786ED3630C1`）返回 `data.client_key_result`，而接入文档使用 `client_key_result_list`。代码兼容这两个有依据的数组字段；同时出现且内容冲突，或目标出现重复结果时，仍拒绝认定成功。
+
+该响应的目标为 TaleReels，包含 `auth_status=1`、`error_code=22010`、`error_message="Short drama album authorization already exists"`。平台明确表示授权已经存在；此前失败是本地只解析文档字段，并严格比较另一种错误文本，导致结果误判。判定现改为核对目标 Client Key、明确的 `auth_status=1` 和成功或已存在错误码，不依赖英文文本完全一致。没有状态或状态为已移除时，不能只凭 22010 认定成功。
+
+更新 api、worker 后执行以下命令，不再使用 `--retry-target` 重复授权这个目标：
+
+```bash
+sudo docker compose --env-file .env.production -f compose.production.self-hosted.yml exec -T api \
+  node dist/scripts/inspect-shared-authorization.js 20260927170821D7134200A786ED3630C1 \
+  --recover-saved-response
+```
+
+恢复工具只使用数据库中已保存的响应，核对 HTTP 状态、请求剧目 ID、请求目标、实际返回目标、当前凭据和 OWNER 批准。创建独立恢复任务并保存平台成功证明，再查询主剧目当前线上状态和恢复目标映射；明确禁止调用授权 POST，不上传视频、不重新送审。原 CONFLICT 任务及响应保留用于审计，重复执行只返回已创建恢复任务，不产生重复授权或恢复任务。
+
+预期新任务输出 `status=SUCCEEDED`、`response.platformAuthorized=true` 和正确的 `mappedEpisodeCount`；刷新后台后目标显示已授权。若本地映射失败，保留成功证明并返回 FAILED，不把平台授权等同于本地可播放。成功后还需在目标 TikTok 小程序真实环境验收播放。其他目标没有匹配的明确响应时不能直接改为成功。
 
 ## 部署
 

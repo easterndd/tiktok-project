@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type SharedMediaStatus } from '@prisma/client';
 import { miniAppEnvironment, miniAppPlatformConfig, type MiniAppKey } from '../config/mini-apps';
 import type { Env } from '../config/env';
-import { TikTokShortDramaApiService, TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
+import { TikTokShortDramaApiService, TikTokShortDramaApiError, isTikTokAlbumAuthorized, parseTikTokAlbumAuthorizationResults } from './tiktok-short-drama-api.service';
 
 type Db = PrismaClient & { [key: string]: any };
 
@@ -442,7 +442,7 @@ async function refreshSharedSource(sharedPrisma: Db, album: any, options: Shared
   return { ...updated, verifiedSource: source };
 }
 
-async function processSharedAuthorization(sharedPrisma: Db, operation: any, options: SharedWorkerOptions, now: Date) {
+async function processSharedAuthorization(sharedPrisma: Db, operation: any, options: SharedWorkerOptions, now: Date, allowAuthorizationRequest = true) {
   let album = await sharedPrisma.sharedTikTokAlbum.findUnique({
     where: { id: operation.sharedAlbumId },
     include: { episodes: { include: { media: true }, orderBy: { episodeNo: 'asc' } }, authorizations: true }
@@ -466,11 +466,11 @@ async function processSharedAuthorization(sharedPrisma: Db, operation: any, opti
   const proof = (operation.providerResponse as any)?.platformAuthorized && (operation.providerResponse as any)?.targetClientKey === authorization.targetClientKey;
   const savedProof = (authorization.providerResponse as any)?.platformAuthorized && (authorization.providerResponse as any)?.targetClientKey === authorization.targetClientKey;
   if (authorization.status !== 'AUTHORIZED' && !proof && !savedProof) {
+    if (!allowAuthorizationRequest) throw conflict('本地恢复缺少匹配的成功证明，禁止重新调用平台授权。');
     await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: { status: 'AUTHORIZING', errorCode: null, errorMessage: null } });
     const result = await ownerApi.authorizeAlbum({ albumId: album.tiktokAlbumId, targetClientKeys: [authorization.targetClientKey], operateType: 1 });
     const targetResult = result.results.find((item) => item.clientKey === authorization.targetClientKey);
-    const authorized = targetResult?.authStatus === 1 && (!targetResult.errorCode || targetResult.errorCode === '0'
-      || (targetResult.errorCode === '22010' && targetResult.errorMessage === 'authorization already exists'));
+    const authorized = isTikTokAlbumAuthorized(targetResult);
     if (!authorized) {
       await sharedPrisma.miniAppAlbumAuthorization.update({
         where: { id: authorization.id },
@@ -570,6 +570,54 @@ export async function enqueueDueSharedReconciliations(sharedPrisma: Db, now = ne
     const recent = await sharedPrisma.sharedPlatformOperation.findFirst({ where: { sharedAlbumId: album.id, kind: 'RECONCILE_ALBUM', OR: [{ status: { in: ['PENDING', 'PROCESSING'] } }, { createdAt: { gte: new Date(now.getTime() - 10 * 60_000) } }] } });
     if (!recent) await enqueueSharedAlbumReconcile(sharedPrisma, album.id);
   }
+}
+
+export async function recoverSavedAuthorization(sharedPrisma: Db, options: SharedWorkerOptions, operationId: string) {
+  const original = await sharedPrisma.sharedPlatformOperation.findUnique({ where: { id: operationId } });
+  if (!original || original.kind !== 'AUTHORIZE_ALBUM' || original.status !== 'CONFLICT' || !original.targetMiniAppKey || !original.sharedAlbumId) throw conflict('只有结果未知的授权任务可以从已保存响应恢复。');
+  const target = requireMiniAppKey(original.targetMiniAppKey);
+  const evidence = original.providerResponse as any;
+  const envelope = evidence?.providerEnvelope;
+  const album = await sharedPrisma.sharedTikTokAlbum.findUnique({ where: { id: original.sharedAlbumId }, include: { authorizations: true } });
+  const authorization = album?.authorizations.find((item: any) => item.miniAppKey === target);
+  const clientKey = authorization?.targetClientKey;
+  if (!album || !clientKey || sharedMiniAppConfig(options.env, target).clientKey !== clientKey
+    || (original.snapshotJson as any)?.targetClientKey !== clientKey) throw conflict('目标凭据或原任务批准不匹配，不能恢复授权。');
+  if (evidence?.httpStatus !== 200 || evidence.requestedAlbumId !== album.tiktokAlbumId
+    || !Array.isArray(evidence.requestedClientKeys) || evidence.requestedClientKeys.length !== 1 || evidence.requestedClientKeys[0] !== clientKey
+    || !envelope?.data || typeof envelope.data !== 'object' || Array.isArray(envelope.data)
+    || (envelope.error?.code && envelope.error.code !== 'ok')) throw conflict('已保存响应缺少匹配剧目和目标的有效平台证据，不能恢复。');
+  const results = parseTikTokAlbumAuthorizationResults(envelope.data, [clientKey], { requestId: original.providerRequestId ?? undefined });
+  if (!isTikTokAlbumAuthorized(results.find((item) => item.clientKey === clientKey))) throw conflict('已保存响应没有明确确认该目标已授权，不能恢复。');
+  const ownerId = (original.snapshotJson as any)?.targetOwnerAdminId;
+  const owner = ownerId ? await options.localPrismaByApp[target]?.adminUser.findUnique({ where: { id: ownerId } }) : null;
+  if (!owner || owner.status !== 'ACTIVE' || owner.role !== 'OWNER') throw conflict('目标 OWNER 批准已失效，不能恢复本地播放。');
+  const dedupeKey = `SAVED_AUTHORIZATION_RECOVERY:${original.id}`;
+  const existing = await sharedPrisma.sharedPlatformOperation.findUnique({ where: { dedupeKey } });
+  if (existing) return existing;
+  const active = await sharedPrisma.sharedPlatformOperation.findFirst({ where: { sharedAlbumId: original.sharedAlbumId, targetMiniAppKey: target, kind: 'AUTHORIZE_ALBUM', status: { in: ['PENDING', 'PROCESSING'] } } });
+  if (active) throw conflict('该目标已有处理中授权任务，请等待完成后恢复。');
+  const now = options.now?.() ?? new Date();
+  const proof = { ...envelope.data, platformAuthorized: true, targetClientKey: clientKey, recoveredFromOperationId: original.id };
+  const operation = await (sharedPrisma.$transaction as any)(async (tx: Db) => {
+    const created = await tx.sharedPlatformOperation.create({ data: {
+      kind: 'AUTHORIZE_ALBUM', status: 'PROCESSING', sharedAlbumId: original.sharedAlbumId, targetMiniAppKey: target, dedupeKey,
+      snapshotJson: { ...(original.snapshotJson as any), recoveryOfOperationId: original.id },
+      providerRequestId: original.providerRequestId, providerResponse: proof, startedAt: now, nextAttemptAt: null
+    } });
+    const changed = await tx.miniAppAlbumAuthorization.updateMany({ where: { id: authorization.id, targetClientKey: clientKey }, data: {
+      status: 'AUTHORIZING', providerRequestId: original.providerRequestId, providerResponse: proof,
+      errorCode: null, errorMessage: null, authorizedAt: now
+    } });
+    if (changed.count !== 1) throw conflict('恢复期间目标凭据已变化，停止本地映射。');
+    return created;
+  });
+  try {
+    await processSharedAuthorization(sharedPrisma, operation, options, now, false);
+  } catch (error) {
+    await failSharedOperation(sharedPrisma, operation, error, now, 0);
+  }
+  return sharedPrisma.sharedPlatformOperation.findUniqueOrThrow({ where: { id: operation.id } });
 }
 
 export async function retryUnknownAuthorizationOnce(sharedPrisma: Db, options: SharedWorkerOptions, operationId: string, target: string, confirmation: string) {

@@ -102,6 +102,39 @@ function asNumber(value: unknown) {
   return undefined;
 }
 
+export function isTikTokAlbumAuthorized(result: TikTokAlbumAuthorizationResult | undefined) {
+  return result?.authStatus === 1 && (!result.errorCode || result.errorCode === '0' || result.errorCode === '22010');
+}
+
+export function parseTikTokAlbumAuthorizationResults(data: Record<string, unknown>, targetClientKeys: string[], context: {
+  requestId?: string; httpStatus?: number; envelope?: unknown; albumId?: string;
+} = {}) {
+  // The integration document names *_list; a captured production response uses client_key_result.
+  const fields = ['client_key_result_list', 'client_key_result'].filter((field) => Object.hasOwn(data, field));
+  const field = fields[0];
+  const normalize = (items: unknown[]) => items.map(asRecord).map((item) => ({
+    clientKey: asString(item.client_key) ?? '',
+    authStatus: asNumber(item.auth_status),
+    errorCode: asString(item.error_code),
+    errorMessage: asString(item.error_message)
+  }));
+  const results = field && Array.isArray(data[field]) ? normalize(data[field]) : [];
+  let issue: string | undefined;
+  if (!field) issue = '响应 data 缺少 client_key_result_list 或 client_key_result 字段';
+  else if (fields.some((name) => !Array.isArray(data[name]))) issue = `${field} 不是文档规定的数组`;
+  else if (!results.length) issue = `平台返回的 ${field} 是空数组`;
+  else if (fields.length > 1 && JSON.stringify(normalize(data[fields[1]] as unknown[])) !== JSON.stringify(results)) issue = '两个授权结果字段内容不一致';
+  else if (targetClientKeys.some((key) => !results.some((item) => item.clientKey === key))) issue = '结果列表未包含全部请求的目标 client_key';
+  else if (targetClientKeys.some((key) => results.filter((item) => item.clientKey === key).length !== 1)) issue = '同一目标 client_key 返回了重复结果';
+  else if (results.some((item) => targetClientKeys.includes(item.clientKey) && ![1, 2].includes(item.authStatus ?? 0) && (!item.errorCode || item.errorCode === '0'))) issue = '目标结果缺少可确认的 auth_status';
+  if (issue) throw new TikTokShortDramaApiError(`TikTok 授权结果未确认：${issue}。已附带脱敏平台响应供诊断，不将请求成功当作授权成功。`, 'AUTHORIZATION_RESULT_UNCONFIRMED', context.requestId, true, {
+    ...(context.httpStatus !== undefined ? { httpStatus: context.httpStatus } : {}), issue,
+    ...(context.albumId ? { requestedAlbumId: context.albumId } : {}), requestedClientKeys: targetClientKeys,
+    providerEnvelope: redactTikTokAuthorizationResponse(context.envelope ?? { data })
+  });
+  return results.filter((item) => Boolean(item.clientKey));
+}
+
 function tokenFailure(body: Record<string, unknown> | null, status: number) {
   const nested = asRecord(body?.error);
   const code = asString(nested.code) ?? asString(body?.error) ?? asString(body?.code);
@@ -282,28 +315,7 @@ export class TikTokShortDramaApiService {
       operate_type: input.operateType ?? 1,
       target_client_key_list: targetClientKeys
     });
-    const rawResults = Array.isArray(data.client_key_result_list)
-      ? data.client_key_result_list.map(asRecord)
-      : [];
-    const results = rawResults.map((item) => ({
-      clientKey: asString(item.client_key) ?? '',
-      authStatus: asNumber(item.auth_status),
-      errorCode: asString(item.error_code),
-      errorMessage: asString(item.error_message)
-    })).filter((item) => Boolean(item.clientKey));
-    let issue: string | undefined;
-    const view = asRecord(data);
-    if (!Object.hasOwn(view, 'client_key_result_list')) issue = '响应 data 缺少 client_key_result_list 字段';
-    else if (!Array.isArray(view.client_key_result_list)) issue = 'client_key_result_list 不是文档规定的数组';
-    else if (!rawResults.length) issue = '平台返回的 client_key_result_list 是空数组';
-    else if (targetClientKeys.some((key) => !results.some((item) => item.clientKey === key))) issue = '结果列表未包含全部请求的目标 client_key';
-    else if (results.some((item) => targetClientKeys.includes(item.clientKey) && ![1, 2].includes(item.authStatus ?? 0) && (!item.errorCode || item.errorCode === '0'))) issue = '目标结果缺少可确认的 auth_status';
-    if (issue) {
-      throw new TikTokShortDramaApiError(`TikTok 授权结果未确认：${issue}。已附带脱敏平台响应供诊断，不将请求成功当作授权成功。`, 'AUTHORIZATION_RESULT_UNCONFIRMED', requestId, true, {
-        httpStatus, issue, requestedAlbumId: input.albumId, requestedClientKeys: targetClientKeys,
-        providerEnvelope: redactTikTokAuthorizationResponse(envelope)
-      });
-    }
+    const results = parseTikTokAlbumAuthorizationResults(data, targetClientKeys, { requestId, httpStatus, envelope, albumId: input.albumId });
     return { results, requestId, raw: data };
   }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Env } from '../config/env';
 import { authorizeSharedPlayback, preparePlaybackTarget, verifyPlaybackSource } from './shared-playback.service';
-import { processSharedPlatformOperations, projectSharedAlbumToLocal, retryUnknownAuthorizationOnce } from './shared-platform.service';
+import { processSharedPlatformOperations, projectSharedAlbumToLocal, recoverSavedAuthorization, retryUnknownAuthorizationOnce } from './shared-platform.service';
 import { TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
 
 const env = { MINI_APP_KEY: 'main', TIKTOK_CLIENT_KEY: 'main-key', TIKTOK_CLIENT_SECRET: 'main-secret', TALETV_TIKTOK_CLIENT_KEY: 'target-key', TALETV_TIKTOK_CLIENT_SECRET: 'target-secret', BYTEPLUS_ACCOUNT_ID: 'account', BYTEPLUS_SPACE_NAME: 'space', BYTEPLUS_REGION: 'region', REWARDED_PLACEMENT_ID: 'main-ad', TALETV_REWARDED_PLACEMENT_ID: 'target-ad' } as Env;
@@ -225,6 +225,84 @@ test('concurrent maintenance calls for the same original task cannot both submit
   assert.equal(f.state.ops.length, 2);
 });
 
+async function savedAuthorizationFixture() {
+  const f = await uncertainFixture();
+  f.state.ops[0].providerResponse = {
+    httpStatus: 200, requestedAlbumId: 'platform-1', requestedClientKeys: ['target-key'],
+    providerEnvelope: { data: { client_key_result: [{ client_key: 'target-key', auth_status: 1, error_code: 22010, error_message: 'Short drama album authorization already exists' }] } }
+  };
+  f.api.authorizeAlbum = async () => assert.fail('saved-response recovery must never call the authorization endpoint');
+  return f;
+}
+
+test('recovers the captured production response without repeating authorization and preserves history', async () => {
+  const f = await savedAuthorizationFixture(); const original = { ...f.state.ops[0] };
+  const result = await recoverSavedAuthorization(f.sharedDb, maintenanceOptions(f), original.id);
+  assert.equal(result.status, 'SUCCEEDED');
+  assert.equal(result.providerRequestId, 'original-log');
+  assert.equal((result.providerResponse as any).mappedEpisodeCount, 1);
+  assert.equal(f.state.auths.get('taletv').status, 'AUTHORIZED');
+  assert.equal(f.state.auths.get('taletv').providerResponse.platformAuthorized, true);
+  assert.equal(f.state.targetAlbum.status, 'ONLINE');
+  assert.equal(f.state.targetEpisodes[0].byteplusVid, 'online-vid');
+  assert.deepEqual(f.state.ops[0], original);
+  assert.equal(f.state.grantCalls, 0);
+  const repeated = await recoverSavedAuthorization(f.sharedDb, maintenanceOptions(f), original.id);
+  assert.equal(repeated.id, result.id);
+  assert.equal(f.state.ops.length, 2);
+});
+
+for (const [name, invalidate] of [
+  ['different album', (e: any) => { e.requestedAlbumId = 'other-album'; }],
+  ['different requested target', (e: any) => { e.requestedClientKeys = ['other-key']; }],
+  ['different response target', (e: any) => { e.providerEnvelope.data.client_key_result[0].client_key = 'other-key'; }],
+  ['removed authorization', (e: any) => { e.providerEnvelope.data.client_key_result[0].auth_status = 2; }],
+  ['target rejection', (e: any) => { e.providerEnvelope.data.client_key_result[0].error_code = 22011; }],
+  ['HTTP failure', (e: any) => { e.httpStatus = 500; }],
+  ['business failure', (e: any) => { e.providerEnvelope.error = { code: 'denied' }; }],
+  ['missing response', (e: any) => { e.providerEnvelope = null; }]
+] as const) {
+  test(`saved-response recovery rejects ${name} and keeps the target offline`, async () => {
+    const f = await savedAuthorizationFixture(); invalidate(f.state.ops[0].providerResponse);
+    await assert.rejects(() => recoverSavedAuthorization(f.sharedDb, maintenanceOptions(f), 'grant-op'));
+    assert.equal(f.state.ops.length, 1);
+    assert.equal(f.state.targetAlbum.status, 'OFFLINE');
+    assert.equal(f.state.grantCalls, 0);
+  });
+}
+
+test('saved-response recovery still requires an active OWNER and unchanged target credentials', async () => {
+  const f = await savedAuthorizationFixture();
+  f.targetDb.adminUser.findUnique = async () => ({ role: 'OWNER', status: 'DISABLED' });
+  await assert.rejects(() => recoverSavedAuthorization(f.sharedDb, maintenanceOptions(f), 'grant-op'), /OWNER/);
+  f.state.ops[0].snapshotJson.targetClientKey = 'old-key';
+  await assert.rejects(() => recoverSavedAuthorization(f.sharedDb, maintenanceOptions(f), 'grant-op'), /凭据/);
+  assert.equal(f.state.ops.length, 1);
+});
+
+test('saved-response recovery does not open playback for a main drama no longer online', async () => {
+  const f = await savedAuthorizationFixture();
+  f.api.queryAlbum = async () => ({ data: { publish_status: 2, online_version: 1, review_status: 2 } });
+  const result = await recoverSavedAuthorization(f.sharedDb, maintenanceOptions(f), 'grant-op');
+  assert.equal(result.status, 'FAILED');
+  assert.equal(f.state.targetAlbum.status, 'OFFLINE');
+  assert.equal(f.state.grantCalls, 0);
+});
+
+test('retains recovered proof across mapping failure so a normal retry only repairs local data', async () => {
+  const f = await savedAuthorizationFixture(); const create = f.targetDb.episode.create;
+  f.state.targetEpisodes = [];
+  f.targetDb.episode.create = async () => { throw new Error('local write unavailable'); };
+  const result = await recoverSavedAuthorization(f.sharedDb, maintenanceOptions(f), 'grant-op');
+  assert.equal(result.status, 'FAILED');
+  assert.equal((result.providerResponse as any).platformAuthorized, true);
+  assert.equal(f.state.auths.get('taletv').providerResponse.platformAuthorized, true);
+  f.targetDb.episode.create = create;
+  await f.prepare(); await f.run();
+  assert.equal(f.state.targetAlbum.status, 'ONLINE');
+  assert.equal(f.state.grantCalls, 0);
+});
+
 test('refuses to overwrite a separately published target drama', async () => {
   const f = fixture();
   const source = await verifyPlaybackSource(f.sourceDb, f.api, 'source-1');
@@ -262,6 +340,14 @@ test('does not replay a queued grant when the approving OWNER is disabled', asyn
 test('treats an explicit already-authorized target as idempotent success', async () => {
   const f = fixture(); await f.prepare();
   f.api.authorizeAlbum = async () => ({ requestId: 'already-log', results: [{ clientKey: 'target-key', authStatus: 1, errorCode: '22010', errorMessage: 'authorization already exists' }], raw: {} });
+  await f.run();
+  assert.equal(f.state.ops[0].status, 'SUCCEEDED');
+  assert.equal(f.state.targetAlbum.status, 'ONLINE');
+});
+
+test('accepts the observed already-authorized wording when TikTok explicitly reports auth_status 1', async () => {
+  const f = fixture(); await f.prepare();
+  f.api.authorizeAlbum = async () => ({ requestId: 'already-log', results: [{ clientKey: 'target-key', authStatus: 1, errorCode: '22010', errorMessage: 'Short drama album authorization already exists' }], raw: {} });
   await f.run();
   assert.equal(f.state.ops[0].status, 'SUCCEEDED');
   assert.equal(f.state.targetAlbum.status, 'ONLINE');
