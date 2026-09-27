@@ -191,12 +191,15 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .platform-jobs-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 22px 8px; }
 .platform-jobs-heading h3 { margin: 0; font-size: 13px; color: var(--ink); }
 .platform-jobs-table { min-width: 760px; table-layout: fixed; }
-.platform-job-target-column { width: 48%; }
-.platform-job-action-column { width: 16%; }
-.platform-job-status-column { width: 14%; }
-.platform-job-detail-column { width: 22%; }
+.platform-job-target-column { width: 22%; }
+.platform-job-action-column { width: 14%; }
+.platform-job-status-column { width: 12%; }
+.platform-job-business-column { width: 20%; }
+.platform-job-detail-column { width: 32%; }
 .platform-jobs-table td:first-child { display: table-cell; }
 .platform-job-target { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.platform-business-result { display: block; color: var(--ink); font-size: 11px; line-height: 1.45; }
+.platform-job-detail { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
 .platform-jobs-table .table-error { max-width: 100%; }
 .component-list { display: grid; padding: 0 22px 18px; }
 .component-row { display: grid; grid-template-columns: minmax(0, 1fr) 54px 58px; align-items: center; gap: 14px; min-height: 70px; border-bottom: 1px solid #edf0f4; }

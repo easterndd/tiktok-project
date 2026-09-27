@@ -120,15 +120,16 @@ describe('TikTokShortDramaApiService', () => {
         const url = new URL(String(input));
         if (url.pathname === '/v2/oauth/token/') return response({ access_token: 'token-1', expires_in: 7200 });
         queryUrl = url.toString();
-        return response({ data: { current_version: 2, online_version: 2, publish_status: 1, album_version_list: [{ version: 2, review_status: 2, episode_info_list: [{ episode_id: '7637437361307027476' }] }] }, error: { code: 'ok' } });
+        return response({ data: { current_version: 2, online_version: 2, publish_status: 1, album_version_list: [{ version: 2, review_status: 3, review_fail_reasons: ['Episode 1: cover rejected'], episode_info_list: [{ episode_id: '7637437361307027476', review_result: { overall_review_status: 3 } }] }] }, error: { code: 'ok' } });
       }
     });
 
     const result = await service.queryAlbum({ albumId: '7637420375425239060' });
     assert.match(queryUrl, /album_id=7637420375425239060/);
     assert.equal(result.data.current_version, 2);
-    assert.equal(result.data.review_status, 2);
-    assert.deepEqual(result.data.episode_info_list, [{ episode_id: '7637437361307027476' }]);
+    assert.equal(result.data.review_status, 3);
+    assert.deepEqual(result.data.review_fail_reasons, ['Episode 1: cover rejected']);
+    assert.deepEqual(result.data.episode_info_list, [{ episode_id: '7637437361307027476', review_result: { overall_review_status: 3 } }]);
   });
 
   it('parses numeric int64 album and episode ids without rounding them', async () => {

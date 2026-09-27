@@ -76,11 +76,84 @@ type CoverAsset = { id: string; publicUrl: string; status: string; width?: numbe
 type DraftEpisode = { localId: string; episodeNo: number; title: string; sortOrder: number; isFree: boolean; file?: File | null; byteplusVid?: string; coverFile?: File | null; coverAsset?: CoverAsset | null; coverPreviewUrl?: string; savedEpisodeId?: string; uploadStatus?: string; uploadError?: string };
 type UploadJob = { id: string; episodeId: string; sourceType?: string; sourceName?: string | null; status: string; providerJobId?: string | null; errorMessage?: string | null; createdAt: string; startedAt?: string | null; completedAt?: string | null; episode?: { title: string; episodeNo: number } };
 type VodMedia = { vid: string; title: string; coverUrl?: string; durationMs?: number; createTime?: string };
-type PlatformSyncJob = { id: string; albumId?: string | null; kind: string; status: string; errorMessage?: string | null; createdAt: string; snapshotJson?: { priorityScore?: number; version?: number } | null; providerResponse?: { version?: number } | null; album?: { title: string } | null; episode?: { title: string } | null };
+type PlatformEpisodeFailure = { episode_id?: string; seq?: number; title?: string; exception_reason?: string; review_status?: string; review_result?: Record<string, unknown> };
+type PlatformProviderResponse = {
+  version?: number;
+  checked_version?: number;
+  current_version?: number;
+  online_version?: number;
+  review_status?: string | number | null;
+  online_review_status?: string | number | null;
+  publish_status?: string | number | null;
+  review_fail_reasons?: string[];
+  online_review_fail_reasons?: string[];
+  episode_failures?: PlatformEpisodeFailure[];
+  online_episode_failures?: PlatformEpisodeFailure[];
+  episode_info_list?: PlatformEpisodeFailure[];
+  repaired_episode_ids?: number;
+  review_id?: string;
+  status?: string | number;
+};
+type PlatformSyncJob = { id: string; albumId?: string | null; kind: string; status: string; errorMessage?: string | null; providerRequestId?: string | null; createdAt: string; completedAt?: string | null; attemptCount?: number; snapshotJson?: { priorityScore?: number; version?: number } | null; providerResponse?: PlatformProviderResponse | null; album?: { title: string } | null; episode?: { title: string; episodeNo?: number } | null };
 type SharedAuthorization = { id: string; miniAppKey: MiniApp; targetClientKey: string; targetLocalAlbumId?: string | null; status: string; errorMessage?: string | null; authorizedAt?: string | null; lastReconciledAt?: string | null };
 type SharedAlbum = { id: string; ownerMiniAppKey: MiniApp; tiktokAlbumId: string; currentVersion?: number | null; onlineVersion?: number | null; reviewStatus?: string | null; publishStatus?: string | null; authorizations: SharedAuthorization[]; episodes?: { episodeNo: number; title: string; tiktokEpisodeId: string; media?: { byteplusVid: string } }[] };
 type ContentTemplate = { id: string; name: string; dramaType: number; tagList: string; freeCount: number; rewardedEnabled: boolean; placementId: string; rewardedCount: number };
 const platformJobLabels: Record<string, string> = { COVER: '同步封面', VIDEO: '同步视频', ALBUM_VERSION: '同步版本', REVIEW: '送审', RECONCILE: '对账', SET_ONLINE_VERSION: '设线上版本', PUBLISH: '上架', UNPUBLISH: '下架' };
+
+function reviewResultLabel(value: string | number | null | undefined) {
+  if (value === 1 || value === '1' || value === 'REVIEWING') return '审核中';
+  if (value === 2 || value === '2' || value === 'PASSED' || value === 'APPROVED') return '审核通过';
+  if (value === 3 || value === '3' || value === 'REJECTED') return '审核失败 / 驳回';
+  if (value === 4 || value === '4' || value === 'WITHDRAWN') return '已撤回';
+  if (value === 5 || value === '5' || value === 'APPEALING') return '申诉中';
+  if (value === 6 || value === '6' || value === 'APPEAL_PASSED') return '申诉通过';
+  if (value === 7 || value === '7' || value === 'APPEAL_REJECTED') return '申诉驳回';
+  return value === 0 || value === '0' ? '未送审' : value ? String(value) : '未返回审核状态';
+}
+
+function publishResultLabel(value: string | number | null | undefined) {
+  if (value === 1 || value === '1' || value === 'LISTED' || value === 'PUBLISHED') return '已上架';
+  if (value === 2 || value === '2' || value === 'UNLISTED') return '已下架';
+  return '未上架';
+}
+
+function platformBusinessResult(job: PlatformSyncJob) {
+  if (job.status === 'FAILED') return '任务失败，平台结果未确认';
+  if (job.status === 'CONFLICT') return '平台结果未知，请先对账';
+  if (job.status !== 'SUCCEEDED') return '等待平台处理';
+  const result = job.providerResponse;
+  if (!result) return '平台未返回业务结果';
+  if (job.kind === 'REVIEW') return `送审已受理 · ${reviewResultLabel(result.review_status ?? 1)}`;
+  if (job.kind === 'RECONCILE') return `审核：${reviewResultLabel(result.review_status)} · 上架：${publishResultLabel(result.publish_status)}`;
+  if (job.kind === 'ALBUM_VERSION') return result.version ? `平台版本 ${result.version} 已生成` : '版本结果未返回';
+  if (job.kind === 'VIDEO') return 'TikTok 媒资登记已完成';
+  if (job.kind === 'SET_ONLINE_VERSION') return result.online_version ? `线上版本 ${result.online_version} 已设置` : '线上版本设置已完成';
+  if (job.kind === 'PUBLISH') return '平台已上架';
+  if (job.kind === 'UNPUBLISH') return '平台已下架';
+  return '平台操作已完成';
+}
+
+function platformBusinessDetails(job: PlatformSyncJob) {
+  const result = job.providerResponse;
+  const details: string[] = [];
+  if (result && job.status === 'SUCCEEDED') {
+    const version = result.checked_version ?? result.version ?? job.snapshotJson?.version;
+    if (version) details.push(`检查版本：${version}${result.online_version ? ` · 线上版本：${result.online_version}` : ''}`);
+    if (result.repaired_episode_ids) details.push(`已恢复 ${result.repaired_episode_ids} 个 TikTok 分集 ID`);
+    const reasons = [...(result.review_fail_reasons ?? []), ...(result.online_review_fail_reasons ?? [])].filter((reason, index, items) => reason && items.indexOf(reason) === index);
+    if (reasons.length) details.push(`审核原因：${reasons.join('；')}`);
+    const episodeFailures = result.episode_failures?.length ? result.episode_failures : (result.episode_info_list ?? []).filter((episode) => episode.exception_reason || [3, '3', 7, '7'].includes(episode.review_result?.overall_review_status as string));
+    for (const [source, failure] of [...episodeFailures.map((item) => ['当前版本', item] as const), ...(result.online_episode_failures ?? []).map((item) => ['线上版本', item] as const)]) {
+      const episode = failure.seq ? `第 ${failure.seq} 集` : failure.title ?? failure.episode_id ?? '分集';
+      const reviewStatus = failure.review_status ?? failure.review_result?.overall_review_status;
+      const reason = failure.exception_reason ?? (reviewStatus != null ? `审核状态：${reviewResultLabel(reviewStatus as string | number)}` : '平台返回分集异常');
+      details.push(`${source} ${episode}：${reason}`);
+    }
+  }
+  if (job.errorMessage) details.push(`任务错误：${job.errorMessage}`);
+  if (job.providerRequestId) details.push(`TikTok 请求 ID：${job.providerRequestId}`);
+  return details;
+}
 type Overview = { albums: number; episodes: number; users: number; likes: number; favorites: number; shares: number; searches: number; rewardedUnlocks: number };
 type Audience = { from: string; to: string; timezone: string; periodDays: number; activeUsers: number; dau: number; wau: number; mau: number; newUsers: number; watchSessions: number; completedEpisodes: number; favorites: number; shares: number; searches: number; dailyNewUsers: { date: string; count: number }[]; dailyActiveUsers: { date: string; count: number }[] };
 type Playback = { from: string; to: string; timezone: string; periodDays: number; totalEvents: number; firstFrames: number; errorCount: number; errorRate: number; averageStartupMs: number | null; totalBufferMs: number; eventTypes: { eventType: string; count: number }[]; definitions: { definition: string; count: number }[]; networks: { networkType: string; count: number }[]; recentErrors: { episodeTitle: string; errorCode?: string | null; createdAt: string }[] };
@@ -798,14 +871,32 @@ function AdminApp() {
       setReconcilingJobId(null);
     }
   };
+  const waitForPlatformJob = async (jobId: string, albumId: string) => {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+      try {
+        const result = await api<{ items: PlatformSyncJob[] }>(`/admin/platform-sync-jobs?albumId=${encodeURIComponent(albumId)}&limit=100`);
+        const job = result.items.find((item) => item.id === jobId);
+        if (job && ['SUCCEEDED', 'FAILED', 'CONFLICT'].includes(job.status)) return job;
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  };
   const runPlatformAction = async (album: Album, action: 'sync-version' | 'review-submit' | 'online-version' | 'online' | 'offline' | 'reconcile') => {
     const priorityScore = reviewPriorities[album.id] ?? 2;
     if (action === 'review-submit' && priorityScore === 1 && !window.confirm(`确定将“${album.title}”以加急方式送审吗？仅适用于符合平台加急条件的剧目，每机构每天最多 35 部；已在审核中的版本无法靠重复送审加急。`)) return;
     setPlatformWorking(`${album.id}:${action}`);
     try {
-      await api(`/admin/albums/${album.id}/${action}`, { method: 'POST', ...(action === 'review-submit' ? { body: JSON.stringify({ priorityScore }) } : {}) });
+      const queued = await api<{ job?: PlatformSyncJob }>(`/admin/albums/${album.id}/${action}`, { method: 'POST', ...(action === 'review-submit' ? { body: JSON.stringify({ priorityScore }) } : {}) });
+      setMessage(`“${album.title}”的平台任务已入队，正在等待处理结果。`);
+      const completed = queued.job?.id ? await waitForPlatformJob(queued.job.id, album.id) : undefined;
       await loadData();
-      setMessage(`“${album.title}”的${action === 'review-submit' ? (priorityScore === 1 ? '加急送审' : '普通送审') : '平台操作'}已进入同步队列；请在下方确认任务成功后再执行下一步。`);
+      const actionName = action === 'review-submit' ? (priorityScore === 1 ? '加急送审' : '普通送审') : '平台操作';
+      setMessage(completed
+        ? `“${album.title}”${actionName}处理完成：${platformBusinessResult(completed)}。${platformBusinessDetails(completed).filter((detail) => detail.startsWith('审核原因') || detail.includes('异常')).join(' ')}`
+        : `“${album.title}”的${actionName}已入队，暂未返回最终结果；请稍后刷新查看平台业务结果。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '平台操作提交失败');
     } finally {
@@ -980,7 +1071,7 @@ function AdminApp() {
           </tr>;
         })}</tbody></table></div>
         <div className="platform-jobs-heading"><h3>最近 50 条平台任务</h3><button className="secondary" type="button" disabled={loading} onClick={() => void loadData()}>刷新状态</button></div>
-        <div className="table-wrap"><table className="platform-jobs-table"><colgroup><col className="platform-job-target-column" /><col className="platform-job-action-column" /><col className="platform-job-status-column" /><col className="platform-job-detail-column" /></colgroup><thead><tr><th>剧目 / 分集</th><th>操作</th><th>任务状态</th><th>时间 / 错误</th></tr></thead><tbody>{platformJobs.map((job) => <tr key={job.id}><td><span className="platform-job-target" title={job.album?.title ?? job.episode?.title ?? job.albumId ?? '-'}>{job.album?.title ?? job.episode?.title ?? job.albumId ?? '-'}</span></td><td>{platformJobLabels[job.kind] ?? job.kind}{job.kind === 'REVIEW' ? `（${job.snapshotJson?.priorityScore === 1 ? '加急' : job.snapshotJson?.priorityScore === 2 ? '普通' : '优先级未记录'}）` : ''}{(job.snapshotJson?.version ?? job.providerResponse?.version) ? ` · 版本 ${job.snapshotJson?.version ?? job.providerResponse?.version}` : ''}</td><td><Status value={job.status} /></td><td><small>{new Date(job.createdAt).toLocaleString('zh-CN')}</small>{job.errorMessage && <small className="table-error" title={job.errorMessage}>{job.errorMessage}</small>}</td></tr>)}</tbody></table>{!platformJobs.length && <p className="empty-copy table-empty">暂无平台同步任务</p>}</div>
+        <div className="table-wrap"><table className="platform-jobs-table"><colgroup><col className="platform-job-target-column" /><col className="platform-job-action-column" /><col className="platform-job-status-column" /><col className="platform-job-business-column" /><col className="platform-job-detail-column" /></colgroup><thead><tr><th>剧目 / 分集</th><th>操作</th><th>任务状态</th><th>平台业务结果</th><th>时间 / 详情</th></tr></thead><tbody>{platformJobs.map((job) => { const details = platformBusinessDetails(job); return <tr key={job.id}><td><span className="platform-job-target" title={job.album?.title ?? job.episode?.title ?? job.albumId ?? '-'}>{job.album?.title ?? job.episode?.title ?? job.albumId ?? '-'}</span>{job.episode?.episodeNo && <small>第 {job.episode.episodeNo} 集 · {job.episode.title}</small>}</td><td>{platformJobLabels[job.kind] ?? job.kind}{job.kind === 'REVIEW' ? `（${job.snapshotJson?.priorityScore === 1 ? '加急' : job.snapshotJson?.priorityScore === 2 ? '普通' : '优先级未记录'}）` : ''}{(job.snapshotJson?.version ?? job.providerResponse?.version) ? ` · 版本 ${job.snapshotJson?.version ?? job.providerResponse?.version}` : ''}</td><td><Status value={job.status} /></td><td><strong className="platform-business-result">{platformBusinessResult(job)}</strong></td><td><small>{new Date(job.completedAt ?? job.createdAt).toLocaleString('zh-CN')}</small>{details.map((detail, index) => <small key={`${job.id}-detail-${index}`} className={detail.startsWith('审核原因') || detail.includes('异常') || detail.startsWith('任务错误') ? 'table-error' : 'platform-job-detail'}>{detail}</small>)}</td></tr>; })}</tbody></table>{!platformJobs.length && <p className="empty-copy table-empty">暂无平台同步任务</p>}</div>
       </Panel>}
       {tab === 'albums' && <Panel title="共享剧目授权" description="同一 BytePlus 账号下复用已审核的 TikTok 主剧目；目标小程序通过授权使用同一个 album_id，不重复上传或送审。">
         <div className="table-wrap"><table><thead><tr><th>主剧目</th><th>版本 / 状态</th><th>授权小程序</th><th>操作</th></tr></thead><tbody>{sharedAlbums.map((sharedAlbum) => {

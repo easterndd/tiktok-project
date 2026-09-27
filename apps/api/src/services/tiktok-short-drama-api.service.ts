@@ -222,10 +222,12 @@ export class TikTokShortDramaApiService {
       data: {
         ...data,
         ...selected,
+        version: asNumber(selected.version) ?? currentVersion,
         current_version: currentVersion ?? asNumber(selected.version),
         online_version: asNumber(data.online_version),
         publish_status: asNumber(data.publish_status),
         review_status: asNumber(selected.review_status) ?? asNumber(data.review_status),
+        review_fail_reasons: selected.review_fail_reasons ?? data.review_fail_reasons,
         episode_info_list: selected.episode_info_list ?? data.episode_info_list
       },
       requestId
