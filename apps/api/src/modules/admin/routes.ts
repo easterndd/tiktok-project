@@ -23,17 +23,21 @@ import {
 } from '../../services/platform-sync.service';
 import {
   bindEpisodeToSharedMedia,
-  createSharedAlbumFromLocal,
-  enqueueSharedAlbumAuthorization,
   enqueueSharedAlbumReconcile,
   getOrCreateSharedMediaAsset,
   listSharedMediaAssets,
-  sharedMiniAppConfig
 } from '../../services/shared-platform.service';
-import { multiAppReleaseStatus, runMultiAppRelease } from '../../services/multi-app-release.service';
+import { authorizeSharedPlayback, sharedPlaybackStatus } from '../../services/shared-playback.service';
 import type { MiniAppKey } from '../../config/mini-apps';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
+async function assertPlatformOwner(app: FastifyInstance, albumId: string) {
+  const shared = await app.sharedPrisma.miniAppAlbumAuthorization.findFirst({ where: {
+    miniAppKey: app.config.MINI_APP_KEY, targetLocalAlbumId: albumId,
+    album: { ownerMiniAppKey: { not: app.config.MINI_APP_KEY } }
+  } });
+  if (shared) throw Object.assign(new Error('此剧目是授权播放副本，平台版本、审核和上下架由主小程序管理；请使用授权对账。'), { statusCode: 409 });
+}
 const episodeParams = z.object({ episodeId: z.string().min(1).max(128) });
 const albumInput = z.object({
   title: z.string().trim().min(1).max(160),
@@ -68,19 +72,13 @@ const mediaBindingInput = z.object({
 const sharedMediaBindingInput = z.object({
   sharedMediaAssetId: z.string().trim().min(1).max(128)
 });
-const sharedAuthorizationInput = z.object({
-  targetMiniAppKey: z.enum(['main', 'taletv', 'cinereels', 'talereels']),
-  targetLocalAlbumId: z.string().trim().min(1).max(128).optional()
-});
-const releaseTargetsInput = z.array(z.enum(['main', 'taletv', 'cinereels', 'talereels'])).min(1).max(4);
-const multiAppReleaseInput = z.object({
-  targetApps: releaseTargetsInput,
-  action: z.enum(['PREPARE', 'UPLOAD_VIDEO_URL', 'SYNC_MEDIA', 'SYNC_VERSION', 'SUBMIT_REVIEW', 'RECONCILE', 'SET_ONLINE_VERSION', 'PUBLISH']),
-  priorityScore: z.union([z.literal(1), z.literal(2)]).optional(),
-  sources: z.array(z.object({ episodeNo: z.number().int().positive(), sourceUrl: z.string().trim().url().max(4096) })).min(1).max(500).optional()
+const playbackTargetsInput = z.array(z.enum(['main', 'taletv', 'cinereels', 'talereels'])).min(1).max(4);
+const sharedPlaybackInput = z.object({
+  targetApps: playbackTargetsInput,
+  action: z.enum(['AUTHORIZE', 'RECONCILE'])
 }).strict();
 
-async function releaseAdminIds(app: FastifyInstance, request: FastifyRequest, targets: MiniAppKey[]) {
+async function playbackAdminIds(app: FastifyInstance, request: FastifyRequest, targets: MiniAppKey[]) {
   const ids: Partial<Record<MiniAppKey, string>> = { [app.config.MINI_APP_KEY]: request.user.sub };
   const header = request.headers['x-multi-app-tokens'];
   if (typeof header !== 'string') return ids;
@@ -508,7 +506,9 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       orderBy: { updatedAt: 'desc' },
       include: { _count: { select: { episodes: true } } }
     });
-    return { items: albums.map((album) => ({ ...album, episodeCount: album._count.episodes, _count: undefined })) };
+    const shared = await app.sharedPrisma.miniAppAlbumAuthorization.findMany({ where: { miniAppKey: app.config.MINI_APP_KEY, targetLocalAlbumId: { not: null }, album: { ownerMiniAppKey: { not: app.config.MINI_APP_KEY } } }, select: { targetLocalAlbumId: true } });
+    const sharedIds = new Set(shared.map((item) => item.targetLocalAlbumId));
+    return { items: albums.map((album) => ({ ...album, sharedPlayback: sharedIds.has(album.id), episodeCount: album._count.episodes, _count: undefined })) };
   });
 
   app.get('/admin/episodes', { preHandler: requireAdmin }, async () => {
@@ -663,6 +663,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.post('/admin/albums/:albumId/episodes/batch', { preHandler: requirePermission('content.write') }, async (request) => {
     const { albumId } = albumParams.parse(request.params);
+    await assertPlatformOwner(app, albumId);
     const { episodes: inputEpisodes } = appendEpisodesInput.parse(request.body);
     const numbers = inputEpisodes.map((episode) => episode.episodeNo);
     if (new Set(numbers).size !== numbers.length) throw Object.assign(new Error('新增分集集号不能重复。'), { statusCode: 400 });
@@ -764,6 +765,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.post('/admin/episodes/:episodeId/bind-byteplus', { preHandler: requireAdmin }, async (request, reply) => {
     const { episodeId } = episodeParams.parse(request.params);
+    const ownerEpisode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { albumId: true } });
+    if (ownerEpisode) await assertPlatformOwner(app, ownerEpisode.albumId);
     const input = mediaBindingInput.parse(request.body);
     const mediaService = new BytePlusVodService(app.config);
     const [media] = await mediaService.getMediaInfos({ vids: [input.byteplusVid] });
@@ -808,6 +811,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.post('/admin/episodes/:episodeId/bind-shared-media', { preHandler: requirePermission('content.write') }, async (request) => {
     const { episodeId } = episodeParams.parse(request.params);
+    const ownerEpisode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { albumId: true } });
+    if (ownerEpisode) await assertPlatformOwner(app, ownerEpisode.albumId);
     const input = sharedMediaBindingInput.parse(request.body);
     const result = await bindEpisodeToSharedMedia(app.sharedPrisma as any, app.prisma as any, app.config, app.config.MINI_APP_KEY, episodeId, input.sharedMediaAssetId);
     await audit(app, request.user.sub, 'BIND_SHARED_MEDIA', 'Episode', episodeId, {
@@ -942,8 +947,9 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     if (!['.mp4', '.mov', '.m4v'].includes(extension)) {
       return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'TikTok 短剧仅接受兼容的 MP4、MOV 或 M4V 视频格式。', requestId: request.id } });
     }
-    const episode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { id: true, title: true, episodeNo: true, byteplusVid: true, byteplusUploadStatus: true, coverAsset: { select: { publicUrl: true, status: true } }, album: { select: { title: true, status: true, tiktokAlbumId: true, tiktokVersion: true, onlineVersion: true } } } });
+    const episode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { id: true, albumId: true, title: true, episodeNo: true, byteplusVid: true, byteplusUploadStatus: true, coverAsset: { select: { publicUrl: true, status: true } }, album: { select: { title: true, status: true, tiktokAlbumId: true, tiktokVersion: true, onlineVersion: true } } } });
     if (!episode) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '分集不存在。', requestId: request.id } });
+    await assertPlatformOwner(app, episode.albumId);
     if (episode.album.status === 'OFFLINE') return reply.code(409).send({ error: { code: 'CONFLICT', message: '下线剧集的分集不能上传。', requestId: request.id } });
     if (episode.byteplusVid) return reply.code(409).send({ error: { code: 'CONFLICT', message: '该分集已绑定 BytePlus VID，请勿重复上传。', requestId: request.id } });
     if (episode.byteplusUploadStatus === 'UPLOADING') return reply.code(409).send({ error: { code: 'CONFLICT', message: '该分集正在上传，请等待当前任务结束后再操作。', requestId: request.id } });
@@ -1171,65 +1177,45 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return item;
   });
 
-  app.post('/admin/albums/:albumId/share', { preHandler: requirePermission('content.sync') }, async (request) => {
-    ensureTikTokPlatformConfigured(app);
-    const { albumId } = albumParams.parse(request.params);
-    const sharedAlbum = await createSharedAlbumFromLocal(app.sharedPrisma as any, app.prisma as any, app.config, app.config.MINI_APP_KEY, albumId);
-    await audit(app, request.user.sub, 'CREATE_SHARED_ALBUM', 'SharedTikTokAlbum', sharedAlbum.id, {
-      albumId,
-      tiktokAlbumId: sharedAlbum.tiktokAlbumId
-    });
-    return sharedAlbum;
-  });
+  app.post('/admin/albums/:albumId/share', { preHandler: requirePermission('content.publish') }, async (_request, reply) => reply.code(410).send({ error: { code: 'FEATURE_RETIRED', message: '请使用已审核剧目授权播放，不再手动登记共享主剧目。' } }));
 
-  app.get('/admin/multi-app-releases/:albumId', { preHandler: requirePermission('content.publish') }, async (request) => {
+  app.get('/admin/shared-playback/:albumId', { preHandler: requirePermission('content.publish') }, async (request) => {
     const { albumId } = albumParams.parse(request.params);
     const { targetApps } = z.object({ targetApps: z.string().min(1) }).parse(request.query);
-    const targets = releaseTargetsInput.parse(targetApps.split(','));
+    const targets = playbackTargetsInput.parse(targetApps.split(','));
     const operator = await app.prisma.adminUser.findUnique({ where: { id: request.user.sub }, select: { email: true } });
     if (!operator) throw Object.assign(new Error('当前管理员不存在。'), { statusCode: 403 });
-    return multiAppReleaseStatus({ dbByApp: app.miniAppPrisma as any, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: targets, operatorEmail: operator.email, authorizedAdminIds: await releaseAdminIds(app, request, targets) });
+    return sharedPlaybackStatus({ sharedDb: app.sharedPrisma as any, sourceDb: app.prisma as any, dbByApp: app.miniAppPrisma as any, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: targets, operatorEmail: operator.email, authorizedAdminIds: await playbackAdminIds(app, request, targets) });
   });
 
-  app.post('/admin/multi-app-releases/:albumId', { preHandler: requirePermission('content.publish') }, async (request) => {
+  app.post('/admin/shared-playback/:albumId', { preHandler: requirePermission('content.publish') }, async (request) => {
     const { albumId } = albumParams.parse(request.params);
-    const input = multiAppReleaseInput.parse(request.body);
+    const input = sharedPlaybackInput.parse(request.body);
     const operator = await app.prisma.adminUser.findUnique({ where: { id: request.user.sub }, select: { email: true } });
     if (!operator) throw Object.assign(new Error('当前管理员不存在。'), { statusCode: 403 });
-    const result = await runMultiAppRelease({ sourceDb: app.prisma as any, dbByApp: app.miniAppPrisma as any, env: app.rootConfig, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: input.targetApps, operatorEmail: operator.email, authorizedAdminIds: await releaseAdminIds(app, request, input.targetApps), action: input.action, priorityScore: input.priorityScore, sources: input.sources });
-    await audit(app, request.user.sub, `MULTI_APP_${input.action}`, 'Album', albumId, { targets: result.items.map((item) => ({ miniAppKey: item.miniAppKey, accepted: item.accepted })) });
+    const context = { sharedDb: app.sharedPrisma as any, sourceDb: app.prisma as any, dbByApp: app.miniAppPrisma as any, env: app.rootConfig, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: input.targetApps, operatorEmail: operator.email, authorizedAdminIds: await playbackAdminIds(app, request, input.targetApps) };
+    let result;
+    if (input.action === 'AUTHORIZE') result = await authorizeSharedPlayback(context);
+    else {
+      const state = await sharedPlaybackStatus(context);
+      if (!state.sharedAlbumId) throw Object.assign(new Error('尚未建立主剧目授权记录，请先授权播放。'), { statusCode: 409 });
+      const allowed = state.items.filter((item) => item.status !== 'ACCESS_ERROR');
+      const operation = allowed.length ? await enqueueSharedAlbumReconcile(app.sharedPrisma as any, state.sharedAlbumId) : null;
+      result = { items: state.items.map((item) => ({ miniAppKey: item.miniAppKey, accepted: item.status !== 'ACCESS_ERROR', error: item.status === 'ACCESS_ERROR' ? item.error : undefined, operationId: operation?.id })) };
+    }
+    await audit(app, request.user.sub, `SHARED_PLAYBACK_${input.action}`, 'Album', albumId, { targets: result.items.map((item) => ({ miniAppKey: item.miniAppKey, accepted: item.accepted })) });
     return result;
   });
 
-  app.post('/admin/shared/albums/:sharedAlbumId/authorizations', { preHandler: requirePermission('content.review') }, async (request) => {
-    ensureTikTokPlatformConfigured(app);
-    const { sharedAlbumId } = z.object({ sharedAlbumId: z.string().min(1).max(128) }).parse(request.params);
-    const input = sharedAuthorizationInput.parse(request.body);
-    const targetPrisma = app.miniAppPrisma[input.targetMiniAppKey];
-    if (!targetPrisma) throw Object.assign(new Error(`目标小程序 ${input.targetMiniAppKey} 未启用。`), { statusCode: 409 });
-    if (input.targetLocalAlbumId) {
-      const targetAlbum = await targetPrisma.album.findUnique({ where: { id: input.targetLocalAlbumId }, select: { id: true } });
-      if (!targetAlbum) throw Object.assign(new Error('目标小程序本地剧目不存在。'), { statusCode: 404 });
-    }
-    const result = await enqueueSharedAlbumAuthorization(
-      app.sharedPrisma as any,
-      app.config,
-      sharedAlbumId,
-      input.targetMiniAppKey,
-      input.targetLocalAlbumId,
-      request.user.sub
-    );
-    await audit(app, request.user.sub, 'AUTHORIZE_SHARED_ALBUM', 'SharedTikTokAlbum', sharedAlbumId, {
-      targetMiniAppKey: input.targetMiniAppKey,
-      targetLocalAlbumId: input.targetLocalAlbumId ?? null,
-      operationId: result.operation?.id ?? null
-    });
-    return result;
-  });
+  app.route({ method: ['GET', 'POST'], url: '/admin/multi-app-releases/:albumId', preHandler: requirePermission('content.publish'), handler: async (_request, reply) => reply.code(410).send({ error: { code: 'FEATURE_RETIRED', message: '多小程序独立发布已停用，请使用已审核剧目授权播放。' } }) });
+
+  app.post('/admin/shared/albums/:sharedAlbumId/authorizations', { preHandler: requirePermission('content.publish') }, async (_request, reply) => reply.code(410).send({ error: { code: 'FEATURE_RETIRED', message: '请使用已审核剧目授权播放，系统自动建立目标映射。' } }));
 
   app.post('/admin/shared/albums/:sharedAlbumId/reconcile', { preHandler: requirePermission('content.sync') }, async (request) => {
     ensureTikTokPlatformConfigured(app);
     const { sharedAlbumId } = z.object({ sharedAlbumId: z.string().min(1).max(128) }).parse(request.params);
+    const source = await app.sharedPrisma.sharedTikTokAlbum.findUnique({ where: { id: sharedAlbumId }, select: { ownerMiniAppKey: true } });
+    if (source?.ownerMiniAppKey !== app.config.MINI_APP_KEY) throw Object.assign(new Error('请在主小程序后台对账授权剧目。'), { statusCode: 403 });
     const operation = await enqueueSharedAlbumReconcile(app.sharedPrisma as any, sharedAlbumId, request.user.sub);
     await audit(app, request.user.sub, 'RECONCILE_SHARED_ALBUM', 'SharedTikTokAlbum', sharedAlbumId, { operationId: operation.id });
     return { operation };
@@ -1246,6 +1232,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.post('/admin/episodes/:episodeId/sync-tiktok-video', { preHandler: requirePermission('content.sync') }, async (request) => {
     ensureTikTokPlatformConfigured(app);
     const { episodeId } = episodeParams.parse(request.params);
+    const episode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { albumId: true } });
+    if (episode) await assertPlatformOwner(app, episode.albumId);
     const job = await enqueueVideoSync(app.prisma as any, episodeId, request.user.sub);
     await audit(app, request.user.sub, 'SYNC_TIKTOK_VIDEO', 'Episode', episodeId, { jobId: job?.id ?? null });
     return { job, alreadySynced: !job };
@@ -1254,6 +1242,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.post('/admin/albums/:albumId/sync-version', { preHandler: requirePermission('content.sync') }, async (request) => {
     ensureTikTokPlatformConfigured(app);
     const { albumId } = albumParams.parse(request.params);
+    await assertPlatformOwner(app, albumId);
     const job = await enqueueAlbumVersionSync(app.prisma as any, albumId, request.user.sub);
     await audit(app, request.user.sub, 'SYNC_TIKTOK_ALBUM_VERSION', 'Album', albumId, { jobId: job.id, snapshotHash: job.snapshotHash });
     return { job };
@@ -1262,6 +1251,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.post('/admin/albums/:albumId/reconcile', { preHandler: requirePermission('content.sync') }, async (request) => {
     ensureTikTokPlatformConfigured(app);
     const { albumId } = albumParams.parse(request.params);
+    await assertPlatformOwner(app, albumId);
     const job = await enqueueAlbumAction(app.prisma as any, 'RECONCILE', albumId, request.user.sub);
     await audit(app, request.user.sub, 'RECONCILE_TIKTOK_ALBUM', 'Album', albumId, { jobId: job.id });
     return { job };
@@ -1269,6 +1259,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.post('/admin/albums/:albumId/review-submit', { preHandler: requirePermission('content.review') }, async (request) => {
     const { albumId } = albumParams.parse(request.params);
+    await assertPlatformOwner(app, albumId);
     const { priorityScore } = z.object({ priorityScore: z.union([z.literal(1), z.literal(2)]).default(2) }).strict().parse(request.body ?? {});
     ensureTikTokPlatformConfigured(app);
     const job = await enqueueAlbumAction(app.prisma as any, 'REVIEW', albumId, request.user.sub, priorityScore);
@@ -1278,6 +1269,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.post('/admin/albums/:albumId/online-version', { preHandler: requirePermission('content.publish') }, async (request) => {
     const { albumId } = albumParams.parse(request.params);
+    await assertPlatformOwner(app, albumId);
     ensureTikTokPlatformConfigured(app);
     const job = await enqueueAlbumAction(app.prisma as any, 'SET_ONLINE_VERSION', albumId, request.user.sub);
     await audit(app, request.user.sub, 'SET_TIKTOK_ONLINE_VERSION', 'Album', albumId, { jobId: job.id });
@@ -1286,6 +1278,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.post('/admin/albums/:albumId/online', { preHandler: requirePermission('content.publish') }, async (request) => {
     const { albumId } = albumParams.parse(request.params);
+    await assertPlatformOwner(app, albumId);
     ensureTikTokPlatformConfigured(app);
     const job = await enqueueAlbumAction(app.prisma as any, 'PUBLISH', albumId, request.user.sub);
     await audit(app, request.user.sub, 'PUBLISH_TIKTOK_ALBUM', 'Album', albumId, { jobId: job.id });
@@ -1294,6 +1287,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.post('/admin/albums/:albumId/offline', { preHandler: requirePermission('content.publish') }, async (request) => {
     const { albumId } = albumParams.parse(request.params);
+    await assertPlatformOwner(app, albumId);
     ensureTikTokPlatformConfigured(app);
     const job = await enqueueAlbumAction(app.prisma as any, 'UNPUBLISH', albumId, request.user.sub);
     await audit(app, request.user.sub, 'UNPUBLISH_TIKTOK_ALBUM', 'Album', albumId, { jobId: job.id });

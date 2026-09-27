@@ -17,6 +17,10 @@ function workflowConflict(message: string) {
   return Object.assign(new Error(message), { statusCode: 409 });
 }
 
+function retiredWorkflow(message: string) {
+  return Object.assign(workflowConflict(message), { retiredWorkflow: true });
+}
+
 type AlbumSnapshot = {
   albumId: string;
   albumInfo: TikTokAlbumInfoInput;
@@ -295,27 +299,6 @@ export async function enqueueVideoSync(prisma: Db, episodeId: string, createdByA
   });
 }
 
-export function validateVideoSourceUrl(sourceUrl: string) {
-  const url = new URL(sourceUrl);
-  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (url.protocol !== 'https:' || url.username || url.password || !host.includes('.') || host === 'localhost' || host.endsWith('.local')
-    || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) || host.includes(':') || /\.m3u8$/i.test(url.pathname)) {
-    throw workflowConflict('请提供公网 HTTPS 原视频文件下载地址，不接受本地地址、带账号密码的地址或 m3u8 播放流。');
-  }
-}
-
-export async function enqueueVideoUrlUpload(prisma: Db, episode: { id: string; albumId: string; title: string; byteplusVid: string | null }, source: { sourceVid: string; sourceUrl: string }, adminId: string) {
-  validateVideoSourceUrl(source.sourceUrl);
-  const active = await prisma.platformSyncJob.findFirst({ where: { episodeId: episode.id, kind: 'VIDEO', status: { in: ['PENDING', 'PROCESSING', 'CONFLICT'] } } });
-  if (active) throw workflowConflict('此分集已有处理中或结果未知的视频任务，请先核实已有任务，勿重复上传。');
-  return enqueuePlatformSyncJob(prisma, {
-    kind: 'VIDEO', targetId: episode.id, episodeId: episode.id, albumId: episode.albumId,
-    createdByAdminUserId: adminId,
-    dedupeKey: `VIDEO_URL:${episode.id}:${source.sourceVid}`,
-    snapshotJson: { uploadMode: 'URL', sourceUrl: source.sourceUrl, sourceVid: source.sourceVid, expectedVid: episode.byteplusVid, title: episode.title }
-  });
-}
-
 export async function enqueueAlbumAction(prisma: Db, kind: Extract<PlatformSyncKind, 'REVIEW' | 'SET_ONLINE_VERSION' | 'PUBLISH' | 'UNPUBLISH' | 'RECONCILE'>, albumId: string, createdByAdminUserId?: string, priorityScore: 1 | 2 = 2) {
   const album = await prisma.album.findUnique({ where: { id: albumId }, select: { id: true, tiktokVersion: true, onlineVersion: true, tiktokAlbumId: true, reviewStatus: true, publishStatus: true, platformPublishedVersion: true } });
   if (!album?.tiktokAlbumId) throw workflowConflict('剧目尚未同步至 TikTok，请先执行“同步版本”。');
@@ -404,7 +387,7 @@ async function failJob(prisma: Db, job: any, error: unknown, now: Date, maxRetri
     }
   });
   if (job.kind === 'COVER' && job.coverAssetId) await prisma.coverAsset.update({ where: { id: job.coverAssetId }, data: { platformSyncError: details.message } });
-  if (job.kind === 'VIDEO' && job.episodeId) await prisma.episode.update({ where: { id: job.episodeId }, data: { tiktokVideoStatus: 'FAILED', tiktokVideoError: details.message } });
+  if (job.kind === 'VIDEO' && job.episodeId && !record(error).retiredWorkflow) await prisma.episode.update({ where: { id: job.episodeId }, data: { tiktokVideoStatus: 'FAILED', tiktokVideoError: details.message } });
 }
 
 async function processCover(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date) {
@@ -420,8 +403,9 @@ async function processCover(prisma: Db, api: TikTokShortDramaApiService, job: an
 }
 
 async function processVideo(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date) {
-  if (job.snapshotJson?.uploadMode === 'URL') return processVideoUrlUpload(prisma, api, job, now);
-  const episode = await prisma.episode.findUnique({ where: { id: job.episodeId ?? job.targetId }, select: { id: true, title: true, byteplusVid: true, tiktokVideoJobId: true, tiktokVideoStatus: true } });
+  if (job.snapshotJson?.uploadMode === 'URL') throw retiredWorkflow('多小程序独立上传已停用；保留历史 job_id 和 VID，请核实已受理的平台任务，不再重复上传。');
+  const episode = await prisma.episode.findUnique({ where: { id: job.episodeId ?? job.targetId }, select: { id: true, title: true, byteplusVid: true, tiktokVideoJobId: true, tiktokVideoStatus: true, album: { select: { id: true } } } });
+  if (episode?.album?.id?.startsWith('release_')) throw retiredWorkflow('旧独立发布目标已停用，请改用主剧目授权播放。');
   if (!episode?.byteplusVid) throw new Error('分集尚未完成 BytePlus 视频上传。');
   if (episode.tiktokVideoStatus === 'READY') return completeJob(prisma, job, {}, now);
   const registeredVid = typeof job.providerResponse?.byteplus_vid === 'string' ? job.providerResponse.byteplus_vid : undefined;
@@ -476,58 +460,6 @@ async function processVideo(prisma: Db, api: TikTokShortDramaApiService, job: an
     await tx.episode.update({ where: { id: episode.id }, data: { byteplusVid: result.vid, tiktokVideoStatus: 'READY', tiktokVideoError: null, platformSyncedAt: now } });
     await completeJob(tx, job, { providerRequestId: result.requestId, providerResponse: { vid: result.vid, upload_status: result.uploadStatus } }, now);
   });
-}
-
-async function processVideoUrlUpload(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date) {
-  const snapshot = job.snapshotJson as { sourceUrl: string; sourceVid: string; expectedVid: string | null; title: string };
-  const episode = await prisma.episode.findUnique({ where: { id: job.episodeId }, include: { album: true } });
-  if (!episode || episode.album.tiktokAlbumId || episode.album.tiktokVersion || episode.album.onlineVersion || episode.tiktokEpisodeId) {
-    throw workflowConflict('独立上传只允许尚未同步 TikTok 版本的目标草稿，不能替换已审核或上线素材。');
-  }
-  if (episode.byteplusVid !== snapshot.expectedVid) throw workflowConflict('分集素材已变化，停止独立上传；请刷新后核实。');
-  let vid = stringify(job.providerResponse?.vid);
-  let requestId: string | undefined;
-  if (!vid && !job.providerJobId) {
-    const result = await api.createVideoFromUrl({ sourceUrl: snapshot.sourceUrl, title: snapshot.title });
-    requestId = result.requestId;
-    if (result.status === 'PROCESSING') {
-      // Persist the provider job before polling; replaying POST can duplicate media.
-      try {
-        await (prisma.$transaction as any)(async (tx: Db) => {
-          await tx.platformSyncJob.update({ where: { id: job.id }, data: { status: 'PENDING', providerJobId: result.jobId, providerRequestId: result.requestId, nextAttemptAt: new Date(now.getTime() + 30_000) } });
-          await tx.episode.update({ where: { id: episode.id }, data: { tiktokVideoJobId: result.jobId, tiktokVideoStatus: 'PROCESSING', tiktokVideoError: null } });
-        });
-      } catch { throw uncertainLocalSave(); }
-      return;
-    }
-    vid = result.byteplusVid;
-    try {
-      await prisma.platformSyncJob.update({ where: { id: job.id }, data: { providerRequestId: requestId, providerResponse: { vid, upload_mode: 'URL', source_vid: snapshot.sourceVid } } });
-    } catch { throw uncertainLocalSave(); }
-  } else if (!vid) {
-    if (job.createdAt && now.getTime() - new Date(job.createdAt).getTime() > 2 * 60 * 60_000) throw new TikTokShortDramaApiError('独立上传超过两小时仍未确认，保留任务 ID；请核实平台结果，勿重新上传。', 'URL_UPLOAD_UNCONFIRMED', job.providerRequestId, true);
-    const result = await api.getVideo({ jobId: job.providerJobId });
-    requestId = result.requestId;
-    if (result.uploadStatus === 1) {
-      await prisma.platformSyncJob.update({ where: { id: job.id }, data: { status: 'PENDING', providerRequestId: result.requestId, nextAttemptAt: new Date(now.getTime() + 30_000) } });
-      return;
-    }
-    if (result.uploadStatus === 3) throw new TikTokShortDramaApiError('TikTok URL 上传失败，请核对原文件下载地址。', undefined, result.requestId, false);
-    if (!result.vid) throw new TikTokShortDramaApiError('TikTok 查询尚未返回有效 VID，等待确认已有上传任务。', undefined, result.requestId, true);
-    vid = result.vid;
-  }
-  if (!vid || vid === snapshot.sourceVid) throw new TikTokShortDramaApiError('TikTok 没有返回独立的新 VID，停止绑定；请联系平台核实作用域。', undefined, requestId, false);
-  try {
-    await (prisma.$transaction as any)(async (tx: Db) => {
-      const changed = await tx.episode.updateMany({ where: { id: episode.id, byteplusVid: snapshot.expectedVid, tiktokEpisodeId: null, album: { tiktokAlbumId: null, tiktokVersion: null, onlineVersion: null } }, data: {
-        byteplusVid: vid, byteplusUploadStatus: 'READY', tiktokVideoStatus: 'READY', tiktokVideoError: null, status: 'READY', platformSyncedAt: now
-      } });
-      if (changed.count !== 1) throw workflowConflict('分集在上传期间变化，停止绑定新 VID，请人工核实。');
-      await completeJob(tx, job, { providerRequestId: requestId ?? job.providerRequestId, providerResponse: { vid, upload_status: 2, upload_mode: 'URL', source_vid: snapshot.sourceVid } }, now);
-    });
-  } catch {
-    throw new TikTokShortDramaApiError(`TikTok 已返回新 VID ${vid}，但本地绑定未完成；保留已有任务，勿重新上传。`, 'URL_UPLOAD_UNCONFIRMED', requestId, true);
-  }
 }
 
 async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date) {
@@ -818,6 +750,7 @@ async function processAlbumAction(prisma: Db, api: TikTokShortDramaApiService, j
 }
 
 async function processPlatformJob(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date) {
+  if (job.albumId?.startsWith('release_')) throw retiredWorkflow('旧独立发布任务已停用，保留历史记录，不再自动发布或送审。');
   if (job.kind === 'COVER') return processCover(prisma, api, job, now);
   if (job.kind === 'VIDEO') return processVideo(prisma, api, job, now);
   if (job.kind === 'ALBUM_VERSION') return processAlbumVersion(prisma, api, job, now);

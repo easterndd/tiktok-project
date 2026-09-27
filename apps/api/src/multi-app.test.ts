@@ -37,6 +37,7 @@ function databaseFor(name: string) {
     genres: []
   };
   return {
+    miniAppAlbumAuthorization: { findMany: async () => [], findFirst: async () => null },
     album: {
       findMany: async () => [album],
       update: async (args: { data: Record<string, unknown> }) => Object.assign(album, args.data)
@@ -106,8 +107,27 @@ it('requires taletv to use a separate PostgreSQL schema or database', () => {
   assert.equal(taletvEnvironment(env)?.BYTEPLUS_SPACE_NAME, 'shared-space');
 });
 
-it('accepts a different-email target OWNER session for multi-app release status', async () => {
+it('retires independent publishing and blocks platform changes to authorized copies', async () => {
+  const db = databaseFor('shared-local-album') as any;
+  db.miniAppAlbumAuthorization.findFirst = async () => ({ id: 'target-auth' });
+  db.miniAppAlbumAuthorization.findMany = async () => [{ targetLocalAlbumId: 'shared-local-album' }];
+  const app = await buildApp({ ...env, TIKTOK_CLIENT_SECRET: 'main-secret' }, { prisma: db, taletvPrisma: databaseFor('tale-album') });
+  try {
+    await app.ready();
+    const token = await app.jwt.sign({ sub: 'owner', kind: 'admin', appKey: 'main', role: 'OWNER', tokenVersion: 0 });
+    const headers = { authorization: `Bearer ${token}` };
+    assert.equal((await app.inject({ url: '/api/v1/admin/multi-app-releases/shared-local-album?targetApps=taletv', headers })).statusCode, 410);
+    const change = await app.inject({ method: 'POST', url: '/api/v1/admin/albums/shared-local-album/sync-version', headers });
+    assert.equal(change.statusCode, 409);
+    assert.match(change.json().error.message, /授权播放副本/);
+    const albums = await app.inject({ url: '/api/v1/admin/albums', headers });
+    assert.equal(albums.json().items[0].sharedPlayback, true);
+  } finally { await app.close(); }
+});
+
+it('accepts a different-email target OWNER session for shared playback status', async () => {
   const mainDb = databaseFor('source-album') as any;
+  mainDb.sharedTikTokAlbum = { findUnique: async () => null };
   mainDb.adminUser.findUnique = async () => ({ id: 'source-owner', email: 'source@example.com', role: 'OWNER', status: 'ACTIVE', tokenVersion: 0 });
   const targetDb = databaseFor('target-album') as any;
   targetDb.adminUser.findUnique = async ({ where }: any) => where.id === 'target-owner'
@@ -119,16 +139,16 @@ it('accepts a different-email target OWNER session for multi-app release status'
     await app.ready();
     const sourceToken = await app.jwt.sign({ sub: 'source-owner', kind: 'admin', appKey: 'main', role: 'OWNER', tokenVersion: 0 });
     const targetToken = await app.jwt.sign({ sub: 'target-owner', kind: 'admin', appKey: 'taletv', role: 'OWNER', tokenVersion: 0 });
-    const url = '/api/v1/admin/multi-app-releases/source-album?targetApps=taletv';
+    const url = '/api/v1/admin/shared-playback/source-album?targetApps=taletv';
     const withoutApproval = await app.inject({ url, headers: { authorization: `Bearer ${sourceToken}` } });
     assert.equal(withoutApproval.statusCode, 200);
-    assert.equal(withoutApproval.json().items[0].reason, 'ACCESS_ERROR');
+    assert.equal(withoutApproval.json().items[0].status, 'ACCESS_ERROR');
     const withApproval = await app.inject({ url, headers: {
       authorization: `Bearer ${sourceToken}`,
       'x-multi-app-tokens': JSON.stringify({ taletv: targetToken })
     } });
     assert.equal(withApproval.statusCode, 200);
-    assert.equal(withApproval.json().items[0].reason, 'NOT_PREPARED');
+    assert.equal(withApproval.json().items[0].status, 'NOT_AUTHORIZED');
   } finally {
     await app.close();
   }

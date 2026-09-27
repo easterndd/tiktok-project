@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type SharedMediaStatus } from '@prisma/client';
 import { miniAppEnvironment, miniAppPlatformConfig, type MiniAppKey } from '../config/mini-apps';
 import type { Env } from '../config/env';
-import { TikTokShortDramaApiService } from './tiktok-short-drama-api.service';
+import { TikTokShortDramaApiService, TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
 
 type Db = PrismaClient & { [key: string]: any };
 
 type SharedWorkerOptions = {
+  env: Env;
   now?: () => Date;
   maxRetries?: number;
   log?: (message: string, details?: Record<string, unknown>) => void;
@@ -153,17 +154,17 @@ export async function bindEpisodeToSharedMedia(sharedPrisma: Db, localPrisma: Db
   return { episode: updated, media };
 }
 
-export async function createSharedAlbumFromLocal(sharedPrisma: Db, localPrisma: Db, env: Env, ownerMiniAppKey: string, localAlbumId: string) {
+export async function registerSharedPlaybackSnapshot(sharedPrisma: Db, env: Env, ownerMiniAppKey: string, album: any) {
   const owner = requireMiniAppKey(ownerMiniAppKey);
   const ownerConfig = sharedMiniAppConfig(env, owner);
   if (!ownerConfig.clientKey) throw conflict(`小程序 ${owner} 未配置 TikTok Client Key。`);
-  const album = await localPrisma.album.findUnique({
-    where: { id: localAlbumId },
-    include: { episodes: { orderBy: { episodeNo: 'asc' } } }
-  });
   if (!album) throw Object.assign(new Error('剧目不存在。'), { statusCode: 404 });
+  if (!album.onlineVersion || !reviewPassed(album.reviewStatus) || !published(album.publishStatus)) throw conflict('共享快照必须是已审核通过并上架的线上版本。');
   if (!album.tiktokAlbumId) throw conflict('剧目尚未同步至 TikTok，不能创建共享主剧目。');
   if (!album.tiktokVersion) throw conflict('剧目尚无 TikTok 版本，不能创建共享主剧目。');
+  const registered = await sharedPrisma.sharedTikTokAlbum.findUnique({ where: { tiktokAlbumId: album.tiktokAlbumId } });
+  if (registered && (registered.ownerMiniAppKey !== owner || registered.canonicalKey !== `${owner}:${album.id}`)) throw conflict('此剧目属于其他主小程序，不能通过授权副本变更主剧目归属。');
+  if (registered && registered.ownerClientKey !== ownerConfig.clientKey) throw conflict('主剧目 Client Key 与登记时不同，请核实配置，不能自动变更授权来源。');
   if (!album.episodes.length || album.episodes.some((episode: any) => !episode.tiktokEpisodeId || !episode.byteplusVid)) {
     throw conflict('剧目分集缺少 TikTok 分集 ID 或 BytePlus VID，不能创建共享主剧目。');
   }
@@ -183,78 +184,82 @@ export async function createSharedAlbumFromLocal(sharedPrisma: Db, localPrisma: 
     mediaRows.set(episode.id, media);
   }
 
-  const sharedAlbum = await sharedPrisma.sharedTikTokAlbum.upsert({
-    where: { tiktokAlbumId: album.tiktokAlbumId },
-    create: {
-      canonicalKey: `${owner}:${album.id}`,
-      ownerMiniAppKey: owner,
-      ownerClientKey: ownerConfig.clientKey,
-      tiktokAlbumId: album.tiktokAlbumId,
-      currentVersion: album.tiktokVersion,
-      onlineVersion: album.onlineVersion,
-      reviewStatus: album.reviewStatus,
-      publishStatus: album.publishStatus,
-      platformPublishedAt: album.platformPublishedAt
-    },
-    update: {
-      ownerMiniAppKey: owner,
-      ownerClientKey: ownerConfig.clientKey,
-      currentVersion: album.tiktokVersion,
-      onlineVersion: album.onlineVersion,
-      reviewStatus: album.reviewStatus,
-      publishStatus: album.publishStatus,
-      platformPublishedAt: album.platformPublishedAt
-    }
-  });
-
-  for (const episode of album.episodes) {
-    await sharedPrisma.sharedTikTokEpisode.upsert({
-      where: { sharedAlbumId_episodeNo: { sharedAlbumId: sharedAlbum.id, episodeNo: episode.episodeNo } },
+  return (sharedPrisma.$transaction as any)(async (tx: Db) => {
+    const sharedAlbum = await tx.sharedTikTokAlbum.upsert({
+      where: { tiktokAlbumId: album.tiktokAlbumId },
       create: {
-        sharedAlbumId: sharedAlbum.id,
-        episodeKey: episode.id,
-        episodeNo: episode.episodeNo,
-        tiktokEpisodeId: episode.tiktokEpisodeId!,
-        tiktokCoverPicId: episode.tiktokCoverPicId,
-        sharedMediaId: mediaRows.get(episode.id).id,
-        title: episode.title
+        canonicalKey: `${owner}:${album.id}`,
+        ownerMiniAppKey: owner,
+        ownerClientKey: ownerConfig.clientKey!,
+        tiktokAlbumId: album.tiktokAlbumId,
+        currentVersion: album.tiktokVersion,
+        onlineVersion: album.onlineVersion,
+        reviewStatus: album.reviewStatus,
+        publishStatus: album.publishStatus,
+        platformPublishedAt: album.platformPublishedAt
       },
       update: {
-        episodeKey: episode.id,
-        tiktokEpisodeId: episode.tiktokEpisodeId!,
-        tiktokCoverPicId: episode.tiktokCoverPicId,
-        sharedMediaId: mediaRows.get(episode.id).id,
-        title: episode.title
+        ownerMiniAppKey: owner,
+        ownerClientKey: ownerConfig.clientKey,
+        currentVersion: album.tiktokVersion,
+        onlineVersion: album.onlineVersion,
+        reviewStatus: album.reviewStatus,
+        publishStatus: album.publishStatus,
+        platformPublishedAt: album.platformPublishedAt
       }
     });
-  }
 
-  await sharedPrisma.miniAppAlbumAuthorization.upsert({
-    where: { sharedAlbumId_miniAppKey: { sharedAlbumId: sharedAlbum.id, miniAppKey: owner } },
-    create: {
-      sharedAlbumId: sharedAlbum.id,
-      miniAppKey: owner,
-      targetClientKey: ownerConfig.clientKey,
-      targetAppId: ownerConfig.appId,
-      targetLocalAlbumId: localAlbumId,
-      status: 'AUTHORIZED',
-      authorizedAt: new Date(),
-      lastReconciledAt: new Date()
-    },
-    update: {
-      targetClientKey: ownerConfig.clientKey,
-      targetAppId: ownerConfig.appId,
-      targetLocalAlbumId: localAlbumId,
-      status: 'AUTHORIZED',
-      authorizedAt: new Date(),
-      lastReconciledAt: new Date()
+    // These rows are the current verified playback snapshot, not the media files.
+    await tx.sharedTikTokEpisode.deleteMany({ where: { sharedAlbumId: sharedAlbum.id } });
+    for (const episode of album.episodes) {
+      await tx.sharedTikTokEpisode.upsert({
+        where: { sharedAlbumId_episodeNo: { sharedAlbumId: sharedAlbum.id, episodeNo: episode.episodeNo } },
+        create: {
+          sharedAlbumId: sharedAlbum.id,
+          episodeKey: episode.id,
+          episodeNo: episode.episodeNo,
+          tiktokEpisodeId: episode.tiktokEpisodeId!,
+          tiktokCoverPicId: episode.tiktokCoverPicId,
+          sharedMediaId: mediaRows.get(episode.id).id,
+          title: episode.title
+        },
+        update: {
+          episodeKey: episode.id,
+          tiktokEpisodeId: episode.tiktokEpisodeId!,
+          tiktokCoverPicId: episode.tiktokCoverPicId,
+          sharedMediaId: mediaRows.get(episode.id).id,
+          title: episode.title
+        }
+      });
     }
-  });
 
-  return sharedPrisma.sharedTikTokAlbum.findUniqueOrThrow({
-    where: { id: sharedAlbum.id },
-    include: { episodes: { orderBy: { episodeNo: 'asc' } }, authorizations: true }
-  });
+    await tx.miniAppAlbumAuthorization.upsert({
+      where: { sharedAlbumId_miniAppKey: { sharedAlbumId: sharedAlbum.id, miniAppKey: owner } },
+      create: {
+        sharedAlbumId: sharedAlbum.id,
+        miniAppKey: owner,
+        targetClientKey: ownerConfig.clientKey!,
+        targetAppId: ownerConfig.appId,
+        targetLocalAlbumId: album.id,
+        status: 'AUTHORIZED',
+        authorizedAt: new Date(),
+        lastReconciledAt: new Date()
+      },
+      update: {
+        targetClientKey: ownerConfig.clientKey,
+        targetAppId: ownerConfig.appId,
+        targetLocalAlbumId: album.id,
+        status: 'AUTHORIZED',
+        authorizedAt: new Date(),
+        lastReconciledAt: new Date()
+      }
+    });
+
+    return tx.sharedTikTokAlbum.findUniqueOrThrow({
+      where: { id: sharedAlbum.id },
+      include: { episodes: { include: { media: true }, orderBy: { episodeNo: 'asc' } }, authorizations: true }
+    });
+  }, { timeout: 30_000 });
 }
 
 export async function enqueueSharedAlbumAuthorization(
@@ -271,6 +276,8 @@ export async function enqueueSharedAlbumAuthorization(
   const album = await sharedPrisma.sharedTikTokAlbum.findUnique({ where: { id: sharedAlbumId } });
   if (!album) throw Object.assign(new Error('共享主剧目不存在。'), { statusCode: 404 });
   if (album.ownerMiniAppKey === target) throw conflict('主小程序已经拥有该剧目，无需再次授权。');
+  const previous = await sharedPrisma.miniAppAlbumAuthorization.findUnique({ where: { sharedAlbumId_miniAppKey: { sharedAlbumId, miniAppKey: target } } });
+  const changedClient = previous && previous.targetClientKey !== targetConfig.clientKey;
 
   const authorization = await sharedPrisma.miniAppAlbumAuthorization.upsert({
     where: { sharedAlbumId_miniAppKey: { sharedAlbumId, miniAppKey: target } },
@@ -285,7 +292,8 @@ export async function enqueueSharedAlbumAuthorization(
     update: {
       targetClientKey: targetConfig.clientKey,
       targetAppId: targetConfig.appId,
-      ...(targetLocalAlbumId ? { targetLocalAlbumId } : {})
+      ...(targetLocalAlbumId ? { targetLocalAlbumId } : {}),
+      ...(changedClient ? { status: 'PENDING', providerResponse: Prisma.JsonNull, providerRequestId: null, authorizedAt: null, lastReconciledAt: null, errorCode: null, errorMessage: null } : {})
     }
   });
 
@@ -294,9 +302,10 @@ export async function enqueueSharedAlbumAuthorization(
     orderBy: { createdAt: 'desc' }
   });
   if (active) return { authorization, operation: active };
+  if (authorization.status === 'CONFLICT') throw conflict('上次授权结果未知，请先用原请求 ID 核实平台授权，不能自动重复提交。');
   if (authorization.status === 'AUTHORIZED') return { authorization, operation: null };
 
-  const snapshot = { sharedAlbumId, targetMiniAppKey: target, targetClientKey: targetConfig.clientKey, targetLocalAlbumId: targetLocalAlbumId ?? authorization.targetLocalAlbumId ?? null };
+  const snapshot = { sharedAlbumId, targetMiniAppKey: target, targetClientKey: targetConfig.clientKey, targetLocalAlbumId: targetLocalAlbumId ?? authorization.targetLocalAlbumId ?? null, targetOwnerAdminId: createdByAdminUserId };
   const dedupeKey = `AUTHORIZE_ALBUM:${sharedAlbumId}:${target}`;
   const operation = await sharedPrisma.sharedPlatformOperation.upsert({
     where: { dedupeKey },
@@ -319,7 +328,8 @@ export async function enqueueSharedAlbumAuthorization(
       completedAt: null,
       nextAttemptAt: new Date(),
       snapshotHash: hash(snapshot),
-      snapshotJson: snapshot
+      snapshotJson: snapshot,
+      ...(changedClient ? { providerResponse: Prisma.JsonNull, providerRequestId: null } : {})
     }
   });
   await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: { status: 'PENDING', errorCode: null, errorMessage: null } });
@@ -341,42 +351,51 @@ export async function enqueueSharedAlbumReconcile(sharedPrisma: Db, sharedAlbumI
   });
 }
 
-async function projectSharedAlbumToLocal(sharedAlbum: any, authorization: any, localPrisma: Db) {
-  if (!authorization.targetLocalAlbumId) return;
+export async function projectSharedAlbumToLocal(sharedAlbum: any, authorization: any, localPrisma: Db) {
+  if (!authorization.targetLocalAlbumId) throw conflict('目标剧目映射缺失，无法完成授权播放。');
   const playable = Boolean(sharedAlbum.onlineVersion && reviewPassed(sharedAlbum.reviewStatus) && published(sharedAlbum.publishStatus));
-  const localAlbum = await localPrisma.album.findUnique({ where: { id: authorization.targetLocalAlbumId }, select: { id: true } });
+  const localAlbum = await localPrisma.album.findUnique({ where: { id: authorization.targetLocalAlbumId }, select: { id: true, tiktokAlbumId: true } });
   if (!localAlbum) throw conflict(`目标小程序剧目不存在：${authorization.targetLocalAlbumId}`);
-  await localPrisma.album.update({
-    where: { id: authorization.targetLocalAlbumId },
-    data: {
-      tiktokAlbumId: sharedAlbum.tiktokAlbumId,
-      tiktokVersion: sharedAlbum.currentVersion,
-      onlineVersion: sharedAlbum.onlineVersion,
-      reviewStatus: sharedAlbum.reviewStatus,
-      publishStatus: sharedAlbum.publishStatus,
-      platformPublishedVersion: playable ? sharedAlbum.onlineVersion : null,
-      platformPublishedAt: playable ? sharedAlbum.platformPublishedAt ?? new Date() : null,
-      status: playable ? 'ONLINE' : 'OFFLINE'
-    }
-  });
-  const localEpisodes = await localPrisma.episode.findMany({ where: { albumId: authorization.targetLocalAlbumId }, orderBy: { episodeNo: 'asc' } });
-  const sharedEpisodes = [...sharedAlbum.episodes].sort((left: any, right: any) => left.episodeNo - right.episodeNo);
-  for (const sharedEpisode of sharedEpisodes) {
-    const localEpisode = localEpisodes.find((item: any) => item.episodeNo === sharedEpisode.episodeNo);
-    if (!localEpisode) continue;
-    await localPrisma.episode.update({
-      where: { id: localEpisode.id },
-      data: {
+  if (localAlbum.tiktokAlbumId && localAlbum.tiktokAlbumId !== sharedAlbum.tiktokAlbumId) throw conflict('目标剧目已绑定其他 TikTok 剧目，不会覆盖。');
+  await (localPrisma.$transaction as any)(async (tx: Db) => {
+    const localEpisodes = await tx.episode.findMany({ where: { albumId: authorization.targetLocalAlbumId }, orderBy: { episodeNo: 'asc' } });
+    const sharedEpisodes = [...sharedAlbum.episodes].sort((left: any, right: any) => left.episodeNo - right.episodeNo);
+    if (!sharedEpisodes.length) throw conflict('主剧目分集快照为空，不能完成播放映射。');
+    await tx.episode.updateMany({ where: { albumId: authorization.targetLocalAlbumId }, data: { status: 'OFFLINE', tiktokEpisodeId: null, byteplusVid: null } });
+    for (const sharedEpisode of sharedEpisodes) {
+      const localEpisode = localEpisodes.find((item: any) => item.episodeNo === sharedEpisode.episodeNo);
+      const data = {
         byteplusVid: sharedEpisode.media.byteplusVid,
         tiktokEpisodeId: sharedEpisode.tiktokEpisodeId,
         tiktokCoverPicId: sharedEpisode.tiktokCoverPicId,
-        tiktokVideoStatus: 'READY',
+        tiktokVideoStatus: 'READY' as const,
         tiktokVideoError: null,
-        byteplusUploadStatus: 'READY',
-        status: playable ? 'ONLINE' : 'READY'
+        byteplusUploadStatus: 'READY' as const,
+        title: sharedEpisode.title,
+        status: playable ? 'ONLINE' as const : 'OFFLINE' as const
+      };
+      if (localEpisode) {
+        if (localEpisode.byteplusVid && localEpisode.byteplusVid !== data.byteplusVid && localAlbum.tiktokAlbumId !== sharedAlbum.tiktokAlbumId) throw conflict(`第 ${sharedEpisode.episodeNo} 集已有不同 VID，不能覆盖。`);
+        await tx.episode.update({ where: { id: localEpisode.id }, data });
+      } else await tx.episode.create({ data: { ...data, albumId: authorization.targetLocalAlbumId, episodeNo: sharedEpisode.episodeNo, sortOrder: sharedEpisode.episodeNo, title: sharedEpisode.title, coverUrl: sharedEpisode.media.coverUrl, durationMs: sharedEpisode.media.durationMs } });
+    }
+    await tx.album.update({
+      where: { id: authorization.targetLocalAlbumId },
+      data: {
+        ...(sharedAlbum.verifiedSource ? { title: sharedAlbum.verifiedSource.title, description: sharedAlbum.verifiedSource.description,
+          coverUrl: sharedAlbum.verifiedSource.coverUrl, language: sharedAlbum.verifiedSource.language,
+          releaseYear: sharedAlbum.verifiedSource.releaseYear, dramaType: sharedAlbum.verifiedSource.dramaType, tagList: sharedAlbum.verifiedSource.tagList as Prisma.InputJsonValue } : {}),
+        tiktokAlbumId: sharedAlbum.tiktokAlbumId,
+        tiktokVersion: sharedAlbum.onlineVersion,
+        onlineVersion: sharedAlbum.onlineVersion,
+        reviewStatus: sharedAlbum.reviewStatus,
+        publishStatus: sharedAlbum.publishStatus,
+        platformPublishedVersion: playable ? sharedAlbum.onlineVersion : null,
+        platformPublishedAt: playable ? sharedAlbum.platformPublishedAt ?? new Date() : null,
+        status: playable ? 'ONLINE' : 'OFFLINE'
       }
     });
-  }
+  }, { timeout: 30_000 });
 }
 
 async function completeSharedOperation(sharedPrisma: Db, operation: any, data: Record<string, unknown>, now: Date) {
@@ -389,22 +408,41 @@ async function completeSharedOperation(sharedPrisma: Db, operation: any, data: R
 async function failSharedOperation(sharedPrisma: Db, operation: any, error: unknown, now: Date, maxRetries: number) {
   const retryable = Boolean((error as { retryable?: boolean }).retryable);
   const attemptCount = operation.attemptCount + 1;
-  const retry = retryable && attemptCount <= maxRetries;
+  const uncertain = operation.kind === 'AUTHORIZE_ALBUM' && retryable && !(operation.providerResponse as any)?.platformAuthorized;
+  const retry = !uncertain && retryable && attemptCount <= maxRetries;
+  const message = error instanceof Error ? error.message.slice(0, 500) : '共享平台任务失败。';
   await sharedPrisma.sharedPlatformOperation.update({
     where: { id: operation.id },
     data: {
-      status: retry ? 'PENDING' : 'FAILED',
+      status: uncertain ? 'CONFLICT' : retry ? 'PENDING' : 'FAILED',
       attemptCount,
       nextAttemptAt: retry ? new Date(now.getTime() + retryDelayMs(attemptCount)) : null,
       completedAt: retry ? null : now,
       errorCode: typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : null,
-      errorMessage: error instanceof Error ? error.message.slice(0, 500) : '共享平台任务失败。'
+      errorMessage: uncertain ? `${message} 平台授权结果未知，停止自动重复授权；请带请求 ID 核实。` : message,
+      providerRequestId: (error as { requestId?: string }).requestId
     }
+  });
+  if (operation.kind === 'AUTHORIZE_ALBUM' && operation.targetMiniAppKey) await sharedPrisma.miniAppAlbumAuthorization.updateMany({
+    where: { sharedAlbumId: operation.sharedAlbumId, miniAppKey: operation.targetMiniAppKey },
+    data: { status: uncertain ? 'CONFLICT' : 'FAILED', errorMessage: message, providerRequestId: (error as { requestId?: string }).requestId }
   });
 }
 
+async function refreshSharedSource(sharedPrisma: Db, album: any, options: SharedWorkerOptions) {
+  const owner = album.authorizations.find((entry: any) => entry.miniAppKey === album.ownerMiniAppKey);
+  const db = options.localPrismaByApp[album.ownerMiniAppKey];
+  const api = options.apiByApp[album.ownerMiniAppKey];
+  if (!owner?.targetLocalAlbumId || !db || !api) throw conflict('主剧目数据库、凭据或本地来源映射缺失。');
+  if (sharedMiniAppConfig(options.env, album.ownerMiniAppKey).clientKey !== album.ownerClientKey) throw conflict('主小程序 Client Key 已变化，不能用新凭据操作旧授权。');
+  const { verifyPlaybackSource } = await import('./shared-playback.service');
+  const source = await verifyPlaybackSource(db, api, owner.targetLocalAlbumId);
+  const updated = await registerSharedPlaybackSnapshot(sharedPrisma, options.env, album.ownerMiniAppKey, source);
+  return { ...updated, verifiedSource: source };
+}
+
 async function processSharedAuthorization(sharedPrisma: Db, operation: any, options: SharedWorkerOptions, now: Date) {
-  const album = await sharedPrisma.sharedTikTokAlbum.findUnique({
+  let album = await sharedPrisma.sharedTikTokAlbum.findUnique({
     where: { id: operation.sharedAlbumId },
     include: { episodes: { include: { media: true }, orderBy: { episodeNo: 'asc' } }, authorizations: true }
   });
@@ -412,47 +450,65 @@ async function processSharedAuthorization(sharedPrisma: Db, operation: any, opti
   const target = requireMiniAppKey(operation.targetMiniAppKey);
   const authorization = album.authorizations.find((item: any) => item.miniAppKey === target);
   if (!authorization) throw new Error('共享主剧目授权记录不存在。');
-  if (authorization.status === 'AUTHORIZED') {
-    await completeSharedOperation(sharedPrisma, operation, { providerResponse: { alreadyAuthorized: true } }, now);
-    return;
+  if (sharedMiniAppConfig(options.env, target).clientKey !== authorization.targetClientKey) throw conflict('目标 Client Key 已变化，请核实授权对象。');
+  if ((operation.snapshotJson as any)?.targetClientKey && (operation.snapshotJson as any).targetClientKey !== authorization.targetClientKey) throw conflict('授权排队后目标 Client Key 已变化，不能使用旧批准操作新凭据。');
+  const targetOwnerAdminId = (operation.snapshotJson as any)?.targetOwnerAdminId;
+  if (!targetOwnerAdminId && authorization.status !== 'AUTHORIZED' && !(operation.providerResponse as any)?.platformAuthorized && !(authorization.providerResponse as any)?.platformAuthorized) throw conflict('旧授权任务缺少目标 OWNER 批准，请通过新版授权入口重新提交。');
+  if (targetOwnerAdminId) {
+    const admin = await options.localPrismaByApp[target]?.adminUser.findUnique({ where: { id: targetOwnerAdminId } });
+    if (!admin || admin.role !== 'OWNER' || admin.status !== 'ACTIVE') throw conflict('目标 OWNER 授权已失效，停止平台授权。');
   }
+  album = await refreshSharedSource(sharedPrisma, album, options);
+  if (!album) throw conflict('主剧目线上快照刷新失败。');
   const ownerApi = options.apiByApp[album.ownerMiniAppKey];
   if (!ownerApi) throw new Error(`主小程序 ${album.ownerMiniAppKey} 的 TikTok API 未配置。`);
-  await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: { status: 'AUTHORIZING', errorCode: null, errorMessage: null } });
-  const result = await ownerApi.authorizeAlbum({ albumId: album.tiktokAlbumId, targetClientKeys: [authorization.targetClientKey], operateType: 1 });
-  const targetResult = result.results.find((item) => item.clientKey === authorization.targetClientKey) ?? result.results[0];
-  const authorized = targetResult?.authStatus === 1 && (!targetResult.errorCode || targetResult.errorCode === '0');
-  if (!authorized) {
-    await sharedPrisma.miniAppAlbumAuthorization.update({
-      where: { id: authorization.id },
-      data: {
-        status: 'FAILED',
-        providerRequestId: result.requestId,
-        providerResponse: result.raw as Prisma.InputJsonValue,
-        errorCode: targetResult?.errorCode ?? 'AUTHORIZATION_FAILED',
-        errorMessage: targetResult?.errorMessage ?? 'TikTok 未授权目标小程序。'
-      }
-    });
-    await completeSharedOperation(sharedPrisma, operation, { providerRequestId: result.requestId, providerResponse: result.raw }, now);
-    return;
+  const proof = (operation.providerResponse as any)?.platformAuthorized && (operation.providerResponse as any)?.targetClientKey === authorization.targetClientKey;
+  const savedProof = (authorization.providerResponse as any)?.platformAuthorized && (authorization.providerResponse as any)?.targetClientKey === authorization.targetClientKey;
+  if (authorization.status !== 'AUTHORIZED' && !proof && !savedProof) {
+    await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: { status: 'AUTHORIZING', errorCode: null, errorMessage: null } });
+    const result = await ownerApi.authorizeAlbum({ albumId: album.tiktokAlbumId, targetClientKeys: [authorization.targetClientKey], operateType: 1 });
+    const targetResult = result.results.find((item) => item.clientKey === authorization.targetClientKey);
+    const authorized = targetResult?.authStatus === 1 && (!targetResult.errorCode || targetResult.errorCode === '0'
+      || (targetResult.errorCode === '22010' && targetResult.errorMessage === 'authorization already exists'));
+    if (!authorized) {
+      await sharedPrisma.miniAppAlbumAuthorization.update({
+        where: { id: authorization.id },
+        data: {
+          status: 'FAILED',
+          providerRequestId: result.requestId,
+          providerResponse: result.raw as Prisma.InputJsonValue,
+          errorCode: targetResult?.errorCode ?? 'AUTHORIZATION_FAILED',
+          errorMessage: targetResult?.errorMessage ?? 'TikTok 未授权目标小程序。'
+        }
+      });
+      await sharedPrisma.sharedPlatformOperation.update({ where: { id: operation.id }, data: { status: 'FAILED', completedAt: now, nextAttemptAt: null, providerRequestId: result.requestId, providerResponse: result.raw as Prisma.InputJsonValue, errorCode: targetResult?.errorCode ?? 'AUTHORIZATION_FAILED', errorMessage: targetResult?.errorMessage ?? 'TikTok 未确认目标小程序授权。' } });
+      return;
+    }
+    try {
+      await (sharedPrisma.$transaction as any)(async (tx: Db) => {
+        const changed = await tx.miniAppAlbumAuthorization.updateMany({
+          where: { id: authorization.id, targetClientKey: authorization.targetClientKey },
+          data: {
+            status: 'AUTHORIZING',
+            providerRequestId: result.requestId,
+            providerResponse: { ...result.raw, platformAuthorized: true, targetClientKey: authorization.targetClientKey } as Prisma.InputJsonValue,
+            errorCode: null,
+            errorMessage: null,
+            authorizedAt: now,
+            lastReconciledAt: null
+          }
+        });
+        if (changed.count !== 1) throw conflict('授权期间目标凭据已变化，停止本地映射。');
+        await tx.sharedPlatformOperation.update({ where: { id: operation.id }, data: { providerRequestId: result.requestId, providerResponse: { ...result.raw, platformAuthorized: true, targetClientKey: authorization.targetClientKey } } });
+      });
+    } catch { throw new TikTokShortDramaApiError('平台已返回授权成功，但授权凭据保存失败，请核实原请求结果。', undefined, result.requestId, true); }
+    operation.providerResponse = { ...result.raw, platformAuthorized: true, targetClientKey: authorization.targetClientKey };
   }
   const localPrisma = options.localPrismaByApp[target];
-  await (sharedPrisma.$transaction as any)(async (tx: Db) => {
-    await tx.miniAppAlbumAuthorization.update({
-      where: { id: authorization.id },
-      data: {
-        status: 'AUTHORIZED',
-        providerRequestId: result.requestId,
-        providerResponse: result.raw as Prisma.InputJsonValue,
-        errorCode: null,
-        errorMessage: null,
-        authorizedAt: now,
-        lastReconciledAt: now
-      }
-    });
-    await completeSharedOperation(tx, operation, { providerRequestId: result.requestId, providerResponse: result.raw }, now);
-  });
-  if (localPrisma) await projectSharedAlbumToLocal(album, { ...authorization, status: 'AUTHORIZED' }, localPrisma);
+  if (!localPrisma) throw conflict('目标数据库未配置，平台授权尚未完成本地映射。');
+  await projectSharedAlbumToLocal(album, authorization, localPrisma);
+  await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: { status: 'AUTHORIZED', errorCode: null, errorMessage: null, lastReconciledAt: now } });
+  await completeSharedOperation(sharedPrisma, operation, { providerResponse: { platformAuthorized: true, targetClientKey: authorization.targetClientKey, mappedEpisodeCount: album.episodes.length, onlineVersion: album.onlineVersion } }, now);
 }
 
 async function processSharedReconcile(sharedPrisma: Db, operation: any, options: SharedWorkerOptions, now: Date) {
@@ -461,28 +517,58 @@ async function processSharedReconcile(sharedPrisma: Db, operation: any, options:
     include: { episodes: { include: { media: true }, orderBy: { episodeNo: 'asc' } }, authorizations: true }
   });
   if (!album) throw new Error('共享主剧目不存在。');
+  if (sharedMiniAppConfig(options.env, album.ownerMiniAppKey).clientKey !== album.ownerClientKey) throw conflict('主小程序 Client Key 已变化，停止旧授权对账。');
   const ownerApi = options.apiByApp[album.ownerMiniAppKey];
   if (!ownerApi) throw new Error(`主小程序 ${album.ownerMiniAppKey} 的 TikTok API 未配置。`);
   const queried = await ownerApi.queryAlbum({ albumId: album.tiktokAlbumId });
   const state = queried.data;
-  const updated = await sharedPrisma.sharedTikTokAlbum.update({
+  const onlineVersion = asNumber(state.online_version);
+  const online = onlineVersion && onlineVersion !== asNumber(state.version) ? await ownerApi.queryAlbum({ albumId: album.tiktokAlbumId, version: onlineVersion }) : queried;
+  const playable = published(state.publish_status) && onlineVersion && reviewPassed(online.data.review_status);
+  const summary = { current_version: state.current_version, online_version: onlineVersion, publish_status: state.publish_status, online_review_status: online.data.review_status };
+  const updated = playable ? await refreshSharedSource(sharedPrisma, album, options) : await sharedPrisma.sharedTikTokAlbum.update({
     where: { id: album.id },
     data: {
       currentVersion: asNumber(state.current_version) ?? album.currentVersion,
-      onlineVersion: asNumber(state.online_version) ?? album.onlineVersion,
-      reviewStatus: platformStatus(state.review_status),
+      onlineVersion: onlineVersion ?? null,
+      reviewStatus: platformStatus(online.data.review_status),
       publishStatus: platformStatus(state.publish_status),
       platformPublishedAt: published(state.publish_status) ? now : null
     },
     include: { episodes: { include: { media: true }, orderBy: { episodeNo: 'asc' } }, authorizations: true }
   });
+  const failures: Array<{ miniAppKey: string; message: string }> = [];
   for (const authorization of updated.authorizations) {
-    if (authorization.status !== 'AUTHORIZED') continue;
+    if (authorization.miniAppKey === updated.ownerMiniAppKey) continue;
+    if (authorization.status !== 'AUTHORIZED' && !(authorization.providerResponse as any)?.platformAuthorized) continue;
     const localPrisma = options.localPrismaByApp[authorization.miniAppKey];
-    if (localPrisma) await projectSharedAlbumToLocal(updated, authorization, localPrisma);
-    await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: { lastReconciledAt: now } });
+    try {
+      if (sharedMiniAppConfig(options.env, authorization.miniAppKey).clientKey !== authorization.targetClientKey) throw conflict('目标 Client Key 已变化，旧授权不能开放当前小程序播放。');
+      if (!localPrisma) throw conflict('目标数据库未配置。');
+      await projectSharedAlbumToLocal(updated, authorization, localPrisma);
+      await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: { status: 'AUTHORIZED', errorMessage: null, errorCode: null, lastReconciledAt: now } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '目标映射失败。';
+      failures.push({ miniAppKey: authorization.miniAppKey, message });
+      if (localPrisma && authorization.targetLocalAlbumId) {
+        await localPrisma.album.updateMany({ where: { id: authorization.targetLocalAlbumId }, data: { status: 'OFFLINE', platformPublishedVersion: null, platformPublishedAt: null } });
+      }
+      await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: { errorMessage: message } });
+    }
   }
-  await completeSharedOperation(sharedPrisma, operation, { providerRequestId: queried.requestId, providerResponse: state }, now);
+  if (failures.length) {
+    await sharedPrisma.sharedPlatformOperation.update({ where: { id: operation.id }, data: { status: 'FAILED', completedAt: now, nextAttemptAt: null, providerRequestId: queried.requestId, providerResponse: { ...summary, targetFailures: failures } as Prisma.InputJsonValue, errorMessage: '平台状态查询完成，但部分目标本地映射失败，已停止其本地播放。' } });
+  } else await completeSharedOperation(sharedPrisma, operation, { providerRequestId: queried.requestId, providerResponse: summary }, now);
+}
+
+export async function enqueueDueSharedReconciliations(sharedPrisma: Db, now = new Date()) {
+  const albums = await sharedPrisma.sharedTikTokAlbum.findMany({ where: { OR: ['main', 'taletv', 'cinereels', 'talereels'].map((owner) => ({
+    ownerMiniAppKey: owner, authorizations: { some: { miniAppKey: { not: owner }, status: 'AUTHORIZED' as const } }
+  })) }, orderBy: { updatedAt: 'asc' }, take: 20 });
+  for (const album of albums) {
+    const recent = await sharedPrisma.sharedPlatformOperation.findFirst({ where: { sharedAlbumId: album.id, kind: 'RECONCILE_ALBUM', OR: [{ status: { in: ['PENDING', 'PROCESSING'] } }, { createdAt: { gte: new Date(now.getTime() - 10 * 60_000) } }] } });
+    if (!recent) await enqueueSharedAlbumReconcile(sharedPrisma, album.id);
+  }
 }
 
 export async function processSharedPlatformOperations(sharedPrisma: Db, options: SharedWorkerOptions) {
@@ -507,8 +593,9 @@ export async function processSharedPlatformOperations(sharedPrisma: Db, options:
       data: { status: 'PROCESSING', startedAt: current }
     });
     if (!claim.count) continue;
-    if (pending.status === 'PROCESSING') {
+    if (pending.status === 'PROCESSING' && pending.kind === 'AUTHORIZE_ALBUM' && !(pending.providerResponse as any)?.platformAuthorized) {
       await sharedPrisma.sharedPlatformOperation.update({ where: { id: pending.id }, data: { status: 'CONFLICT', completedAt: current, nextAttemptAt: null, errorMessage: '共享平台操作中断，结果未知；请先对账。' } });
+      await sharedPrisma.miniAppAlbumAuthorization.updateMany({ where: { sharedAlbumId: pending.sharedAlbumId!, miniAppKey: pending.targetMiniAppKey! }, data: { status: 'CONFLICT', errorMessage: '授权执行中断，平台结果未知，请核实原请求，勿重复授权。' } });
       continue;
     }
     const job = { ...pending, status: 'PROCESSING' };

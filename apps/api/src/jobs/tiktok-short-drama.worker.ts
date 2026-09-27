@@ -10,7 +10,7 @@ import {
 import { BytePlusVodService } from '../services/byteplus-vod.service';
 import { TikTokShortDramaApiService } from '../services/tiktok-short-drama-api.service';
 import { enqueueDueReviewReconciliations, enqueueVideoSync, processPlatformSyncJobs } from '../services/platform-sync.service';
-import { processSharedPlatformOperations } from '../services/shared-platform.service';
+import { enqueueDueSharedReconciliations, processSharedPlatformOperations } from '../services/shared-platform.service';
 
 const defaultIntervalMs = 30_000;
 const defaultMaxRetries = 5;
@@ -262,7 +262,9 @@ export async function startUploadWorker() {
     }
     const apiByApp = Object.fromEntries(contexts.map((context) => [context.env.MINI_APP_KEY, context.platformApi]));
     const localPrismaByApp = Object.fromEntries(contexts.map((context) => [context.env.MINI_APP_KEY, context.prisma]));
+    await enqueueDueSharedReconciliations(sharedPrisma as any);
     await processSharedPlatformOperations(sharedPrisma as any, {
+      env,
       maxRetries: env.UPLOAD_MAX_RETRIES,
       localPrismaByApp,
       apiByApp,

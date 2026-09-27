@@ -97,6 +97,7 @@ async function createPrismaStub() {
   const adminPasswordHash = await hashPassword('not-used');
   state.admin.passwordHash = adminPasswordHash;
   const prisma: any = {
+    miniAppAlbumAuthorization: { findMany: async () => [], findFirst: async () => null },
     album: {
       findMany: async () => [album],
       findFirst: async () => ({ ...album, likes: [], favorites: [] }),

@@ -4,7 +4,7 @@ import {
   RefreshCw, Save, Settings2, Trash2, Users, Wifi
 } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { defaultEpisodeTitle, nextEpisodeNo, renumberEpisodes, resolveAppendEpisodes } from './episode-draft';
 import './styles.css';
 
@@ -66,6 +66,7 @@ type Album = {
   platformPublishedVersion?: number | null;
   reviewStatus?: string | null;
   publishStatus?: string | null;
+  sharedPlayback?: boolean;
   accessConfig?: { freeEpisodeCount?: number; rewardedAdEnabled?: boolean; rewardedPlacementId?: string; rewardedAdCount?: number } | null;
 };
 function platformNextStep(album: Album) {
@@ -104,8 +105,9 @@ type PlatformProviderResponse = {
   status?: string | number;
 };
 type PlatformSyncJob = { id: string; albumId?: string | null; kind: string; status: string; errorMessage?: string | null; providerJobId?: string | null; providerRequestId?: string | null; createdAt: string; completedAt?: string | null; attemptCount?: number; snapshotJson?: { priorityScore?: number; version?: number; uploadMode?: string } | null; providerResponse?: PlatformProviderResponse | null; album?: { title: string } | null; episode?: { title: string; episodeNo?: number } | null };
-type MultiAppReleaseStatus = { miniAppKey: MiniApp; prepared: boolean; reason?: 'NOT_PREPARED' | 'ACCESS_ERROR'; albumId?: string; tiktokAlbumId?: string | null; version?: number | null; onlineVersion?: number | null; reviewStatus?: string | null; publishStatus?: string | null; mediaReady?: boolean; videoReadyCount?: number; episodeCount?: number; error?: string; jobs?: Array<{ id: string; kind: string; status: string; uploadMode?: string; createdAt: string; completedAt?: string | null; errorMessage?: string | null; providerJobId?: string | null; providerRequestId?: string | null; providerResponse?: PlatformProviderResponse | null; episode?: { episodeNo: number; title: string } | null }> };
-type MultiAppReleaseAction = 'PREPARE' | 'UPLOAD_VIDEO_URL' | 'SYNC_MEDIA' | 'SYNC_VERSION' | 'SUBMIT_REVIEW' | 'RECONCILE' | 'SET_ONLINE_VERSION' | 'PUBLISH';
+type SharedPlaybackOperation = { id: string; kind: string; status: string; createdAt: string; completedAt?: string | null; providerRequestId?: string | null; errorMessage?: string | null; providerResponse?: { platformAuthorized?: boolean; mappedEpisodeCount?: number; onlineVersion?: number; online_review_status?: number; publish_status?: number } | null };
+type SharedPlaybackStatus = { miniAppKey: MiniApp; status: string; albumId?: string; tiktokAlbumId?: string; onlineVersion?: number; reviewStatus?: string; publishStatus?: string; localStatus?: string; episodeCount?: number; mappedEpisodeCount?: number; error?: string; requestId?: string; lastReconciledAt?: string; operations?: SharedPlaybackOperation[] };
+type SharedPlaybackAction = 'AUTHORIZE' | 'RECONCILE';
 type ContentTemplate = { id: string; name: string; dramaType: number; tagList: string; freeCount: number; rewardedEnabled: boolean; placementId: string; rewardedCount: number };
 const platformJobLabels: Record<string, string> = { COVER: '同步封面', VIDEO: '同步视频', ALBUM_VERSION: '同步版本', REVIEW: '送审', RECONCILE: '对账', SET_ONLINE_VERSION: '设线上版本', PUBLISH: '上架', UNPUBLISH: '下架' };
 
@@ -271,9 +273,9 @@ function Status({ value }: { value: string }) {
     DRAFT: '草稿', REVIEWING: '审核中', ONLINE: '已上线', OFFLINE: '已下线', REJECTED: '已驳回',
     UPLOADING: '上传中', READY: '已就绪', PENDING: '待处理', PROCESSING: '处理中', SUCCEEDED: '已完成',
     FAILED: '失败', ERROR: '错误', CONFLICT: '结果未知', ACTIVE: '进行中', COMPLETED: '已完成', EXPIRED: '已过期',
-    AUTHORIZED: '已授权', AUTHORIZING: '授权中', REVOKED: '已撤销', REVOKING: '撤销中'
+    AUTHORIZED: '已授权', AUTHORIZING: '授权与映射中', REVOKED: '已撤销', REVOKING: '撤销中', NOT_AUTHORIZED: '未授权', ACCESS_ERROR: '未授权访问'
   };
-  const tone = value === 'SUCCEEDED' || value === 'ONLINE' || value === 'READY' || value === 'COMPLETED' ? 'green' : value === 'FAILED' || value === 'ERROR' || value === 'OFFLINE' || value === 'REJECTED' || value === 'CONFLICT' ? 'pink' : 'yellow';
+  const tone = value === 'SUCCEEDED' || value === 'ONLINE' || value === 'READY' || value === 'COMPLETED' || value === 'AUTHORIZED' ? 'green' : value === 'FAILED' || value === 'ERROR' || value === 'OFFLINE' || value === 'REJECTED' || value === 'CONFLICT' || value === 'ACCESS_ERROR' ? 'pink' : 'yellow';
   return <span className={`status ${tone}`}><i />{labels[value] ?? value}</span>;
 }
 
@@ -299,11 +301,11 @@ function AdminApp() {
   const [jobs, setJobs] = useState<UploadJob[]>([]);
   const [platformJobs, setPlatformJobs] = useState<PlatformSyncJob[]>([]);
   const [releaseAlbumId, setReleaseAlbumId] = useState('');
-  const [releaseTargets, setReleaseTargets] = useState<MiniApp[]>([activeApp]);
-  const [releaseStatuses, setReleaseStatuses] = useState<MultiAppReleaseStatus[]>([]);
+  const [releaseTargets, setReleaseTargets] = useState<MiniApp[]>([]);
+  const [releaseStatuses, setReleaseStatuses] = useState<SharedPlaybackStatus[]>([]);
+  const playbackStatusRequest = useRef(0);
   const [releaseActionErrors, setReleaseActionErrors] = useState<Partial<Record<MiniApp, string>>>({});
-  const [releaseSourceUrls, setReleaseSourceUrls] = useState<Record<number, string>>({});
-  const [releaseWorking, setReleaseWorking] = useState<MultiAppReleaseAction | null>(null);
+  const [releaseWorking, setReleaseWorking] = useState<SharedPlaybackAction | null>(null);
   const [releaseError, setReleaseError] = useState('');
   const [overview, setOverview] = useState<Overview>({ albums: 0, episodes: 0, users: 0, likes: 0, favorites: 0, shares: 0, searches: 0, rewardedUnlocks: 0 });
   const [audience, setAudience] = useState<Audience | null>(null);
@@ -419,34 +421,36 @@ function AdminApp() {
   };
 
   const loadReleaseStatuses = async () => {
+    const request = ++playbackStatusRequest.current;
     if (!releaseAlbumId || !releaseTargets.length) { setReleaseStatuses([]); return; }
     try {
       const query = new URLSearchParams({ targetApps: releaseTargets.join(',') });
-      const result = await api<{ items: MultiAppReleaseStatus[] }>(`/admin/multi-app-releases/${releaseAlbumId}?${query}`, { headers: releaseAuthorizationHeaders(releaseTargets) });
+      const result = await api<{ items: SharedPlaybackStatus[] }>(`/admin/shared-playback/${releaseAlbumId}?${query}`, { headers: releaseAuthorizationHeaders(releaseTargets) });
+      if (request !== playbackStatusRequest.current) return;
       setReleaseStatuses(result.items);
       setReleaseError('');
     } catch (error) {
-      setReleaseError(error instanceof Error ? error.message : '读取多小程序状态失败');
+      if (request !== playbackStatusRequest.current) return;
+      setReleaseError(error instanceof Error ? error.message : '读取授权状态失败');
     }
   };
 
-  const runReleaseAction = async (action: MultiAppReleaseAction, sources?: Array<{ episodeNo: number; sourceUrl: string }>) => {
+  const runReleaseAction = async (action: SharedPlaybackAction) => {
     if (!releaseAlbumId || !releaseTargets.length) return;
-    if ((action === 'SUBMIT_REVIEW' || action === 'PUBLISH') && !window.confirm(`将分别对 ${releaseTargets.map((key) => miniAppNames[key]).join('、')} 执行${action === 'SUBMIT_REVIEW' ? '送审' : '上架'}。每个小程序保留独立审核和发布结果，确定继续？`)) return;
-    if (action === 'UPLOAD_VIDEO_URL' && !window.confirm(`为 ${sources?.length ?? 0} 集在所选目标小程序创建独立视频上传，可能产生额外存储和流量费用。源 VID 保留不变，确定继续？`)) return;
+    if (action === 'AUTHORIZE' && !window.confirm(`将当前已审核并上架的主剧目授权给 ${releaseTargets.map((key) => miniAppNames[key]).join('、')} 播放，共用平台剧目和视频，确定继续？`)) return;
     setReleaseWorking(action);
     try {
-      const result = await api<{ items: Array<{ miniAppKey: MiniApp; accepted: boolean; error?: string }> }>(`/admin/multi-app-releases/${releaseAlbumId}`, {
-        method: 'POST', headers: releaseAuthorizationHeaders(releaseTargets), body: JSON.stringify({ targetApps: releaseTargets, action, ...(action === 'SUBMIT_REVIEW' ? { priorityScore: 2 } : {}), ...(sources ? { sources } : {}) })
+      const result = await api<{ items: Array<{ miniAppKey: MiniApp; accepted: boolean; error?: string }> }>(`/admin/shared-playback/${releaseAlbumId}`, {
+        method: 'POST', headers: releaseAuthorizationHeaders(releaseTargets), body: JSON.stringify({ targetApps: releaseTargets, action })
       });
-      setReleaseActionErrors(Object.fromEntries(result.items.filter((item) => !item.accepted).map((item) => [item.miniAppKey, item.error ?? '操作未受理'])));
+      setReleaseActionErrors(Object.fromEntries(result.items.filter((item) => !item.accepted).map((item) => [item.miniAppKey, item.error ?? '未受理'])));
       await loadReleaseStatuses();
       const failed = result.items.filter((item) => !item.accepted);
       setMessage(failed.length
-        ? `已接受 ${result.items.length - failed.length} 个小程序任务；${failed.map((item) => `${miniAppNames[item.miniAppKey]}：${item.error}`).join('；')}`
-        : `${result.items.length} 个小程序已分别接受操作，请在下方查看各自的任务和审核结果。`);
+        ? `已接受 ${result.items.length - failed.length} 个目标；${failed.map((item) => `${miniAppNames[item.miniAppKey]}：${item.error}`).join('；')}`
+        : '授权播放操作已接受，正在等待平台授权和本地分集映射结果。');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '批量操作失败');
+      setMessage(error instanceof Error ? error.message : '授权操作失败');
     } finally {
       setReleaseWorking(null);
     }
@@ -457,7 +461,7 @@ function AdminApp() {
     if (!loggedIn || tab !== 'albums' || !releaseAlbumId || !releaseTargets.length) return;
     void loadReleaseStatuses();
     const timer = window.setInterval(() => void loadReleaseStatuses(), 10_000);
-    return () => window.clearInterval(timer);
+    return () => { window.clearInterval(timer); playbackStatusRequest.current += 1; };
   }, [loggedIn, tab, releaseAlbumId, releaseTargets.join(',')]);
   useEffect(() => {
     if (!draftReady || createdAlbumId || targetAlbumId || !episodes.length) return;
@@ -971,7 +975,7 @@ function AdminApp() {
       setPlatformWorking(null);
     }
   };
-  const releaseJobRows = releaseStatuses.flatMap((item) => (item.jobs ?? []).map((job) => ({ ...job, miniAppKey: item.miniAppKey, albumId: item.albumId })))
+  const releaseJobRows = releaseStatuses.flatMap((item) => (item.operations ?? []).map((job) => ({ ...job, miniAppKey: item.miniAppKey })))
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()).slice(0, 50);
   const canWriteContent = hasAdminPermission(currentAdmin?.role, 'content.write');
   const canSyncContent = hasAdminPermission(currentAdmin?.role, 'content.sync');
@@ -1064,64 +1068,54 @@ function AdminApp() {
             <td><Status value={album.status} /><small>当前版本审核：{album.reviewStatus ?? '未送审'} · 上架：{album.publishStatus ?? '未上架'}</small></td>
             <td>
               <div className="button-row">
-                {canSyncContent && <>
+                {canSyncContent && !album.sharedPlayback && <>
                   <button className="secondary" disabled={platformWorking !== null} onClick={() => void syncTikTokMedia(album)}>{platformWorking === `${album.id}:media` ? '媒资同步中...' : '同步媒资'}</button>
                   <button className="secondary" disabled={platformWorking !== null || reviewing} onClick={() => void runPlatformAction(album, 'sync-version')}>{platformWorking === `${album.id}:sync-version` ? '同步中...' : '同步版本'}</button>
                   <button className="secondary" disabled={platformWorking !== null} onClick={() => void runPlatformAction(album, 'reconcile')}>对账</button>
                 </>}
-                {canReviewContent && (reviewing
+                {canReviewContent && !album.sharedPlayback && (reviewing
                   ? <span className="review-priority">审核优先级：已送审，不可修改</span>
                   : <label className="review-priority">审核优先级<select aria-label={`${album.title}的审核优先级`} value={reviewPriorities[album.id] ?? 2} disabled={platformWorking !== null} onChange={(event) => setReviewPriorities((current) => ({ ...current, [album.id]: Number(event.target.value) as 1 | 2 }))}><option value={2}>普通（约两周）</option><option value={1}>加急（1–3 工作日）</option></select></label>)}
-                {canReviewContent && <button className="secondary" disabled={platformWorking !== null || reviewing || !album.tiktokVersion || album.reviewStatus === 'PASSED'} onClick={() => void runPlatformAction(album, 'review-submit')}>送审</button>}
-                {canPublishContent && <>
+                {canReviewContent && !album.sharedPlayback && <button className="secondary" disabled={platformWorking !== null || reviewing || !album.tiktokVersion || album.reviewStatus === 'PASSED'} onClick={() => void runPlatformAction(album, 'review-submit')}>送审</button>}
+                {canPublishContent && !album.sharedPlayback && <>
                   <button className="secondary" disabled={platformWorking !== null || album.reviewStatus !== 'PASSED' || album.onlineVersion === album.tiktokVersion} onClick={() => void runPlatformAction(album, 'online-version')}>设线上版本</button>
                   <button className="save-button" disabled={platformWorking !== null || album.publishStatus === 'LISTED' || album.publishStatus === '1'} onClick={() => void runPlatformAction(album, 'online')}>上架</button>
                   <button className="secondary" disabled={platformWorking !== null} onClick={() => void runPlatformAction(album, 'offline')}>下架</button>
                 </>}
               </div>
-              <small className="platform-next-step">建议下一步：{platformNextStep(album)}</small>
+              <small className="platform-next-step">{album.sharedPlayback ? '授权播放副本，平台版本由主小程序管理。' : `建议下一步：${platformNextStep(album)}`}</small>
             </td>
           </tr>;
         })}</tbody></table></div>
         <div className="platform-jobs-heading"><h3>最近 50 条平台任务</h3><button className="secondary" type="button" disabled={loading} onClick={() => void loadData()}>刷新状态</button></div>
         <div className="table-wrap"><table className="platform-jobs-table"><colgroup><col className="platform-job-target-column" /><col className="platform-job-action-column" /><col className="platform-job-status-column" /><col className="platform-job-business-column" /><col className="platform-job-detail-column" /></colgroup><thead><tr><th>剧目 / 分集</th><th>操作</th><th>任务状态</th><th>平台业务结果</th><th>时间 / 详情</th></tr></thead><tbody>{platformJobs.map((job) => { const details = platformBusinessDetails(job); return <tr key={job.id}><td><span className="platform-job-target" title={job.album?.title ?? job.episode?.title ?? job.albumId ?? '-'}>{job.album?.title ?? job.episode?.title ?? job.albumId ?? '-'}</span>{job.episode?.episodeNo && <small>第 {job.episode.episodeNo} 集 · {job.episode.title}</small>}</td><td>{platformJobLabels[job.kind] ?? job.kind}{job.kind === 'REVIEW' ? `（${job.snapshotJson?.priorityScore === 1 ? '加急' : job.snapshotJson?.priorityScore === 2 ? '普通' : '优先级未记录'}）` : ''}{(job.snapshotJson?.version ?? job.providerResponse?.version) ? ` · 版本 ${job.snapshotJson?.version ?? job.providerResponse?.version}` : ''}</td><td><Status value={job.status} /></td><td><strong className="platform-business-result">{platformBusinessResult(job)}</strong></td><td><small>{new Date(job.completedAt ?? job.createdAt).toLocaleString('zh-CN')}</small>{details.map((detail, index) => <small key={`${job.id}-detail-${index}`} className={detail.startsWith('审核原因') || detail.includes('异常') || detail.startsWith('任务错误') ? 'table-error' : 'platform-job-detail'}>{detail}</small>)}</td></tr>; })}</tbody></table>{!platformJobs.length && <p className="empty-copy table-empty">暂无平台同步任务</p>}</div>
       </Panel>}
-      {tab === 'albums' && canPublishContent && <Panel title="多小程序独立发布">
+      {tab === 'albums' && canPublishContent && <Panel title="已审核剧目授权播放">
         <div className="multi-release-controls">
-          <label>源剧目 · {miniAppNames[activeApp]}<select value={releaseAlbumId} onChange={(event) => { setReleaseAlbumId(event.target.value); setReleaseStatuses([]); setReleaseActionErrors({}); setReleaseSourceUrls({}); }}><option value="">选择剧目</option>{albums.map((album) => <option key={album.id} value={album.id}>{album.title}</option>)}</select></label>
-          <fieldset><legend>目标小程序</legend><div className="multi-release-targets">{(Object.keys(miniAppNames) as MiniApp[]).map((key) => <label key={key}><input type="checkbox" checked={releaseTargets.includes(key)} onChange={(event) => setReleaseTargets((current) => event.target.checked ? [...current, key] : current.filter((item) => item !== key))} />{miniAppNames[key]}</label>)}</div></fieldset>
+          <label>主剧目 · {miniAppNames[activeApp]}<select value={releaseAlbumId} disabled={releaseWorking !== null} onChange={(event) => { playbackStatusRequest.current += 1; setReleaseAlbumId(event.target.value); setReleaseStatuses([]); setReleaseActionErrors({}); }}><option value="">选择已上架主剧目</option>{albums.filter((album) => !album.sharedPlayback && album.onlineVersion && ['LISTED', '1'].includes(album.publishStatus ?? '')).map((album) => <option key={album.id} value={album.id}>{album.title}</option>)}</select></label>
+          <fieldset><legend>目标小程序</legend><div className="multi-release-targets">{(Object.keys(miniAppNames) as MiniApp[]).filter((key) => key !== activeApp).map((key) => <label key={key}><input type="checkbox" disabled={releaseWorking !== null} checked={releaseTargets.includes(key)} onChange={(event) => setReleaseTargets((current) => event.target.checked ? [...current, key] : current.filter((item) => item !== key))} />{miniAppNames[key]}</label>)}</div></fieldset>
           <div className="multi-release-actions">
-            {([['PREPARE', '准备目标剧目'], ['SYNC_MEDIA', '同步媒资'], ['SYNC_VERSION', '同步版本'], ['SUBMIT_REVIEW', '送审'], ['RECONCILE', '对账'], ['SET_ONLINE_VERSION', '设线上版本'], ['PUBLISH', '上架']] as Array<[MultiAppReleaseAction, string]>).map(([action, label]) => <button key={action} type="button" className={action === 'PUBLISH' ? 'save-button' : 'secondary'} disabled={!releaseAlbumId || !releaseTargets.length || releaseWorking !== null} onClick={() => void runReleaseAction(action)}>{releaseWorking === action ? '处理中...' : label}</button>)}
-            <button type="button" className="secondary" title="刷新各小程序状态" aria-label="刷新各小程序状态" disabled={!releaseAlbumId || !releaseTargets.length} onClick={() => void loadReleaseStatuses()}><RefreshCw size={15} /></button>
+            <button className="save-button" type="button" disabled={!releaseAlbumId || !releaseTargets.length || releaseWorking !== null} onClick={() => void runReleaseAction('AUTHORIZE')}>{releaseWorking === 'AUTHORIZE' ? '核实并授权中...' : '授权播放'}</button>
+            <button className="secondary" type="button" disabled={!releaseAlbumId || !releaseTargets.length || releaseWorking !== null} onClick={() => void runReleaseAction('RECONCILE')}>对账</button>
+            <button className="secondary" type="button" title="刷新授权状态" aria-label="刷新授权状态" disabled={!releaseAlbumId || !releaseTargets.length} onClick={() => void loadReleaseStatuses()}><RefreshCw size={15} /></button>
           </div>
           {releaseError && <p className="table-error">{releaseError}</p>}
         </div>
-        {releaseAlbumId && <details className="independent-upload"><summary>独立媒资上传 · 原文件下载地址</summary>
-          <div className="table-wrap"><table className="independent-upload-table"><thead><tr><th>分集</th><th>公网 HTTPS 原视频地址</th><th>操作</th></tr></thead><tbody>{episodes.filter((episode) => episode.albumId === releaseAlbumId).sort((left, right) => left.episodeNo - right.episodeNo).map((episode) => <tr key={episode.id}>
-            <td>第 {episode.episodeNo} 集 · {episode.title}</td>
-            <td><input className="release-url-input" type="url" aria-label={`第 ${episode.episodeNo} 集原文件下载地址`} placeholder="https://…/episode.mp4" value={releaseSourceUrls[episode.episodeNo] ?? ''} onChange={(event) => setReleaseSourceUrls((current) => ({ ...current, [episode.episodeNo]: event.target.value }))} /></td>
-            <td><button type="button" className="secondary" disabled={releaseWorking !== null || !releaseTargets.length || !releaseSourceUrls[episode.episodeNo]?.trim()} onClick={() => void runReleaseAction('UPLOAD_VIDEO_URL', [{ episodeNo: episode.episodeNo, sourceUrl: releaseSourceUrls[episode.episodeNo].trim() }])}>上传此集</button></td>
-          </tr>)}</tbody></table></div>
-          <button type="button" className="secondary" disabled={releaseWorking !== null || !releaseTargets.length || !Object.values(releaseSourceUrls).some((url) => url.trim())} onClick={() => void runReleaseAction('UPLOAD_VIDEO_URL', Object.entries(releaseSourceUrls).filter(([, url]) => url.trim()).map(([episodeNo, sourceUrl]) => ({ episodeNo: Number(episodeNo), sourceUrl: sourceUrl.trim() })))}>上传填写地址的分集</button>
-        </details>}
-        <div className="table-wrap"><table className="multi-release-table"><thead><tr><th>小程序</th><th>媒资</th><th>TikTok 剧目 / 版本</th><th>审核 / 上架</th><th>最近任务</th></tr></thead><tbody>{releaseStatuses.map((item) => {
-          const reconciliation = item.jobs?.find((job) => job.kind === 'RECONCILE' && job.status === 'SUCCEEDED');
-          return <tr key={item.miniAppKey}>
-            <td><strong>{miniAppNames[item.miniAppKey]}</strong><small>{item.albumId ?? (item.reason === 'NOT_PREPARED' ? '本批次目标剧目尚未创建' : '未授权')}</small></td>
-            <td>{item.prepared ? `${item.videoReadyCount ?? 0} / ${item.episodeCount ?? 0} 集${item.mediaReady ? ' · 封面就绪' : ''}` : '-'}</td>
-            <td>{item.tiktokAlbumId ?? '-'}<small>当前 {item.version ?? '-'} · 线上 {item.onlineVersion ?? '-'}</small></td>
-            <td>{item.prepared ? `${reviewResultLabel(item.reviewStatus)} · ${publishResultLabel(item.publishStatus)}` : item.reason === 'NOT_PREPARED' ? '待准备' : '未授权'}{reconciliation?.providerResponse?.review_fail_reasons?.map((reason, index) => <small className="table-error" key={index}>{reason}</small>)}</td>
-            <td>{releaseActionErrors[item.miniAppKey] && <small className="table-error">{releaseActionErrors[item.miniAppKey]}</small>}{item.error && <small className="table-error">{item.error}</small>}{item.jobs?.slice(0, 3).map((job) => <small key={job.id} className={job.errorMessage ? 'table-error' : 'platform-job-detail'}>{platformJobLabels[job.kind] ?? job.kind}：{job.status === 'SUCCEEDED' ? '任务完成' : job.status === 'FAILED' ? '失败' : job.status === 'CONFLICT' ? '结果未知' : '处理中'}{job.errorMessage ? ` · ${job.errorMessage}` : ''}</small>)}</td>
-          </tr>;
-        })}</tbody></table>{releaseAlbumId && !releaseStatuses.length && <p className="empty-copy table-empty">暂无状态</p>}</div>
-        <div className="platform-jobs-heading"><h3>跨小程序任务日志</h3></div>
-        <div className="table-wrap"><table className="multi-release-log-table"><thead><tr><th>小程序 / 剧目</th><th>操作</th><th>任务状态</th><th>平台业务结果</th><th>时间 / 详情</th></tr></thead><tbody>{releaseJobRows.map((job) => <tr key={`${job.miniAppKey}:${job.id}`}>
-          <td><strong>{miniAppNames[job.miniAppKey]}</strong><small>{job.episode ? `第 ${job.episode.episodeNo} 集 · ${job.episode.title}` : job.albumId}</small></td>
-          <td>{job.uploadMode === 'URL' ? '独立视频上传' : platformJobLabels[job.kind] ?? job.kind}</td>
+        <div className="table-wrap"><table className="multi-release-table"><thead><tr><th>小程序</th><th>授权状态</th><th>共享 TikTok 剧目 / 版本</th><th>本地映射 / 播放状态</th><th>结果 / 错误</th></tr></thead><tbody>{releaseStatuses.map((item) => <tr key={item.miniAppKey}>
+          <td><strong>{miniAppNames[item.miniAppKey]}</strong></td>
+          <td><Status value={item.status} /></td>
+          <td>{item.tiktokAlbumId ?? '-'}<small>线上版本 {item.onlineVersion ?? '-'}</small></td>
+          <td>{item.mappedEpisodeCount ?? 0} / {item.episodeCount ?? 0} 集<small>{item.localStatus === 'ONLINE' && item.status === 'AUTHORIZED' && item.mappedEpisodeCount === item.episodeCount ? '授权与本地映射完成' : '尚未开放播放'}</small><small>{item.albumId}</small></td>
+          <td>{(releaseActionErrors[item.miniAppKey] ?? item.error) && <small className="table-error">{releaseActionErrors[item.miniAppKey] ?? item.error}</small>}{item.requestId && <small className="platform-job-detail">TikTok 请求 ID：{item.requestId}</small>}{item.lastReconciledAt && <small>最后对账：{new Date(item.lastReconciledAt).toLocaleString('zh-CN')}</small>}</td>
+        </tr>)}</tbody></table>{!releaseStatuses.length && <p className="empty-copy table-empty">{releaseAlbumId ? '请选择目标小程序' : '请选择已上架主剧目'}</p>}</div>
+        <div className="platform-jobs-heading"><h3>授权播放任务日志</h3></div>
+        <div className="table-wrap"><table className="multi-release-log-table"><thead><tr><th>小程序</th><th>操作</th><th>任务状态</th><th>平台 / 本地结果</th><th>时间 / 详情</th></tr></thead><tbody>{releaseJobRows.map((job) => <tr key={`${job.miniAppKey}:${job.id}`}>
+          <td>{miniAppNames[job.miniAppKey]}</td>
+          <td>{job.kind === 'AUTHORIZE_ALBUM' ? '授权播放' : '授权对账'}</td>
           <td><Status value={job.status} /></td>
-          <td><strong className="platform-business-result">{platformBusinessResult(job)}</strong></td>
-          <td><small>{new Date(job.completedAt ?? job.createdAt).toLocaleString('zh-CN')}</small>{platformBusinessDetails(job).map((detail, index) => <small key={index} className={detail.startsWith('审核原因') || detail.startsWith('任务错误') ? 'table-error' : 'platform-job-detail'}>{detail}</small>)}</td>
-        </tr>)}</tbody></table>{releaseAlbumId && !releaseJobRows.length && <p className="empty-copy table-empty">尚无跨小程序平台任务；先准备目标剧目。</p>}</div>
+          <td>{job.status === 'SUCCEEDED' ? (job.kind === 'AUTHORIZE_ALBUM' ? `平台已授权 · ${job.providerResponse?.mappedEpisodeCount ?? '-'} 集映射完成` : '主剧目状态与目标映射已对账') : job.status === 'CONFLICT' ? '授权结果未知，勿重复提交' : job.status === 'FAILED' ? '失败，请查看详情' : '等待平台结果'}</td>
+          <td><small>{new Date(job.completedAt ?? job.createdAt).toLocaleString('zh-CN')}</small>{job.errorMessage && <small className="table-error">{job.errorMessage}</small>}{job.providerRequestId && <small className="platform-job-detail">TikTok 请求 ID：{job.providerRequestId}</small>}</td>
+        </tr>)}</tbody></table>{!releaseJobRows.length && <p className="empty-copy table-empty">暂无授权播放任务</p>}</div>
       </Panel>}
       {tab === 'ads' && <Panel title="进入广告策略" description="配置将在新的小程序启动会话生效。激励门槛模式须先在 TikTok 平台确认可用。"><form className="policy-form" onSubmit={saveEntryAdPolicy}><label className="check-row"><input type="checkbox" checked={entryAdPolicy.enabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, enabled: event.target.checked }))} />启用进入广告</label><div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, mode: event.target.value as AppEntryAdPolicy['mode'] }))}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>广告位 ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required={entryAdPolicy.enabled} /></label><label>每次进入广告观看次数<input type="number" min="1" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入并重试</option></select></label></div><p className="form-help">当前策略版本：{entryAdPolicy.version}。进入广告与剧集解锁广告使用独立会话和广告位。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存进入广告策略</>}</button></form></Panel>}
       {tab === 'audience' && audience && <><section className="metrics"><Metric label="活跃观众" value={String(audience.activeUsers)} change={`${audience.from} 至 ${audience.to}`} icon={Users} tone="green" /><Metric label="新增观众" value={String(audience.newUsers)} change={`日活 ${audience.dau} · 周活 ${audience.wau} · 月活 ${audience.mau}`} icon={Database} tone="cyan" /><Metric label="观看会话" value={String(audience.watchSessions)} change="播放器会话开始次数" icon={Film} tone="pink" /><Metric label="完播集数" value={String(audience.completedEpisodes)} change="每用户每集首次完播" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="观众趋势" description="按天统计新增和活跃用户"><DailyBars title="新增观众" items={audience.dailyNewUsers} /><DailyBars title="日活用户" items={audience.dailyActiveUsers} /></Panel><Panel title="互动概览" description="帮助判断内容和运营活动表现"><BarList title="互动指标" items={[{ label: '收藏', value: audience.favorites }, { label: '分享', value: audience.shares }, { label: '搜索', value: audience.searches }]} color="cyan" /></Panel></div></>}
