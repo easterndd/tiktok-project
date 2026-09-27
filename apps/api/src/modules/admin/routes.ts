@@ -75,8 +75,9 @@ const sharedAuthorizationInput = z.object({
 const releaseTargetsInput = z.array(z.enum(['main', 'taletv', 'cinereels', 'talereels'])).min(1).max(4);
 const multiAppReleaseInput = z.object({
   targetApps: releaseTargetsInput,
-  action: z.enum(['PREPARE', 'SYNC_MEDIA', 'SYNC_VERSION', 'SUBMIT_REVIEW', 'RECONCILE', 'SET_ONLINE_VERSION', 'PUBLISH']),
-  priorityScore: z.union([z.literal(1), z.literal(2)]).optional()
+  action: z.enum(['PREPARE', 'UPLOAD_VIDEO_URL', 'SYNC_MEDIA', 'SYNC_VERSION', 'SUBMIT_REVIEW', 'RECONCILE', 'SET_ONLINE_VERSION', 'PUBLISH']),
+  priorityScore: z.union([z.literal(1), z.literal(2)]).optional(),
+  sources: z.array(z.object({ episodeNo: z.number().int().positive(), sourceUrl: z.string().trim().url().max(4096) })).min(1).max(500).optional()
 }).strict();
 
 async function releaseAdminIds(app: FastifyInstance, request: FastifyRequest, targets: MiniAppKey[]) {
@@ -1195,7 +1196,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const input = multiAppReleaseInput.parse(request.body);
     const operator = await app.prisma.adminUser.findUnique({ where: { id: request.user.sub }, select: { email: true } });
     if (!operator) throw Object.assign(new Error('当前管理员不存在。'), { statusCode: 403 });
-    const result = await runMultiAppRelease({ sourceDb: app.prisma as any, dbByApp: app.miniAppPrisma as any, env: app.rootConfig, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: input.targetApps, operatorEmail: operator.email, authorizedAdminIds: await releaseAdminIds(app, request, input.targetApps), action: input.action, priorityScore: input.priorityScore });
+    const result = await runMultiAppRelease({ sourceDb: app.prisma as any, dbByApp: app.miniAppPrisma as any, env: app.rootConfig, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: input.targetApps, operatorEmail: operator.email, authorizedAdminIds: await releaseAdminIds(app, request, input.targetApps), action: input.action, priorityScore: input.priorityScore, sources: input.sources });
     await audit(app, request.user.sub, `MULTI_APP_${input.action}`, 'Album', albumId, { targets: result.items.map((item) => ({ miniAppKey: item.miniAppKey, accepted: item.accepted })) });
     return result;
   });

@@ -16,7 +16,7 @@ const source = {
   episodes: [{ id: 'source-episode', episodeNo: 1, title: 'Episode 1', description: '', sortOrder: 1, isFree: true, byteplusVid: 'vid-1', durationMs: 1000, coverAsset: null, coverAssetId: null }]
 };
 
-test('prepares an independent target album with the same BytePlus VID and its own ad placement', async () => {
+test('prepares an independent target draft without copying the source VID or its ad placement', async () => {
   const created: Record<string, any> = {};
   const jobs: string[] = [];
   const target: any = {
@@ -48,8 +48,9 @@ test('prepares an independent target album with the same BytePlus VID and its ow
   assert.equal(created.album.id, targetReleaseAlbumId('main', source.id));
   assert.equal(created.album.tiktokAlbumId, undefined);
   assert.equal(created.album.accessConfig.rewardedPlacementId, 'tale-ad');
-  assert.equal(created.episode.byteplusVid, 'vid-1');
-  assert.deepEqual(jobs, ['COVER', 'VIDEO']);
+  assert.equal(created.episode.byteplusVid, null);
+  assert.equal(created.episode.byteplusUploadStatus, 'PENDING');
+  assert.deepEqual(jobs, ['COVER']);
 });
 
 test('submits separate review jobs for selected mini apps', async () => {
@@ -102,7 +103,8 @@ test('does not overwrite a prepared target whose media differs from the source',
       coverAsset: source.coverAsset, releaseYear: source.releaseYear, dramaType: source.dramaType,
       tagList: source.tagList, episodes: [{ episodeNo: 1, title: 'Episode 1', byteplusVid: 'different-vid' }]
     }) },
-    $transaction: async () => { wrote = true; }
+    $transaction: async () => { wrote = true; },
+    platformSyncJob: { findMany: async () => [] }
   };
   const result = await runMultiAppRelease({ sourceDb: { album: { findUnique: async () => source } } as any, dbByApp: { taletv: target }, env, sourceApp: 'main', sourceAlbumId: source.id, targetApps: ['taletv'], operatorEmail: 'owner@example.com', action: 'PREPARE' });
   assert.equal(result.items[0].accepted, false);
@@ -125,7 +127,7 @@ test('queues both album and episode covers for an independent target', async () 
   };
   const result = await runMultiAppRelease({ sourceDb: { album: { findUnique: async () => ({ id: source.id }) } } as any, dbByApp: { taletv: target }, env, sourceApp: 'main', sourceAlbumId: source.id, targetApps: ['taletv'], operatorEmail: 'owner@example.com', action: 'SYNC_MEDIA' });
   assert.equal(result.items[0].accepted, true);
-  assert.deepEqual(queued, ['COVER:album-cover', 'COVER:episode-cover', 'VIDEO:episode-1']);
+  assert.deepEqual(queued, ['COVER:album-cover', 'COVER:episode-cover']);
 });
 
 test('returns target-app jobs for the cross-app log after a different-email owner authorizes', async () => {
@@ -142,4 +144,51 @@ test('returns target-app jobs for the cross-app log after a different-email owne
   assert.equal(result.items[0].prepared, true);
   assert.equal(result.items[0].jobs?.[0].kind, 'REVIEW');
   assert.equal(result.items[0].reviewStatus, 'REVIEWING');
+});
+
+test('requires a single-episode upload before enabling a batch for each target', async () => {
+  let queued = 0;
+  const target: any = {
+    adminUser: { findUnique: async () => ({ id: 'owner', role: 'OWNER', status: 'ACTIVE' }) },
+    album: { findUnique: async () => ({ id: 'target-album', episodes: [] }) },
+    platformSyncJob: { findFirst: async () => null, upsert: async () => { queued += 1; } }
+  };
+  const result = await runMultiAppRelease({ sourceDb: { album: { findUnique: async () => source } } as any, dbByApp: { taletv: target }, env,
+    sourceApp: 'main', sourceAlbumId: source.id, targetApps: ['taletv'], operatorEmail: 'owner@example.com', action: 'UPLOAD_VIDEO_URL',
+    sources: [{ episodeNo: 1, sourceUrl: 'https://example.com/one.mp4' }, { episodeNo: 2, sourceUrl: 'https://example.com/two.mp4' }]
+  });
+  assert.equal(result.items[0].accepted, false);
+  assert.match(result.items[0].error ?? '', /先仅提交一集/);
+  assert.equal(queued, 0);
+});
+
+test('creates URL upload tasks for a legacy target with a scope-rejected source VID', async () => {
+  let queued: any;
+  const target: any = {
+    adminUser: { findUnique: async () => ({ id: 'owner', role: 'OWNER', status: 'ACTIVE' }) },
+    album: { findUnique: async () => ({ id: 'target-album', episodes: [{ id: 'target-episode', albumId: 'target-album', episodeNo: 1, title: 'Episode 1', byteplusVid: 'vid-1', tiktokVideoStatus: 'FAILED' }] }) },
+    platformSyncJob: { findFirst: async () => null, findUnique: async () => null, upsert: async ({ create }: any) => { queued = create; return { id: 'url-upload' }; } }
+  };
+  const result = await runMultiAppRelease({ sourceDb: { album: { findUnique: async () => source } } as any, dbByApp: { taletv: target }, env,
+    sourceApp: 'main', sourceAlbumId: source.id, targetApps: ['taletv'], operatorEmail: 'owner@example.com', action: 'UPLOAD_VIDEO_URL',
+    sources: [{ episodeNo: 1, sourceUrl: 'https://example.com/one.mp4' }]
+  });
+  assert.equal(result.items[0].accepted, true);
+  assert.match(queued.dedupeKey, /^VIDEO_URL:/);
+  assert.equal(queued.snapshotJson.sourceVid, 'vid-1');
+  assert.equal(queued.snapshotJson.uploadMode, 'URL');
+  assert.equal(queued.snapshotJson.expectedVid, 'vid-1');
+});
+
+test('rejects URL uploads to the source app without creating any task', async () => {
+  const db: any = {
+    adminUser: { findUnique: async () => ({ id: 'owner', role: 'OWNER', status: 'ACTIVE' }) },
+    album: { findUnique: async () => source }
+  };
+  const result = await runMultiAppRelease({ sourceDb: db, dbByApp: { main: db }, env,
+    sourceApp: 'main', sourceAlbumId: source.id, targetApps: ['main'], operatorEmail: 'owner@example.com', action: 'UPLOAD_VIDEO_URL',
+    sources: [{ episodeNo: 1, sourceUrl: 'https://example.com/one.mp4' }]
+  });
+  assert.equal(result.items[0].accepted, false);
+  assert.match(result.items[0].error ?? '', /源小程序不参与/);
 });

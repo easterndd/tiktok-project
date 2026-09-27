@@ -103,9 +103,9 @@ type PlatformProviderResponse = {
   review_id?: string;
   status?: string | number;
 };
-type PlatformSyncJob = { id: string; albumId?: string | null; kind: string; status: string; errorMessage?: string | null; providerRequestId?: string | null; createdAt: string; completedAt?: string | null; attemptCount?: number; snapshotJson?: { priorityScore?: number; version?: number } | null; providerResponse?: PlatformProviderResponse | null; album?: { title: string } | null; episode?: { title: string; episodeNo?: number } | null };
-type MultiAppReleaseStatus = { miniAppKey: MiniApp; prepared: boolean; reason?: 'NOT_PREPARED' | 'ACCESS_ERROR'; albumId?: string; tiktokAlbumId?: string | null; version?: number | null; onlineVersion?: number | null; reviewStatus?: string | null; publishStatus?: string | null; mediaReady?: boolean; videoReadyCount?: number; episodeCount?: number; error?: string; jobs?: Array<{ id: string; kind: string; status: string; createdAt: string; completedAt?: string | null; errorMessage?: string | null; providerRequestId?: string | null; providerResponse?: PlatformProviderResponse | null; episode?: { episodeNo: number; title: string } | null }> };
-type MultiAppReleaseAction = 'PREPARE' | 'SYNC_MEDIA' | 'SYNC_VERSION' | 'SUBMIT_REVIEW' | 'RECONCILE' | 'SET_ONLINE_VERSION' | 'PUBLISH';
+type PlatformSyncJob = { id: string; albumId?: string | null; kind: string; status: string; errorMessage?: string | null; providerJobId?: string | null; providerRequestId?: string | null; createdAt: string; completedAt?: string | null; attemptCount?: number; snapshotJson?: { priorityScore?: number; version?: number; uploadMode?: string } | null; providerResponse?: PlatformProviderResponse | null; album?: { title: string } | null; episode?: { title: string; episodeNo?: number } | null };
+type MultiAppReleaseStatus = { miniAppKey: MiniApp; prepared: boolean; reason?: 'NOT_PREPARED' | 'ACCESS_ERROR'; albumId?: string; tiktokAlbumId?: string | null; version?: number | null; onlineVersion?: number | null; reviewStatus?: string | null; publishStatus?: string | null; mediaReady?: boolean; videoReadyCount?: number; episodeCount?: number; error?: string; jobs?: Array<{ id: string; kind: string; status: string; uploadMode?: string; createdAt: string; completedAt?: string | null; errorMessage?: string | null; providerJobId?: string | null; providerRequestId?: string | null; providerResponse?: PlatformProviderResponse | null; episode?: { episodeNo: number; title: string } | null }> };
+type MultiAppReleaseAction = 'PREPARE' | 'UPLOAD_VIDEO_URL' | 'SYNC_MEDIA' | 'SYNC_VERSION' | 'SUBMIT_REVIEW' | 'RECONCILE' | 'SET_ONLINE_VERSION' | 'PUBLISH';
 type ContentTemplate = { id: string; name: string; dramaType: number; tagList: string; freeCount: number; rewardedEnabled: boolean; placementId: string; rewardedCount: number };
 const platformJobLabels: Record<string, string> = { COVER: '同步封面', VIDEO: '同步视频', ALBUM_VERSION: '同步版本', REVIEW: '送审', RECONCILE: '对账', SET_ONLINE_VERSION: '设线上版本', PUBLISH: '上架', UNPUBLISH: '下架' };
 
@@ -160,6 +160,7 @@ function platformBusinessDetails(job: PlatformSyncJob) {
     }
   }
   if (job.errorMessage) details.push(`任务错误：${job.errorMessage}`);
+  if (job.providerJobId) details.push(`TikTok 上传任务 ID：${job.providerJobId}`);
   if (job.providerRequestId) details.push(`TikTok 请求 ID：${job.providerRequestId}`);
   return details;
 }
@@ -301,6 +302,7 @@ function AdminApp() {
   const [releaseTargets, setReleaseTargets] = useState<MiniApp[]>([activeApp]);
   const [releaseStatuses, setReleaseStatuses] = useState<MultiAppReleaseStatus[]>([]);
   const [releaseActionErrors, setReleaseActionErrors] = useState<Partial<Record<MiniApp, string>>>({});
+  const [releaseSourceUrls, setReleaseSourceUrls] = useState<Record<number, string>>({});
   const [releaseWorking, setReleaseWorking] = useState<MultiAppReleaseAction | null>(null);
   const [releaseError, setReleaseError] = useState('');
   const [overview, setOverview] = useState<Overview>({ albums: 0, episodes: 0, users: 0, likes: 0, favorites: 0, shares: 0, searches: 0, rewardedUnlocks: 0 });
@@ -428,13 +430,14 @@ function AdminApp() {
     }
   };
 
-  const runReleaseAction = async (action: MultiAppReleaseAction) => {
+  const runReleaseAction = async (action: MultiAppReleaseAction, sources?: Array<{ episodeNo: number; sourceUrl: string }>) => {
     if (!releaseAlbumId || !releaseTargets.length) return;
     if ((action === 'SUBMIT_REVIEW' || action === 'PUBLISH') && !window.confirm(`将分别对 ${releaseTargets.map((key) => miniAppNames[key]).join('、')} 执行${action === 'SUBMIT_REVIEW' ? '送审' : '上架'}。每个小程序保留独立审核和发布结果，确定继续？`)) return;
+    if (action === 'UPLOAD_VIDEO_URL' && !window.confirm(`为 ${sources?.length ?? 0} 集在所选目标小程序创建独立视频上传，可能产生额外存储和流量费用。源 VID 保留不变，确定继续？`)) return;
     setReleaseWorking(action);
     try {
       const result = await api<{ items: Array<{ miniAppKey: MiniApp; accepted: boolean; error?: string }> }>(`/admin/multi-app-releases/${releaseAlbumId}`, {
-        method: 'POST', headers: releaseAuthorizationHeaders(releaseTargets), body: JSON.stringify({ targetApps: releaseTargets, action, ...(action === 'SUBMIT_REVIEW' ? { priorityScore: 2 } : {}) })
+        method: 'POST', headers: releaseAuthorizationHeaders(releaseTargets), body: JSON.stringify({ targetApps: releaseTargets, action, ...(action === 'SUBMIT_REVIEW' ? { priorityScore: 2 } : {}), ...(sources ? { sources } : {}) })
       });
       setReleaseActionErrors(Object.fromEntries(result.items.filter((item) => !item.accepted).map((item) => [item.miniAppKey, item.error ?? '操作未受理'])));
       await loadReleaseStatuses();
@@ -1085,7 +1088,7 @@ function AdminApp() {
       </Panel>}
       {tab === 'albums' && canPublishContent && <Panel title="多小程序独立发布">
         <div className="multi-release-controls">
-          <label>源剧目 · {miniAppNames[activeApp]}<select value={releaseAlbumId} onChange={(event) => { setReleaseAlbumId(event.target.value); setReleaseStatuses([]); setReleaseActionErrors({}); }}><option value="">选择剧目</option>{albums.map((album) => <option key={album.id} value={album.id}>{album.title}</option>)}</select></label>
+          <label>源剧目 · {miniAppNames[activeApp]}<select value={releaseAlbumId} onChange={(event) => { setReleaseAlbumId(event.target.value); setReleaseStatuses([]); setReleaseActionErrors({}); setReleaseSourceUrls({}); }}><option value="">选择剧目</option>{albums.map((album) => <option key={album.id} value={album.id}>{album.title}</option>)}</select></label>
           <fieldset><legend>目标小程序</legend><div className="multi-release-targets">{(Object.keys(miniAppNames) as MiniApp[]).map((key) => <label key={key}><input type="checkbox" checked={releaseTargets.includes(key)} onChange={(event) => setReleaseTargets((current) => event.target.checked ? [...current, key] : current.filter((item) => item !== key))} />{miniAppNames[key]}</label>)}</div></fieldset>
           <div className="multi-release-actions">
             {([['PREPARE', '准备目标剧目'], ['SYNC_MEDIA', '同步媒资'], ['SYNC_VERSION', '同步版本'], ['SUBMIT_REVIEW', '送审'], ['RECONCILE', '对账'], ['SET_ONLINE_VERSION', '设线上版本'], ['PUBLISH', '上架']] as Array<[MultiAppReleaseAction, string]>).map(([action, label]) => <button key={action} type="button" className={action === 'PUBLISH' ? 'save-button' : 'secondary'} disabled={!releaseAlbumId || !releaseTargets.length || releaseWorking !== null} onClick={() => void runReleaseAction(action)}>{releaseWorking === action ? '处理中...' : label}</button>)}
@@ -1093,6 +1096,14 @@ function AdminApp() {
           </div>
           {releaseError && <p className="table-error">{releaseError}</p>}
         </div>
+        {releaseAlbumId && <details className="independent-upload"><summary>独立媒资上传 · 原文件下载地址</summary>
+          <div className="table-wrap"><table className="independent-upload-table"><thead><tr><th>分集</th><th>公网 HTTPS 原视频地址</th><th>操作</th></tr></thead><tbody>{episodes.filter((episode) => episode.albumId === releaseAlbumId).sort((left, right) => left.episodeNo - right.episodeNo).map((episode) => <tr key={episode.id}>
+            <td>第 {episode.episodeNo} 集 · {episode.title}</td>
+            <td><input className="release-url-input" type="url" aria-label={`第 ${episode.episodeNo} 集原文件下载地址`} placeholder="https://…/episode.mp4" value={releaseSourceUrls[episode.episodeNo] ?? ''} onChange={(event) => setReleaseSourceUrls((current) => ({ ...current, [episode.episodeNo]: event.target.value }))} /></td>
+            <td><button type="button" className="secondary" disabled={releaseWorking !== null || !releaseTargets.length || !releaseSourceUrls[episode.episodeNo]?.trim()} onClick={() => void runReleaseAction('UPLOAD_VIDEO_URL', [{ episodeNo: episode.episodeNo, sourceUrl: releaseSourceUrls[episode.episodeNo].trim() }])}>上传此集</button></td>
+          </tr>)}</tbody></table></div>
+          <button type="button" className="secondary" disabled={releaseWorking !== null || !releaseTargets.length || !Object.values(releaseSourceUrls).some((url) => url.trim())} onClick={() => void runReleaseAction('UPLOAD_VIDEO_URL', Object.entries(releaseSourceUrls).filter(([, url]) => url.trim()).map(([episodeNo, sourceUrl]) => ({ episodeNo: Number(episodeNo), sourceUrl: sourceUrl.trim() })))}>上传填写地址的分集</button>
+        </details>}
         <div className="table-wrap"><table className="multi-release-table"><thead><tr><th>小程序</th><th>媒资</th><th>TikTok 剧目 / 版本</th><th>审核 / 上架</th><th>最近任务</th></tr></thead><tbody>{releaseStatuses.map((item) => {
           const reconciliation = item.jobs?.find((job) => job.kind === 'RECONCILE' && job.status === 'SUCCEEDED');
           return <tr key={item.miniAppKey}>
@@ -1106,7 +1117,7 @@ function AdminApp() {
         <div className="platform-jobs-heading"><h3>跨小程序任务日志</h3></div>
         <div className="table-wrap"><table className="multi-release-log-table"><thead><tr><th>小程序 / 剧目</th><th>操作</th><th>任务状态</th><th>平台业务结果</th><th>时间 / 详情</th></tr></thead><tbody>{releaseJobRows.map((job) => <tr key={`${job.miniAppKey}:${job.id}`}>
           <td><strong>{miniAppNames[job.miniAppKey]}</strong><small>{job.episode ? `第 ${job.episode.episodeNo} 集 · ${job.episode.title}` : job.albumId}</small></td>
-          <td>{platformJobLabels[job.kind] ?? job.kind}</td>
+          <td>{job.uploadMode === 'URL' ? '独立视频上传' : platformJobLabels[job.kind] ?? job.kind}</td>
           <td><Status value={job.status} /></td>
           <td><strong className="platform-business-result">{platformBusinessResult(job)}</strong></td>
           <td><small>{new Date(job.completedAt ?? job.createdAt).toLocaleString('zh-CN')}</small>{platformBusinessDetails(job).map((detail, index) => <small key={index} className={detail.startsWith('审核原因') || detail.startsWith('任务错误') ? 'table-error' : 'platform-job-detail'}>{detail}</small>)}</td>

@@ -3,10 +3,10 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import type { Env } from '../config/env';
 import { miniAppAdConfig, miniAppPlatformConfig, type MiniAppKey } from '../config/mini-apps';
 import { readAccessConfig } from '../lib/content-access';
-import { enqueueAlbumAction, enqueueAlbumVersionSync, enqueueCoverSync, enqueueVideoSync } from './platform-sync.service';
+import { enqueueAlbumAction, enqueueAlbumVersionSync, enqueueCoverSync, enqueueVideoSync, enqueueVideoUrlUpload, validateVideoSourceUrl } from './platform-sync.service';
 
 type Db = PrismaClient & { [key: string]: any };
-export type ReleaseAction = 'SYNC_MEDIA' | 'SYNC_VERSION' | 'SUBMIT_REVIEW' | 'RECONCILE' | 'SET_ONLINE_VERSION' | 'PUBLISH';
+export type ReleaseAction = 'UPLOAD_VIDEO_URL' | 'SYNC_MEDIA' | 'SYNC_VERSION' | 'SUBMIT_REVIEW' | 'RECONCILE' | 'SET_ONLINE_VERSION' | 'PUBLISH';
 
 export function targetReleaseAlbumId(sourceApp: MiniAppKey, sourceAlbumId: string) {
   return `release_${createHash('sha256').update(`${sourceApp}:${sourceAlbumId}`).digest('hex').slice(0, 24)}`;
@@ -55,13 +55,15 @@ async function prepareTarget(db: Db, env: Env, source: any, sourceApp: MiniAppKe
   const id = targetReleaseAlbumId(sourceApp, source.id);
   const existing = await db.album.findUnique({ where: { id }, include: { coverAsset: true, episodes: { include: { coverAsset: true } } } });
   if (existing) {
+    const uploaded = await db.platformSyncJob.findMany({ where: { albumId: id, kind: 'VIDEO', status: 'SUCCEEDED' } });
     const byNo = new Map(existing.episodes.map((episode: any) => [episode.episodeNo, episode]));
     if (existing.title !== source.title || existing.description !== source.description || existing.coverAsset?.sha256 !== source.coverAsset.sha256
       || existing.releaseYear !== source.releaseYear || existing.dramaType !== source.dramaType
       || JSON.stringify(existing.tagList) !== JSON.stringify(source.tagList)
       || existing.episodes.length !== source.episodes.length || source.episodes.some((episode: any) => {
-      const saved = byNo.get(episode.episodeNo) as { byteplusVid?: string; title?: string; coverUrl?: string; coverAsset?: { sha256?: string } } | undefined;
-      return saved?.byteplusVid !== episode.byteplusVid || saved?.title !== episode.title
+      const saved = byNo.get(episode.episodeNo) as { id: string; byteplusVid?: string; title?: string; coverUrl?: string; coverAsset?: { sha256?: string } } | undefined;
+      const ownUpload = uploaded.some((job: any) => job.episodeId === saved?.id && job.snapshotJson?.sourceVid === episode.byteplusVid && job.providerResponse?.vid === saved?.byteplusVid);
+      return (saved?.byteplusVid && saved.byteplusVid !== episode.byteplusVid && !ownUpload) || saved?.title !== episode.title
         || (episode.coverAsset ? saved?.coverAsset?.sha256 !== episode.coverAsset.sha256 : saved?.coverUrl !== episode.coverUrl);
     })) throw new Error('目标剧目已存在但分集素材与源剧目不同；不会覆盖已审核内容。');
     return id;
@@ -69,9 +71,6 @@ async function prepareTarget(db: Db, env: Env, source: any, sourceApp: MiniAppKe
   const sourceAccess = readAccessConfig(source.accessConfig, miniAppAdConfig(env, sourceApp).rewardedPlacementId);
   const targetPlacementId = miniAppAdConfig(env, target).rewardedPlacementId;
   if (sourceAccess.rewardedAdEnabled && !targetPlacementId) throw new Error('目标小程序未配置激励广告位，不能复制启用广告解锁的剧目。');
-  const vids = source.episodes.map((episode: any) => episode.byteplusVid as string);
-  const occupied = await db.episode.findFirst({ where: { byteplusVid: { in: vids } }, select: { albumId: true, episodeNo: true } });
-  if (occupied) throw new Error(`目标小程序已有分集占用源剧目的 BytePlus VID（第 ${occupied.episodeNo} 集）；不会建立重复剧目。`);
   await db.$transaction(async (tx) => {
     const albumCover = await cloneCover(tx, source.coverAsset);
     const covers = new Map<string, string>([[source.coverAsset.id, albumCover.id]]);
@@ -102,11 +101,11 @@ async function prepareTarget(db: Db, env: Env, source: any, sourceApp: MiniAppKe
         isFree: episode.isFree,
         coverAssetId: episode.coverAssetId ? covers.get(episode.coverAssetId) : null,
         coverUrl: episode.coverAsset?.publicUrl ?? episode.coverUrl,
-        byteplusVid: episode.byteplusVid,
+        byteplusVid: null,
         byteplusCoverUrl: episode.byteplusCoverUrl,
         durationMs: episode.durationMs,
-        byteplusUploadStatus: 'READY',
-        status: 'READY'
+        byteplusUploadStatus: 'PENDING',
+        status: 'DRAFT'
       } });
     }
   });
@@ -124,10 +123,11 @@ export async function runMultiAppRelease(input: {
   authorizedAdminIds?: Partial<Record<MiniAppKey, string>>;
   action: 'PREPARE' | ReleaseAction;
   priorityScore?: 1 | 2;
+  sources?: Array<{ episodeNo: number; sourceUrl: string }>;
 }) {
   const source = input.action === 'PREPARE'
     ? await sourceAlbum(input.sourceDb, input.sourceAlbumId)
-    : await input.sourceDb.album.findUnique({ where: { id: input.sourceAlbumId }, select: { id: true } });
+    : await input.sourceDb.album.findUnique({ where: { id: input.sourceAlbumId }, include: { episodes: true } });
   if (!source) throw Object.assign(new Error('源剧目不存在。'), { statusCode: 404 });
   const items = [];
   for (const target of [...new Set(input.targetApps)]) {
@@ -142,6 +142,27 @@ export async function runMultiAppRelease(input: {
       const album = await db.album.findUnique({ where: { id: albumId }, include: { episodes: { orderBy: { episodeNo: 'asc' } } } });
       if (!album) throw new Error('目标剧目尚未准备，请先点击“准备目标剧目”。');
       const jobs = [];
+      if (input.action === 'UPLOAD_VIDEO_URL') {
+        if (target === input.sourceApp) throw new Error('源小程序不参与独立新 VID 上传；请仅勾选目标小程序。');
+        if (album.tiktokAlbumId || album.tiktokVersion || album.onlineVersion) throw new Error('目标已同步 TikTok 版本，不能覆盖；独立上传仅支持未同步版本的目标草稿。');
+        const sources = input.sources ?? [];
+        if (!sources.length || new Set(sources.map((item) => item.episodeNo)).size !== sources.length) throw new Error('请提供不重复的集号和原文件下载地址。');
+        sources.forEach((item) => validateVideoSourceUrl(item.sourceUrl));
+        const verified = await db.platformSyncJob.findFirst({ where: { albumId, kind: 'VIDEO', status: 'SUCCEEDED', snapshotJson: { path: ['uploadMode'], equals: 'URL' } } });
+        if (sources.length > 1 && !verified) throw new Error('该目标尚未验证独立上传，请先仅提交一集，确认成功获得新 VID 后再上传其他集。');
+        const sourceByNo = new Map(source.episodes.map((episode: any) => [episode.episodeNo, episode]));
+        const uploads = sources.map((item) => {
+          const origin = sourceByNo.get(item.episodeNo) as any;
+          const episode = album.episodes.find((entry: any) => entry.episodeNo === item.episodeNo);
+          if (!origin?.byteplusVid || !episode) throw new Error(`第 ${item.episodeNo} 集不在源剧目或目标剧目中。`);
+          return { item, origin, episode };
+        });
+        for (const { item, origin, episode } of uploads) {
+          if (episode.tiktokVideoStatus === 'READY' && episode.byteplusVid && episode.byteplusVid !== origin.byteplusVid) continue;
+          const job = await enqueueVideoUrlUpload(db, episode, { sourceVid: origin.byteplusVid, sourceUrl: item.sourceUrl }, adminId);
+          jobs.push(job.id);
+        }
+      }
       if (input.action === 'PREPARE' || input.action === 'SYNC_MEDIA') {
         const coverIds = [...new Set([album.coverAssetId, ...album.episodes.map((episode: any) => episode.coverAssetId)].filter((id): id is string => Boolean(id)))];
         for (const coverId of coverIds) {
@@ -149,10 +170,14 @@ export async function runMultiAppRelease(input: {
           if (coverJob) jobs.push(coverJob.id);
         }
         for (const episode of album.episodes) {
+          if (target !== input.sourceApp) continue;
           const job = await enqueueVideoSync(db, episode.id, adminId);
           if (job) jobs.push(job.id);
         }
-      } else if (input.action === 'SYNC_VERSION') jobs.push((await enqueueAlbumVersionSync(db, albumId, adminId)).id);
+      } else if (input.action === 'SYNC_VERSION') {
+        if (target !== input.sourceApp && album.episodes.some((episode: any) => !episode.byteplusVid || source.episodes.some((origin: any) => origin.byteplusVid === episode.byteplusVid))) throw new Error('目标仍缺少独立的新 VID；请先完成独立媒资上传，勿复用源 VID 同步版本。');
+        jobs.push((await enqueueAlbumVersionSync(db, albumId, adminId)).id);
+      }
       else if (input.action === 'SUBMIT_REVIEW') jobs.push((await enqueueAlbumAction(db, 'REVIEW', albumId, adminId, input.priorityScore ?? 2)).id);
       else if (input.action === 'RECONCILE') jobs.push((await enqueueAlbumAction(db, 'RECONCILE', albumId, adminId)).id);
       else if (input.action === 'SET_ONLINE_VERSION') jobs.push((await enqueueAlbumAction(db, 'SET_ONLINE_VERSION', albumId, adminId)).id);
@@ -173,16 +198,18 @@ export async function multiAppReleaseStatus(input: { dbByApp: Record<string, Db>
       if (!db) throw new Error('目标小程序数据库未配置。');
       await ownerInTarget(db, input.operatorEmail, input.authorizedAdminIds?.[target]);
       const albumId = target === input.sourceApp ? input.sourceAlbumId : targetReleaseAlbumId(input.sourceApp, input.sourceAlbumId);
-      const album = await db.album.findUnique({ where: { id: albumId }, select: { id: true, title: true, tiktokAlbumId: true, tiktokVersion: true, onlineVersion: true, reviewStatus: true, publishStatus: true, status: true, coverAsset: { select: { providerImageId: true } }, episodes: { select: { tiktokVideoStatus: true, coverAssetId: true, coverAsset: { select: { providerImageId: true } } } } } });
+      const album = await db.album.findUnique({ where: { id: albumId }, select: { id: true, title: true, tiktokAlbumId: true, tiktokVersion: true, onlineVersion: true, reviewStatus: true, publishStatus: true, status: true, coverAsset: { select: { providerImageId: true } }, episodes: { select: { id: true, byteplusVid: true, tiktokVideoStatus: true, coverAssetId: true, coverAsset: { select: { providerImageId: true } } } } } });
       if (!album) { items.push({ miniAppKey: target, prepared: false, reason: 'NOT_PREPARED' }); continue; }
-      const jobs = await db.platformSyncJob.findMany({ where: { albumId }, orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, kind: true, status: true, errorMessage: true, providerRequestId: true, providerResponse: true, createdAt: true, completedAt: true, episode: { select: { episodeNo: true, title: true } } } });
+      const jobs = await db.platformSyncJob.findMany({ where: { albumId }, orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, kind: true, status: true, errorMessage: true, providerJobId: true, providerRequestId: true, providerResponse: true, snapshotJson: true, createdAt: true, completedAt: true, episode: { select: { episodeNo: true, title: true } } } });
+      const independent = target === input.sourceApp ? [] : await db.platformSyncJob.findMany({ where: { albumId, kind: 'VIDEO', status: 'SUCCEEDED', snapshotJson: { path: ['uploadMode'], equals: 'URL' } }, select: { episodeId: true, providerResponse: true } });
+      const videoReady = (episode: any) => episode.tiktokVideoStatus === 'READY' && (target === input.sourceApp || independent.some((job: any) => job.episodeId === episode.id && job.providerResponse?.vid === episode.byteplusVid));
       items.push({
         miniAppKey: target, prepared: true, albumId, title: album.title, tiktokAlbumId: album.tiktokAlbumId,
         version: album.tiktokVersion, onlineVersion: album.onlineVersion, reviewStatus: album.reviewStatus,
         publishStatus: album.publishStatus, status: album.status,
-        mediaReady: Boolean(album.coverAsset?.providerImageId) && album.episodes.every((episode: any) => episode.tiktokVideoStatus === 'READY' && (!episode.coverAssetId || episode.coverAsset?.providerImageId)),
-        videoReadyCount: album.episodes.filter((episode: any) => episode.tiktokVideoStatus === 'READY').length,
-        episodeCount: album.episodes.length, jobs
+        mediaReady: Boolean(album.coverAsset?.providerImageId) && album.episodes.every((episode: any) => videoReady(episode) && (!episode.coverAssetId || episode.coverAsset?.providerImageId)),
+        videoReadyCount: album.episodes.filter(videoReady).length,
+        episodeCount: album.episodes.length, jobs: jobs.map(({ snapshotJson, ...job }: any) => ({ ...job, uploadMode: snapshotJson?.uploadMode }))
       });
     } catch (error) {
       items.push({ miniAppKey: target, prepared: false, reason: 'ACCESS_ERROR', error: error instanceof Error ? error.message : '状态读取失败。' });

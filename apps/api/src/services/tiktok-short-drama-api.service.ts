@@ -179,6 +179,23 @@ export class TikTokShortDramaApiService {
     };
   }
 
+  async createVideoFromUrl(input: { sourceUrl: string; title: string }) {
+    const { data, requestId } = await this.request<Record<string, unknown>>('/v2/sg/shortdrama/video', 'POST', {
+      url: input.sourceUrl,
+      title: input.title,
+      space_name: this.env.BYTEPLUS_SPACE_NAME,
+      byteplus_account_id: this.env.BYTEPLUS_ACCOUNT_ID,
+      byteplus_region: this.env.BYTEPLUS_REGION
+    });
+    const resultType = asNumber(data.result_type);
+    const byteplusVid = asString(data.byteplus_vid);
+    const jobId = asString(data.job_id);
+    if (resultType === 1 && byteplusVid) return { status: 'READY' as const, byteplusVid, requestId };
+    if (resultType === 3) throw new TikTokShortDramaApiError('TikTok rejected the URL video upload.', undefined, requestId, false);
+    if (jobId) return { status: 'PROCESSING' as const, jobId, requestId };
+    throw new TikTokShortDramaApiError('TikTok URL upload did not return a job ID or a completed VID; do not submit again before checking the platform.', undefined, requestId, true);
+  }
+
   async createAlbum() {
     const { data, requestId } = await this.request<{ album_id?: unknown }>('/v2/sg/shortdrama/album/create/', 'POST', {});
     const albumId = asString(data.album_id);

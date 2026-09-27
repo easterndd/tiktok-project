@@ -19,6 +19,21 @@ function response(body: unknown) {
 }
 
 describe('TikTokShortDramaApiService', () => {
+  it('uploads by URL with target credentials and never sends the source VID', async () => {
+    let body: Record<string, unknown> = {};
+    const service = new TikTokShortDramaApiService({ ...env, TIKTOK_CLIENT_KEY: 'target-key' }, {
+      fetch: async (input, init) => {
+        if (new URL(String(input)).pathname === '/v2/oauth/token/') return response({ access_token: 'target-token', expires_in: 7200 });
+        body = JSON.parse(String(init?.body));
+        return response({ data: { result_type: 2, job_id: 'upload-job' }, error: { code: 'ok', log_id: 'upload-log' } });
+      }
+    });
+    const result = await service.createVideoFromUrl({ sourceUrl: 'https://example.com/episode.mp4', title: 'Episode 1' });
+    assert.equal(body.client_key, 'target-key');
+    assert.equal(body.url, 'https://example.com/episode.mp4');
+    assert.equal(body.vid, undefined);
+    assert.deepEqual(result, { status: 'PROCESSING', jobId: 'upload-job', requestId: 'upload-log' });
+  });
   it('sends the selected moderation priority to TikTok', async () => {
     const submitted: Record<string, unknown>[] = [];
     const service = new TikTokShortDramaApiService(env, {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enqueueAlbumAction, enqueueDueReviewReconciliations, enqueuePlatformSyncJob, processPlatformSyncJobs } from './platform-sync.service';
+import { enqueueAlbumAction, enqueueDueReviewReconciliations, enqueuePlatformSyncJob, enqueueVideoUrlUpload, processPlatformSyncJobs } from './platform-sync.service';
 import { TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
 
 test('requeues a failed platform sync job when an operator retries it', async () => {
@@ -50,6 +50,87 @@ test('does not duplicate an active platform sync job', async () => {
   });
 
   assert.equal(result, existing);
+});
+
+function urlUploadFixture(extraJob: Record<string, unknown> = {}) {
+  const job: any = { id: 'url-job', kind: 'VIDEO', status: 'PENDING', targetId: 'target-episode', episodeId: 'target-episode', albumId: 'target-album', attemptCount: 0,
+    snapshotJson: { uploadMode: 'URL', sourceUrl: 'https://example.com/episode.mp4', sourceVid: 'source-vid', expectedVid: 'source-vid', title: 'Episode 1' }, ...extraJob };
+  const episode: any = { id: 'target-episode', byteplusVid: 'source-vid', tiktokEpisodeId: null, album: { id: 'target-album', tiktokAlbumId: null } };
+  const writes: any[] = [];
+  const prisma: any = {
+    platformSyncJob: { findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async ({ data }: any) => { Object.assign(job, data); return job; } },
+    episode: { findUnique: async () => episode, update: async ({ data }: any) => { Object.assign(episode, data); return episode; }, updateMany: async (input: any) => { writes.push(input); Object.assign(episode, input.data); return { count: 1 }; } }
+  };
+  prisma.$transaction = async (callback: (tx: any) => Promise<unknown>) => callback(prisma);
+  return { job, episode, writes, prisma };
+}
+
+test('persists URL upload job then polls without resubmitting and binds only the new VID', async () => {
+  const { prisma, episode, job, writes } = urlUploadFixture();
+  let submissions = 0;
+  const api = {
+    createVideoFromUrl: async () => { submissions += 1; return { status: 'PROCESSING', jobId: 'provider-job', requestId: 'create-log' }; },
+    getVideo: async (input: any) => { assert.deepEqual(input, { jobId: 'provider-job' }); return { uploadStatus: 2, vid: 'target-vid', requestId: 'query-log' }; }
+  };
+  await processPlatformSyncJobs(prisma, api as any);
+  assert.equal(job.providerJobId, 'provider-job');
+  assert.equal(episode.byteplusVid, 'source-vid');
+  assert.equal(writes.length, 0);
+  await processPlatformSyncJobs(prisma, api as any);
+  assert.equal(submissions, 1);
+  assert.equal(episode.byteplusVid, 'target-vid');
+  assert.equal(job.status, 'SUCCEEDED');
+  assert.equal(job.providerResponse.source_vid, 'source-vid');
+});
+
+test('stops ambiguous URL upload creation instead of retrying POST', async () => {
+  const { prisma, job, writes } = urlUploadFixture();
+  await processPlatformSyncJobs(prisma, { createVideoFromUrl: async () => { throw new TikTokShortDramaApiError('network timeout', undefined, undefined, true); } } as any);
+  assert.equal(job.status, 'CONFLICT');
+  assert.equal(writes.length, 0);
+});
+
+test('does not replay a stale URL upload without a provider job ID', async () => {
+  const { prisma, job } = urlUploadFixture({ status: 'PROCESSING' });
+  await processPlatformSyncJobs(prisma, { createVideoFromUrl: async () => assert.fail('must not replay') } as any);
+  assert.equal(job.status, 'CONFLICT');
+});
+
+test('does not accept the source VID as a target URL upload result', async () => {
+  const { prisma, job, writes } = urlUploadFixture({ providerJobId: 'provider-job' });
+  await processPlatformSyncJobs(prisma, { getVideo: async () => ({ uploadStatus: 2, vid: 'source-vid' }) } as any);
+  assert.equal(job.status, 'FAILED');
+  assert.equal(writes.length, 0);
+});
+
+test('refuses URL upload into an already versioned target album', async () => {
+  const { prisma, episode, writes } = urlUploadFixture();
+  episode.album.tiktokVersion = 1;
+  await processPlatformSyncJobs(prisma, { createVideoFromUrl: async () => assert.fail('must not upload') } as any);
+  assert.equal(writes.length, 0);
+});
+
+test('retains the provider job when URL polling retries are exhausted', async () => {
+  const { prisma, job } = urlUploadFixture({ providerJobId: 'provider-job', attemptCount: 5 });
+  await processPlatformSyncJobs(prisma, { getVideo: async () => { throw new TikTokShortDramaApiError('query timeout', undefined, undefined, true); } } as any);
+  assert.equal(job.status, 'CONFLICT');
+  assert.equal(job.providerJobId, 'provider-job');
+});
+
+test('does not re-upload after a successful URL upload fails local binding', async () => {
+  const { prisma, job } = urlUploadFixture({ providerJobId: 'provider-job' });
+  prisma.episode.updateMany = async () => ({ count: 0 });
+  await processPlatformSyncJobs(prisma, { getVideo: async () => ({ uploadStatus: 2, vid: 'target-vid', requestId: 'query-log' }) } as any);
+  assert.equal(job.status, 'CONFLICT');
+  assert.equal(job.providerJobId, 'provider-job');
+  assert.match(job.errorMessage, /target-vid/);
+});
+
+test('rejects private addresses and streaming playlists for independent video uploads', async () => {
+  const episode = { id: 'target-episode', albumId: 'target-album', title: 'Episode 1', byteplusVid: null };
+  for (const sourceUrl of ['https://127.0.0.1/one.mp4', 'https://192.168.0.1/one.mp4', 'https://example.com/play.m3u8', 'http://example.com/one.mp4']) {
+    await assert.rejects(() => enqueueVideoUrlUpload({} as any, episode, { sourceVid: 'source-vid', sourceUrl }, 'owner'), /公网 HTTPS/);
+  }
 });
 
 test('does not requeue a video rejected for a different TikTok media scope', async () => {
