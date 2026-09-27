@@ -67,13 +67,10 @@ function isAllowedCorsOrigin(origin: string | undefined, configuredOrigins: stri
   });
 }
 
-const miniBootstrapPaths = new Set([
-  '/api/v1/auth/anonymous/session',
-  '/api/v1/app-entry-ad-sessions'
-]);
+const miniBootstrapPath = /^\/api\/(?:(?:taletv|cinereels|talereels)\/)?v1\/(?:auth\/anonymous\/session|app-entry-ad-sessions)$/;
 
 function isMiniBootstrapRequest(url: string) {
-  return miniBootstrapPaths.has(url.split('?', 1)[0]);
+  return miniBootstrapPath.test(url.split('?', 1)[0]);
 }
 
 export async function buildApp(env: Env, options: { prisma?: PrismaClient; taletvPrisma?: PrismaClient; miniPrisma?: Partial<Record<MiniAppKey, PrismaClient>>; sharedPrisma?: PrismaClient } = {}) {
@@ -81,6 +78,20 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
   const app = Fastify({ logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' } });
   registerErrorHandler(app);
   const configuredCorsOrigins = env.API_CORS_ORIGIN.split(',');
+  // Log before CORS can finish an OPTIONS request, including every Mini App prefix.
+  app.addHook('onRequest', (request, _reply, done) => {
+    if (isMiniBootstrapRequest(request.url)) {
+      request.log.info({
+        method: request.method,
+        path: request.url.split('?', 1)[0],
+        origin: request.headers.origin ?? null,
+        corsAllowed: isAllowedCorsOrigin(request.headers.origin, configuredCorsOrigins),
+        requestedMethod: request.headers['access-control-request-method'] ?? null,
+        requestedHeaders: request.headers['access-control-request-headers'] ?? null
+      }, 'Mini bootstrap request');
+    }
+    done();
+  });
   await app.register(cors, {
     origin: (origin, callback) => callback(null, isAllowedCorsOrigin(origin, configuredCorsOrigins)),
     credentials: true,
@@ -92,24 +103,14 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
     reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   });
-  app.addHook('onRequest', (request, _reply, done) => {
-    if (isMiniBootstrapRequest(request.url)) {
-      request.log.info({
-        method: request.method,
-        origin: request.headers.origin ?? null,
-        referer: request.headers.referer ?? null,
-        requestedMethod: request.headers['access-control-request-method'] ?? null,
-        requestedHeaders: request.headers['access-control-request-headers'] ?? null
-      }, 'Mini bootstrap request');
-    }
-    done();
-  });
   app.addHook('onResponse', (request, reply, done) => {
     if (isMiniBootstrapRequest(request.url)) {
       request.log.info({
         method: request.method,
+        path: request.url.split('?', 1)[0],
         statusCode: reply.statusCode,
         origin: request.headers.origin ?? null,
+        corsAllowed: isAllowedCorsOrigin(request.headers.origin, configuredCorsOrigins),
         accessControlAllowOrigin: reply.getHeader('access-control-allow-origin') ?? null
       }, 'Mini bootstrap response');
     }

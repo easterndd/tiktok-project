@@ -180,6 +180,60 @@ it('registers CineReels and TaleReels on independent routes and rejects duplicat
   assert.throws(() => taletvEnvironment({ ...expanded, TALETV_DATABASE_URL: expanded.CINEREELS_DATABASE_URL }), /different database or PostgreSQL schema/);
 });
 
+it('handles Mini bootstrap preflights for all apps and logs the actual allowlist decision before CORS', async () => {
+  const app = await buildApp({
+    ...env,
+    API_CORS_ORIGIN: 'https://admin.example.com,https://*.tiktok-minis.us',
+    CINEREELS_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=cinereels',
+    TALEREELS_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=talereels'
+  }, { prisma: databaseFor('main'), taletvPrisma: databaseFor('taletv'), miniPrisma: {
+    cinereels: databaseFor('cinereels'), talereels: databaseFor('talereels')
+  } });
+  const logs: Array<{ fields: Record<string, unknown>; message: string }> = [];
+  const child = app.log.child.bind(app.log);
+  app.log.child = ((...args: Parameters<typeof app.log.child>) => {
+    const logger = child(...args);
+    logger.info = ((fields: Record<string, unknown>, message: string) => { logs.push({ fields, message }); }) as typeof logger.info;
+    return logger;
+  }) as typeof app.log.child;
+  try {
+    await app.ready();
+    for (const prefix of ['/api/v1', '/api/taletv/v1', '/api/cinereels/v1', '/api/talereels/v1']) {
+      for (const path of ['/auth/anonymous/session', '/app-entry-ad-sessions']) {
+        const url = `${prefix}${path}`;
+        for (const [origin, allowed] of [['https://preview.tiktok-minis.us', true], ['https://untrusted.example', false], ['null', false]] as const) {
+          logs.length = 0;
+          const response = await app.inject({ method: 'OPTIONS', url, headers: {
+            origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type,authorization'
+          } });
+          assert.equal(response.statusCode, allowed ? 204 : 404);
+          assert.equal(response.headers['access-control-allow-origin'], allowed ? origin : undefined);
+          const request = logs.find((entry) => entry.message === 'Mini bootstrap request');
+          assert.ok(request, `missing pre-CORS log for ${url}`);
+          assert.equal(request.fields.path, url);
+          assert.equal(request.fields.origin, origin);
+          assert.equal(request.fields.corsAllowed, allowed);
+          assert.equal(request.fields.requestedMethod, 'POST');
+          const completion = logs.find((entry) => entry.message === 'Mini bootstrap response');
+          assert.ok(completion);
+          assert.equal(completion.fields.statusCode, allowed ? 204 : 404);
+          assert.equal(completion.fields.accessControlAllowOrigin, allowed ? origin : null);
+          assert.equal(Object.hasOwn(request.fields, 'authorization'), false);
+        }
+      }
+    }
+    logs.length = 0;
+    await app.inject({ method: 'POST', url: '/api/cinereels/v1/auth/anonymous/session?token=do-not-log', headers: { origin: 'https://preview.tiktok-minis.us' }, payload: {} });
+    assert.equal(logs.find((entry) => entry.message === 'Mini bootstrap request')?.fields.path, '/api/cinereels/v1/auth/anonymous/session');
+    assert.equal(logs.filter((entry) => entry.message.startsWith('Mini bootstrap')).some((entry) => JSON.stringify(entry.fields).includes('do-not-log')), false);
+    logs.length = 0;
+    await app.inject('/api/cinereels/v1/albums');
+    assert.equal(logs.some((entry) => entry.message.startsWith('Mini bootstrap')), false);
+  } finally {
+    await app.close();
+  }
+});
+
 it('creates a CineReels draft with no ad placement when rewarded ads are off', async () => {
   assert.equal(accessConfigSchema.safeParse({ rewardedAdEnabled: false, rewardedPlacementId: '' }).success, true);
   const cineDb = databaseFor('cine-album') as any;
