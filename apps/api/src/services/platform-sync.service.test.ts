@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enqueueAlbumAction, enqueuePlatformSyncJob, processPlatformSyncJobs } from './platform-sync.service';
+import { enqueueAlbumAction, enqueueDueReviewReconciliations, enqueuePlatformSyncJob, processPlatformSyncJobs } from './platform-sync.service';
 import { TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
 
 test('requeues a failed platform sync job when an operator retries it', async () => {
@@ -68,6 +68,27 @@ test('stores review priority in the queued snapshot and rejects changing an acti
   const job = await enqueueAlbumAction(prisma as any, 'REVIEW', 'album-1', 'admin-1', 1);
   assert.deepEqual(job.snapshotJson, { albumId: 'album-1', platformAlbumId: '7688551749335058439', version: 2, priorityScore: 1 });
   await assert.rejects(() => enqueueAlbumAction(prisma as any, 'REVIEW', 'album-1', 'admin-1', 2), /不同优先级/);
+});
+
+test('queues periodic review reconciliation only for a locally submitted version', async () => {
+  const queued: Record<string, any>[] = [];
+  const prisma: any = {
+    album: {
+      findMany: async () => [{ id: 'album-1', tiktokVersion: 2 }, { id: 'shared-album', tiktokVersion: 1 }],
+      findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2, onlineVersion: null, reviewStatus: 'REVIEWING' })
+    },
+    platformSyncJob: {
+      findFirst: async ({ where }: any) => where.kind === 'REVIEW' ? (where.albumId === 'album-1' ? { id: 'review-1' } : null) : null,
+      findUnique: async () => null,
+      upsert: async ({ create }: any) => { queued.push(create); return { id: 'reconcile-1' }; }
+    }
+  };
+
+  const count = await enqueueDueReviewReconciliations(prisma, new Date('2026-09-27T10:00:00Z'));
+
+  assert.equal(count, 1);
+  assert.equal(queued[0].kind, 'RECONCILE');
+  assert.equal(queued[0].albumId, 'album-1');
 });
 
 test('recreates a TikTok album when its saved ID is not found for the current client', async () => {

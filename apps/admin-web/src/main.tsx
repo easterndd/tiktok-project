@@ -95,6 +95,8 @@ type PlatformProviderResponse = {
   status?: string | number;
 };
 type PlatformSyncJob = { id: string; albumId?: string | null; kind: string; status: string; errorMessage?: string | null; providerRequestId?: string | null; createdAt: string; completedAt?: string | null; attemptCount?: number; snapshotJson?: { priorityScore?: number; version?: number } | null; providerResponse?: PlatformProviderResponse | null; album?: { title: string } | null; episode?: { title: string; episodeNo?: number } | null };
+type MultiAppReleaseStatus = { miniAppKey: MiniApp; prepared: boolean; albumId?: string; tiktokAlbumId?: string | null; version?: number | null; onlineVersion?: number | null; reviewStatus?: string | null; publishStatus?: string | null; mediaReady?: boolean; videoReadyCount?: number; episodeCount?: number; error?: string; jobs?: Array<{ id: string; kind: string; status: string; errorMessage?: string | null; providerRequestId?: string | null; providerResponse?: PlatformProviderResponse | null }> };
+type MultiAppReleaseAction = 'PREPARE' | 'SYNC_MEDIA' | 'SYNC_VERSION' | 'SUBMIT_REVIEW' | 'RECONCILE' | 'SET_ONLINE_VERSION' | 'PUBLISH';
 type SharedAuthorization = { id: string; miniAppKey: MiniApp; targetClientKey: string; targetLocalAlbumId?: string | null; status: string; errorMessage?: string | null; authorizedAt?: string | null; lastReconciledAt?: string | null };
 type SharedAlbum = { id: string; ownerMiniAppKey: MiniApp; tiktokAlbumId: string; currentVersion?: number | null; onlineVersion?: number | null; reviewStatus?: string | null; publishStatus?: string | null; authorizations: SharedAuthorization[]; episodes?: { episodeNo: number; title: string; tiktokEpisodeId: string; media?: { byteplusVid: string } }[] };
 type ContentTemplate = { id: string; name: string; dramaType: number; tagList: string; freeCount: number; rewardedEnabled: boolean; placementId: string; rewardedCount: number };
@@ -288,6 +290,11 @@ function AdminApp() {
   const [currentAdmin, setCurrentAdmin] = useState<AdminProfile | null>(null);
   const [jobs, setJobs] = useState<UploadJob[]>([]);
   const [platformJobs, setPlatformJobs] = useState<PlatformSyncJob[]>([]);
+  const [releaseAlbumId, setReleaseAlbumId] = useState('');
+  const [releaseTargets, setReleaseTargets] = useState<MiniApp[]>([activeApp]);
+  const [releaseStatuses, setReleaseStatuses] = useState<MultiAppReleaseStatus[]>([]);
+  const [releaseWorking, setReleaseWorking] = useState<MultiAppReleaseAction | null>(null);
+  const [releaseError, setReleaseError] = useState('');
   const [sharedAlbums, setSharedAlbums] = useState<SharedAlbum[]>([]);
   const [overview, setOverview] = useState<Overview>({ albums: 0, episodes: 0, users: 0, likes: 0, favorites: 0, shares: 0, searches: 0, rewardedUnlocks: 0 });
   const [audience, setAudience] = useState<Audience | null>(null);
@@ -405,7 +412,45 @@ function AdminApp() {
     }
   };
 
+  const loadReleaseStatuses = async () => {
+    if (!releaseAlbumId || !releaseTargets.length) { setReleaseStatuses([]); return; }
+    try {
+      const query = new URLSearchParams({ targetApps: releaseTargets.join(',') });
+      const result = await api<{ items: MultiAppReleaseStatus[] }>(`/admin/multi-app-releases/${releaseAlbumId}?${query}`);
+      setReleaseStatuses(result.items);
+      setReleaseError('');
+    } catch (error) {
+      setReleaseError(error instanceof Error ? error.message : '读取多小程序状态失败');
+    }
+  };
+
+  const runReleaseAction = async (action: MultiAppReleaseAction) => {
+    if (!releaseAlbumId || !releaseTargets.length) return;
+    if ((action === 'SUBMIT_REVIEW' || action === 'PUBLISH') && !window.confirm(`将分别对 ${releaseTargets.map((key) => miniAppNames[key]).join('、')} 执行${action === 'SUBMIT_REVIEW' ? '送审' : '上架'}。每个小程序保留独立审核和发布结果，确定继续？`)) return;
+    setReleaseWorking(action);
+    try {
+      const result = await api<{ items: Array<{ miniAppKey: MiniApp; accepted: boolean; error?: string }> }>(`/admin/multi-app-releases/${releaseAlbumId}`, {
+        method: 'POST', body: JSON.stringify({ targetApps: releaseTargets, action, ...(action === 'SUBMIT_REVIEW' ? { priorityScore: 2 } : {}) })
+      });
+      await loadReleaseStatuses();
+      const failed = result.items.filter((item) => !item.accepted);
+      setMessage(failed.length
+        ? `已接受 ${result.items.length - failed.length} 个小程序任务；${failed.map((item) => `${miniAppNames[item.miniAppKey]}：${item.error}`).join('；')}`
+        : `${result.items.length} 个小程序已分别接受操作，请在下方查看各自的任务和审核结果。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '批量操作失败');
+    } finally {
+      setReleaseWorking(null);
+    }
+  };
+
   useEffect(() => { if (loggedIn) void loadData(); }, [loggedIn, analyticsFrom, analyticsTo, analyticsTimezone]);
+  useEffect(() => {
+    if (!loggedIn || tab !== 'albums' || !releaseAlbumId || !releaseTargets.length) return;
+    void loadReleaseStatuses();
+    const timer = window.setInterval(() => void loadReleaseStatuses(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [loggedIn, tab, releaseAlbumId, releaseTargets.join(',')]);
   useEffect(() => {
     if (!draftReady || createdAlbumId || targetAlbumId || !episodes.length) return;
     const saved = draftEpisodes.find((episode) => episode.savedEpisodeId);
@@ -1072,6 +1117,18 @@ function AdminApp() {
         })}</tbody></table></div>
         <div className="platform-jobs-heading"><h3>最近 50 条平台任务</h3><button className="secondary" type="button" disabled={loading} onClick={() => void loadData()}>刷新状态</button></div>
         <div className="table-wrap"><table className="platform-jobs-table"><colgroup><col className="platform-job-target-column" /><col className="platform-job-action-column" /><col className="platform-job-status-column" /><col className="platform-job-business-column" /><col className="platform-job-detail-column" /></colgroup><thead><tr><th>剧目 / 分集</th><th>操作</th><th>任务状态</th><th>平台业务结果</th><th>时间 / 详情</th></tr></thead><tbody>{platformJobs.map((job) => { const details = platformBusinessDetails(job); return <tr key={job.id}><td><span className="platform-job-target" title={job.album?.title ?? job.episode?.title ?? job.albumId ?? '-'}>{job.album?.title ?? job.episode?.title ?? job.albumId ?? '-'}</span>{job.episode?.episodeNo && <small>第 {job.episode.episodeNo} 集 · {job.episode.title}</small>}</td><td>{platformJobLabels[job.kind] ?? job.kind}{job.kind === 'REVIEW' ? `（${job.snapshotJson?.priorityScore === 1 ? '加急' : job.snapshotJson?.priorityScore === 2 ? '普通' : '优先级未记录'}）` : ''}{(job.snapshotJson?.version ?? job.providerResponse?.version) ? ` · 版本 ${job.snapshotJson?.version ?? job.providerResponse?.version}` : ''}</td><td><Status value={job.status} /></td><td><strong className="platform-business-result">{platformBusinessResult(job)}</strong></td><td><small>{new Date(job.completedAt ?? job.createdAt).toLocaleString('zh-CN')}</small>{details.map((detail, index) => <small key={`${job.id}-detail-${index}`} className={detail.startsWith('审核原因') || detail.includes('异常') || detail.startsWith('任务错误') ? 'table-error' : 'platform-job-detail'}>{detail}</small>)}</td></tr>; })}</tbody></table>{!platformJobs.length && <p className="empty-copy table-empty">暂无平台同步任务</p>}</div>
+      </Panel>}
+      {tab === 'albums' && canPublishContent && <Panel title="多小程序独立发布">
+        <div className="multi-release-controls">
+          <label>源剧目<select value={releaseAlbumId} onChange={(event) => { setReleaseAlbumId(event.target.value); setReleaseStatuses([]); }}><option value="">选择剧目</option>{albums.map((album) => <option key={album.id} value={album.id}>{album.title}</option>)}</select></label>
+          <fieldset><legend>目标小程序</legend><div className="multi-release-targets">{(Object.keys(miniAppNames) as MiniApp[]).map((key) => <label key={key}><input type="checkbox" checked={releaseTargets.includes(key)} onChange={(event) => setReleaseTargets((current) => event.target.checked ? [...current, key] : current.filter((item) => item !== key))} />{miniAppNames[key]}</label>)}</div></fieldset>
+          <div className="multi-release-actions">
+            {([['PREPARE', '准备目标剧目'], ['SYNC_MEDIA', '同步媒资'], ['SYNC_VERSION', '同步版本'], ['SUBMIT_REVIEW', '送审'], ['RECONCILE', '对账'], ['SET_ONLINE_VERSION', '设线上版本'], ['PUBLISH', '上架']] as Array<[MultiAppReleaseAction, string]>).map(([action, label]) => <button key={action} type="button" className={action === 'PUBLISH' ? 'save-button' : 'secondary'} disabled={!releaseAlbumId || !releaseTargets.length || releaseWorking !== null} onClick={() => void runReleaseAction(action)}>{releaseWorking === action ? '处理中...' : label}</button>)}
+            <button type="button" className="secondary" title="刷新各小程序状态" aria-label="刷新各小程序状态" disabled={!releaseAlbumId || !releaseTargets.length} onClick={() => void loadReleaseStatuses()}><RefreshCw size={15} /></button>
+          </div>
+          {releaseError && <p className="table-error">{releaseError}</p>}
+        </div>
+        <div className="table-wrap"><table className="multi-release-table"><thead><tr><th>小程序</th><th>媒资</th><th>TikTok 剧目 / 版本</th><th>审核 / 上架</th><th>最近任务</th></tr></thead><tbody>{releaseStatuses.map((item) => { const reconciliation = item.jobs?.find((job) => job.kind === 'RECONCILE' && job.status === 'SUCCEEDED'); return <tr key={item.miniAppKey}><td><strong>{miniAppNames[item.miniAppKey]}</strong><small>{item.albumId ?? '未准备'}</small></td><td>{item.prepared ? `${item.videoReadyCount ?? 0} / ${item.episodeCount ?? 0} 集${item.mediaReady ? ' · 封面就绪' : ''}` : '-'}</td><td>{item.tiktokAlbumId ?? '-'}<small>当前 {item.version ?? '-'} · 线上 {item.onlineVersion ?? '-'}</small></td><td>{item.prepared ? `${reviewResultLabel(item.reviewStatus)} · ${publishResultLabel(item.publishStatus)}` : '未准备'}{reconciliation?.providerResponse?.review_fail_reasons?.map((reason, index) => <small className="table-error" key={index}>{reason}</small>)}</td><td>{item.error && <small className="table-error">{item.error}</small>}{item.jobs?.slice(0, 3).map((job) => <small key={job.id} className={job.errorMessage ? 'table-error' : 'platform-job-detail'}>{platformJobLabels[job.kind] ?? job.kind}：{job.status === 'SUCCEEDED' ? '任务完成' : job.status === 'FAILED' ? '失败' : job.status === 'CONFLICT' ? '结果未知' : '处理中'}{job.errorMessage ? ` · ${job.errorMessage}` : ''}</small>)}</td></tr>; })}</tbody></table>{releaseAlbumId && !releaseStatuses.length && <p className="empty-copy table-empty">暂无状态</p>}</div>
       </Panel>}
       {tab === 'albums' && <Panel title="共享剧目授权" description="同一 BytePlus 账号下复用已审核的 TikTok 主剧目；目标小程序通过授权使用同一个 album_id，不重复上传或送审。">
         <div className="table-wrap"><table><thead><tr><th>主剧目</th><th>版本 / 状态</th><th>授权小程序</th><th>操作</th></tr></thead><tbody>{sharedAlbums.map((sharedAlbum) => {

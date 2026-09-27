@@ -9,7 +9,7 @@ import {
 } from '../services/tiktok-short-drama.service';
 import { BytePlusVodService } from '../services/byteplus-vod.service';
 import { TikTokShortDramaApiService } from '../services/tiktok-short-drama-api.service';
-import { enqueueVideoSync, processPlatformSyncJobs } from '../services/platform-sync.service';
+import { enqueueDueReviewReconciliations, enqueueVideoSync, processPlatformSyncJobs } from '../services/platform-sync.service';
 import { processSharedPlatformOperations } from '../services/shared-platform.service';
 
 const defaultIntervalMs = 30_000;
@@ -250,6 +250,7 @@ export async function startUploadWorker() {
           log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
         }, context.env);
         if (context.platformApi.isConfigured()) {
+          await enqueueDueReviewReconciliations(context.prisma as any, new Date(), (albumId, error) => console.error(context.env.MINI_APP_KEY, 'Could not queue review reconciliation.', albumId, error));
           await processPlatformSyncJobs(context.prisma as any, context.platformApi, {
             maxRetries: context.env.UPLOAD_MAX_RETRIES,
             log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)

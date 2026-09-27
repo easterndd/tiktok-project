@@ -319,6 +319,30 @@ export async function enqueueAlbumAction(prisma: Db, kind: Extract<PlatformSyncK
   });
 }
 
+export async function enqueueDueReviewReconciliations(prisma: Db, now = new Date(), onError?: (albumId: string, error: unknown) => void) {
+  const reviewing = await prisma.album.findMany({
+    where: { reviewStatus: { in: ['REVIEWING', '1'] }, tiktokAlbumId: { not: null } },
+    select: { id: true, tiktokVersion: true },
+    orderBy: { updatedAt: 'asc' },
+    take: 20
+  });
+  let queued = 0;
+  for (const album of reviewing) {
+    try {
+      if (!album.tiktokVersion) continue;
+      const submitted = await prisma.platformSyncJob.findFirst({ where: { albumId: album.id, kind: 'REVIEW', status: 'SUCCEEDED', snapshotJson: { path: ['version'], equals: album.tiktokVersion } } });
+      if (!submitted) continue;
+      const recent = await prisma.platformSyncJob.findFirst({ where: { albumId: album.id, kind: 'RECONCILE', createdAt: { gte: new Date(now.getTime() - 10 * 60_000) } } });
+      if (recent) continue;
+      await enqueueAlbumAction(prisma, 'RECONCILE', album.id);
+      queued += 1;
+    } catch (error) {
+      onError?.(album.id, error);
+    }
+  }
+  return queued;
+}
+
 async function completeJob(prisma: Db, job: any, data: Record<string, unknown>, now: Date) {
   await prisma.platformSyncJob.update({
     where: { id: job.id },

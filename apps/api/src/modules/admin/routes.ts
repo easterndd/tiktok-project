@@ -30,6 +30,8 @@ import {
   listSharedMediaAssets,
   sharedMiniAppConfig
 } from '../../services/shared-platform.service';
+import { multiAppReleaseStatus, runMultiAppRelease } from '../../services/multi-app-release.service';
+import type { MiniAppKey } from '../../config/mini-apps';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 const episodeParams = z.object({ episodeId: z.string().min(1).max(128) });
@@ -70,6 +72,12 @@ const sharedAuthorizationInput = z.object({
   targetMiniAppKey: z.enum(['main', 'taletv', 'cinereels', 'talereels']),
   targetLocalAlbumId: z.string().trim().min(1).max(128).optional()
 });
+const releaseTargetsInput = z.array(z.enum(['main', 'taletv', 'cinereels', 'talereels'])).min(1).max(4);
+const multiAppReleaseInput = z.object({
+  targetApps: releaseTargetsInput,
+  action: z.enum(['PREPARE', 'SYNC_MEDIA', 'SYNC_VERSION', 'SUBMIT_REVIEW', 'RECONCILE', 'SET_ONLINE_VERSION', 'PUBLISH']),
+  priorityScore: z.union([z.literal(1), z.literal(2)]).optional()
+}).strict();
 const uploadInput = z.object({
   episodeId: z.string().min(1).max(128),
   sourceUrl: z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), '来源地址必须使用 HTTP 或 HTTPS。'),
@@ -1148,6 +1156,25 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       tiktokAlbumId: sharedAlbum.tiktokAlbumId
     });
     return sharedAlbum;
+  });
+
+  app.get('/admin/multi-app-releases/:albumId', { preHandler: requirePermission('content.publish') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    const { targetApps } = z.object({ targetApps: z.string().min(1) }).parse(request.query);
+    const targets = releaseTargetsInput.parse(targetApps.split(','));
+    const operator = await app.prisma.adminUser.findUnique({ where: { id: request.user.sub }, select: { email: true } });
+    if (!operator) throw Object.assign(new Error('当前管理员不存在。'), { statusCode: 403 });
+    return multiAppReleaseStatus({ dbByApp: app.miniAppPrisma as any, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: targets, operatorEmail: operator.email });
+  });
+
+  app.post('/admin/multi-app-releases/:albumId', { preHandler: requirePermission('content.publish') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    const input = multiAppReleaseInput.parse(request.body);
+    const operator = await app.prisma.adminUser.findUnique({ where: { id: request.user.sub }, select: { email: true } });
+    if (!operator) throw Object.assign(new Error('当前管理员不存在。'), { statusCode: 403 });
+    const result = await runMultiAppRelease({ sourceDb: app.prisma as any, dbByApp: app.miniAppPrisma as any, env: app.rootConfig, sourceApp: app.config.MINI_APP_KEY as MiniAppKey, sourceAlbumId: albumId, targetApps: input.targetApps, operatorEmail: operator.email, action: input.action, priorityScore: input.priorityScore });
+    await audit(app, request.user.sub, `MULTI_APP_${input.action}`, 'Album', albumId, { targets: result.items.map((item) => ({ miniAppKey: item.miniAppKey, accepted: item.accepted })) });
+    return result;
   });
 
   app.post('/admin/shared/albums/:sharedAlbumId/authorizations', { preHandler: requirePermission('content.review') }, async (request) => {

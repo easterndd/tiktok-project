@@ -28,6 +28,7 @@ import { registerPrisma } from './plugins/prisma';
 declare module 'fastify' {
   interface FastifyInstance {
     config: Env;
+    rootConfig: Env;
     sharedPrisma: PrismaClient;
     miniAppPrisma: Record<string, PrismaClient>;
   }
@@ -161,6 +162,7 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
 
   const registerContext = async (context: FastifyInstance, contextEnv: Env, prisma: PrismaClient, miniAppPrisma: Record<string, PrismaClient>) => {
     context.decorate('config', contextEnv);
+    context.decorate('rootConfig', mainEnv);
     context.decorate('sharedPrisma', sharedPrisma);
     context.decorate('miniAppPrisma', miniAppPrisma);
     await registerPrisma(context, prisma);
