@@ -2,7 +2,7 @@
 
 ## Platform basis
 
-The supplied `TikTok小程序短剧媒资库接入文档.docx` describes client-key authentication, BytePlus VID registration, album version creation, review submission, album query, online-version selection, and listing. Its album authorization API is for one app's reviewed album to play in another app. This workflow does **not** call album authorization: each selected Mini App owns a separate TikTok album, version, review, and publish result.
+The supplied `TikTok小程序短剧媒资库接入文档.docx` describes client-key authentication, BytePlus VID registration, album version creation, review submission, album query, online-version selection, and listing. Its album authorization API is for one app's reviewed album to play in another app. This workflow does **not** call album authorization: each selected Mini App owns a separate TikTok album, version, review, and publish result. The document does not guarantee that a VID already registered under one Mini App's media scope can be registered under another. TikTok has returned `video already exists with a different media scope` for that exact case; do not retry the same VID or treat reuse across client keys as supported without provider confirmation.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ The supplied `TikTok小程序短剧媒资库接入文档.docx` describes client-
 ## Operator flow
 
 1. In the source Mini App's admin, choose the source drama under **Multi-App Independent Release** and select the target apps. Include the source app if it should participate in the batch operation.
-2. Click **Prepare targets**. "Not prepared" means that this workflow has not created its deterministic target draft; an unrelated drama already present in the target app is not automatically linked. Missing target drafts are created with the same BytePlus VIDs but without TikTok album or episode IDs. Cover and video registration jobs are queued in each target app. Existing target drafts are not overwritten if their source content differs.
+2. Click **Prepare targets**. "Not prepared" means that this workflow has not created its deterministic target draft; an unrelated drama already present in the target app is not automatically linked. Missing target drafts initially reference the source BytePlus VIDs but have no TikTok album or episode IDs. Cover and video registration jobs are queued in each target app. If TikTok rejects a VID for a different media scope, the target needs a provider-approved way to obtain a VID in its own scope before independent review can proceed. Existing target drafts are not overwritten if their source content differs.
 3. Once each target's media count and cover are ready, click **Sync version**. Every target creates its own TikTok album/version.
 4. Click **Submit review**. Each target submits its own version. Review statuses are reconciled by the worker about every 10 minutes while under review. Use **Reconcile** to query immediately.
 5. For apps with a passed review, click **Set online version**, then **Publish**. Inspect each app's status and task errors independently. A failure in one app does not silently count as success for the others.

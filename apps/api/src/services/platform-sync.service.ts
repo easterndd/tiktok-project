@@ -61,7 +61,15 @@ function retryDelayMs(attempt: number) {
 
 function platformError(error: unknown) {
   if (error instanceof TikTokShortDramaApiError) {
-    return { code: error.code, message: error.message, requestId: error.requestId, retryable: error.retryable };
+    const mediaScopeConflict = /video already exists with a different media scope/i.test(error.message);
+    return {
+      code: error.code,
+      message: mediaScopeConflict
+        ? `TikTok 拒绝在当前小程序重复登记此 BytePlus VID（video already exists with a different media scope）。需要目标作用域的新 VID，或改走剧目授权；重复同步无效。`
+        : error.message,
+      requestId: error.requestId,
+      retryable: mediaScopeConflict ? false : error.retryable
+    };
   }
   if (error instanceof TikTokShortDramaNotConfiguredError) return { message: error.message, retryable: false };
   return { message: error instanceof Error ? error.message.slice(0, 500) : 'TikTok platform sync failed.', retryable: false };
@@ -198,6 +206,9 @@ export async function enqueuePlatformSyncJob(prisma: Db, input: PlatformJobInput
   const existing = await prisma.platformSyncJob.findUnique({ where: { dedupeKey: input.dedupeKey } });
   if (existing) {
     if (existing.status !== 'FAILED') return existing;
+    if (input.kind === 'VIDEO' && /video already exists with a different media scope/i.test(existing.errorMessage ?? '')) {
+      throw workflowConflict('此 BytePlus VID 已属于另一个 TikTok 媒资作用域，不能在当前小程序重复登记。需要目标作用域的新 VID，或改走剧目授权；重复点击同步无效。');
+    }
     // A deliberate operator retry should recover jobs that exhausted automatic
     // retries during a transient provider or network outage.
     return prisma.platformSyncJob.update({

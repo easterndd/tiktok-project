@@ -52,6 +52,39 @@ test('does not duplicate an active platform sync job', async () => {
   assert.equal(result, existing);
 });
 
+test('does not requeue a video rejected for a different TikTok media scope', async () => {
+  const prisma = {
+    platformSyncJob: {
+      findUnique: async () => ({ id: 'video-1', status: 'FAILED', errorMessage: 'video already exists with a different media scope' }),
+      update: async () => assert.fail('scope conflicts must not be retried')
+    }
+  };
+  await assert.rejects(() => enqueuePlatformSyncJob(prisma as any, {
+    kind: 'VIDEO', targetId: 'episode-1', episodeId: 'episode-1', dedupeKey: 'VIDEO:episode-1:vid-1'
+  }), /目标作用域的新 VID/);
+});
+
+test('records a media-scope conflict as a permanent video failure with the TikTok request id', async () => {
+  const updates: Record<string, any>[] = [];
+  const job = { id: 'video-1', kind: 'VIDEO', targetId: 'episode-1', episodeId: 'episode-1', status: 'PENDING', attemptCount: 0 };
+  const prisma: any = {
+    platformSyncJob: {
+      findMany: async () => [job],
+      updateMany: async () => ({ count: 1 }),
+      update: async (input: Record<string, any>) => { updates.push(input); return input; }
+    },
+    episode: {
+      findUnique: async () => ({ id: 'episode-1', title: 'Episode 1', byteplusVid: 'vid-1', tiktokVideoJobId: null, tiktokVideoStatus: 'NOT_STARTED' }),
+      update: async (input: Record<string, any>) => input
+    }
+  };
+  const api = { createVideo: async () => { throw new TikTokShortDramaApiError('video already exists with a different media scope', 'SCOPE_CONFLICT', 'provider-log', true); } };
+  await processPlatformSyncJobs(prisma, api as any);
+  assert.equal(updates.at(-1)?.data.status, 'FAILED');
+  assert.equal(updates.at(-1)?.data.providerRequestId, 'provider-log');
+  assert.match(updates.at(-1)?.data.errorMessage, /目标作用域的新 VID/);
+});
+
 test('stores review priority in the queued snapshot and rejects changing an active review', async () => {
   let queued: Record<string, any> | null = null;
   const prisma = {
