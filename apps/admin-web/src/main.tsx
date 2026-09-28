@@ -6,6 +6,7 @@ import {
 import { createRoot } from 'react-dom/client';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { defaultEpisodeTitle, episodeNoFromName, nextEpisodeNo, renumberEpisodes, resolveAppendEpisodes } from './episode-draft';
+import { uploadMultipart, UploadRequestError, type UploadProgress } from './upload-request';
 import './styles.css';
 
 type MiniApp = 'main' | 'taletv' | 'cinereels' | 'talereels';
@@ -279,6 +280,19 @@ function Status({ value }: { value: string }) {
   return <span className={`status ${tone}`}><i />{labels[value] ?? value}</span>;
 }
 
+type DraftUploadProgress = UploadProgress | { phase: 'complete' };
+
+function UploadMeter({ episodeNo, progress }: { episodeNo: number; progress: DraftUploadProgress }) {
+  const percent = progress.phase === 'sending' ? progress.percent : progress.phase === 'complete' ? 100 : undefined;
+  const label = progress.phase === 'sending' ? `传至服务器 ${percent}%` : progress.phase === 'processing' ? 'BytePlus 处理中' : '上传完成';
+  return <div className="upload-meter-wrap">
+    <div className={`upload-meter ${progress.phase}`} role="progressbar" aria-label={`第 ${episodeNo} 集上传进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-valuetext={label}>
+      <span style={percent === undefined ? undefined : { width: `${percent}%` }} />
+    </div>
+    <small>{label}</small>
+  </div>;
+}
+
 function Panel({ title, description, action, children }: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
   return <section className="panel"><div className="panel-heading"><div><h2>{title}</h2>{description && <p>{description}</p>}</div>{action}</div>{children}</section>;
 }
@@ -325,6 +339,7 @@ function AdminApp() {
   });
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [draftEpisodes, setDraftEpisodes] = useState<DraftEpisode[]>(() => Array.from({ length: 3 }, (_, index) => ({ localId: `draft-${index + 1}`, episodeNo: index + 1, title: `第 ${index + 1} 集`, sortOrder: index + 1, isFree: false })));
+  const [uploadProgress, setUploadProgress] = useState<Record<string, DraftUploadProgress>>({});
   const [creating, setCreating] = useState(false);
   const [batchFeedback, setBatchFeedback] = useState('');
   const [draftReady, setDraftReady] = useState(false);
@@ -496,7 +511,10 @@ function AdminApp() {
         setCreateRewardedEnabled(saved.rewardedEnabled ?? true);
         setCreatePlacementId(saved.placementId ?? defaultPlacementId);
         setCreateRewardedCount(saved.rewardedCount ?? 1);
-        if (saved.episodes?.length) setDraftEpisodes(saved.episodes.map((episode) => ({ ...episode, file: null, coverFile: null, coverPreviewUrl: '' })));
+        if (saved.episodes?.length) setDraftEpisodes(saved.episodes.map((episode) => ({
+          ...episode, file: null, coverFile: null, coverPreviewUrl: '',
+          ...(episode.uploadStatus === '上传中' ? { uploadStatus: '待对账', uploadError: '上传页面曾中断，请先查看上传任务状态；不要直接重新上传。' } : {})
+        })));
         setMessage('已恢复本地草稿；本地文件需重新选择后再上传。');
       }
     } catch {
@@ -530,6 +548,7 @@ function AdminApp() {
     setCreatePlacementId(defaultPlacementId);
     setCreateRewardedCount(1);
     setBatchFeedback('');
+    setUploadProgress({});
     setSelectedTemplateId('');
     localStorage.removeItem(contentDraftStorageKey);
     setDraftEpisodes(Array.from({ length: 3 }, (_, index) => ({ localId: `draft-${Date.now()}-${index + 1}`, episodeNo: index + 1, title: `第 ${index + 1} 集`, sortOrder: index + 1, isFree: false })));
@@ -672,13 +691,29 @@ function AdminApp() {
   const uploadDraftVideo = async (draft: DraftEpisode) => {
     if (!draft.savedEpisodeId || !draft.file) return;
     patchDraftEpisode(draft.localId, { uploadStatus: '上传中', uploadError: undefined });
+    setUploadProgress((current) => ({ ...current, [draft.localId]: { phase: 'sending', percent: 0 } }));
     try {
       const form = new FormData();
       form.append('episodeId', draft.savedEpisodeId);
       form.append('file', draft.file);
-      await api('/admin/upload-jobs/local', { method: 'POST', body: form });
+      await uploadMultipart(`${API}/admin/upload-jobs/local`, form, sessionStorage.getItem(adminTokenStorageKey),
+        (progress) => setUploadProgress((current) => ({ ...current, [draft.localId]: progress })));
+      setUploadProgress((current) => ({ ...current, [draft.localId]: { phase: 'complete' } }));
       patchDraftEpisode(draft.localId, { uploadStatus: '已上传', uploadError: undefined });
     } catch (error) {
+      setUploadProgress((current) => {
+        const next = { ...current };
+        delete next[draft.localId];
+        return next;
+      });
+      if (error instanceof UploadRequestError && error.status === 401) {
+        sessionStorage.removeItem(adminTokenStorageKey);
+        if (!adminSessionRecoveryStarted) {
+          adminSessionRecoveryStarted = true;
+          window.location.reload();
+        }
+        throw new Error('管理员登录已失效，正在返回登录页。');
+      }
       const uploadError = error instanceof Error ? error.message : '视频上传失败';
       let needsReconciliation = false;
       try {
@@ -1023,7 +1058,7 @@ function AdminApp() {
               <td><input type="checkbox" aria-label="单集免费" checked={episode.isFree} disabled={Boolean(episode.savedEpisodeId)} onChange={(event) => patchDraftEpisode(episode.localId, { isFree: event.target.checked })} /></td>
               <td><div className="episode-cover-cell"><label className="file-cell">{episode.coverFile?.name ?? (episode.coverAsset ? '已保存封面' : '使用专辑封面')}<input type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" disabled={Boolean(episode.savedEpisodeId)} onChange={(event) => selectEpisodeCover(episode, event.target.files?.[0] ?? null)} /></label>{(episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl) && <img className="episode-cover-preview" src={episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl} alt={`${episode.title} 封面预览`} />}</div></td>
               <td><label className="file-cell">{episode.file?.name ?? (episode.byteplusVid ? '已有 BytePlus VID' : '选择视频')}<input type="file" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" onChange={(event) => patchDraftEpisode(episode.localId, { file: event.target.files?.[0] ?? null, byteplusVid: '', uploadError: undefined })} /></label><select value={episode.byteplusVid ?? ''} onChange={(event) => patchDraftEpisode(episode.localId, { byteplusVid: event.target.value, file: null, uploadError: undefined })}><option value="">选择已有 VOD 媒资</option>{vodMedia.map((media) => <option key={media.vid} value={media.vid}>{media.title} · {media.vid}</option>)}</select><input className="table-input" placeholder="或粘贴已有 BytePlus VID" value={episode.byteplusVid ?? ''} onChange={(event) => patchDraftEpisode(episode.localId, { byteplusVid: event.target.value, file: null, uploadError: undefined })} /></td>
-              <td><div className="draft-upload-state"><span>{episode.byteplusVid ? '待从 VOD 导入' : episode.uploadStatus ?? (episode.file ? '待保存' : '缺少视频')}</span>{episode.uploadError && <small className="table-error" title={episode.uploadError}>{episode.uploadError}</small>}{episode.uploadStatus === '上传失败' && episode.file && episode.savedEpisodeId && <button className="text-button retry-button" type="button" onClick={() => void uploadDraftVideo(episode).catch((error) => setMessage(error instanceof Error ? error.message : '上传失败'))}>重试上传</button>}</div></td>
+              <td><div className="draft-upload-state"><span>{episode.byteplusVid ? '待从 VOD 导入' : episode.uploadStatus ?? (episode.file ? '待保存' : '缺少视频')}</span>{uploadProgress[episode.localId] && (episode.uploadStatus === '上传中' || episode.uploadStatus === '已上传') && <UploadMeter episodeNo={episode.episodeNo} progress={uploadProgress[episode.localId]} />}{episode.uploadError && <small className="table-error" title={episode.uploadError}>{episode.uploadError}</small>}{episode.uploadStatus === '上传失败' && episode.file && episode.savedEpisodeId && <button className="text-button retry-button" type="button" onClick={() => void uploadDraftVideo(episode).catch((error) => setMessage(error instanceof Error ? error.message : '上传失败'))}>重试上传</button>}</div></td>
               <td><button className="more" type="button" disabled={Boolean(episode.savedEpisodeId)} onClick={() => setDraftEpisodes((items) => items.filter((item) => item.localId !== episode.localId))} title={episode.savedEpisodeId ? '已保存分集不能从当前表单删除' : '删除'}><Trash2 size={15} /></button></td>
             </tr>)}</tbody></table></div>
             <button className="secondary" type="button" onClick={() => setDraftEpisodes((items) => {

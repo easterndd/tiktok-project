@@ -149,6 +149,14 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .table-empty { border-top: 1px solid var(--line); }
 .table-error { display: block; max-width: 260px; margin-top: 4px; overflow: hidden; color: #c5344d; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .draft-upload-state { display: grid; gap: 4px; min-width: 130px; }
+.upload-meter-wrap { display: grid; gap: 5px; width: min(100%, 180px); }
+.upload-meter-wrap small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.upload-meter { position: relative; height: 6px; overflow: hidden; border-radius: 3px; background: #e3e8f0; }
+.upload-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--cyan); transition: width 180ms ease; }
+.upload-meter.processing > span { position: absolute; width: 38%; animation: upload-processing 1.3s ease-in-out infinite; background: var(--yellow); }
+.upload-meter.complete > span { background: var(--green); }
+@keyframes upload-processing { from { transform: translateX(-100%); } to { transform: translateX(265%); } }
+@media (prefers-reduced-motion: reduce) { .upload-meter > span { transition: none; } .upload-meter.processing > span { animation: none; width: 100%; } }
 .retry-button { min-height: 30px; margin: 0; padding: 0 9px; font-size: 10px; }
 .spin { animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
