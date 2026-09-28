@@ -5,6 +5,46 @@ export function defaultEpisodeTitle(episodeNo: number) {
   return `第 ${episodeNo} 集`;
 }
 
+function chineseEpisodeNo(value: string): number | null {
+  const digits: Record<string, number> = { '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+  const units: Record<string, number> = { '十': 10, '百': 100, '千': 1000 };
+  let total = 0;
+  let digit = 0;
+  let lastUnit = 10000;
+  let zero = false;
+  for (const character of value) {
+    if (character === '零' || character === '〇') {
+      if (lastUnit === 10000 || digit || zero) return null;
+      zero = true;
+    } else if (digits[character]) {
+      if (digit) return null;
+      digit = digits[character];
+      zero = false;
+    } else {
+      const unit = units[character];
+      if (!unit || unit >= lastUnit || zero || (!digit && (unit !== 10 || lastUnit !== 10000))) return null;
+      total += (digit || 1) * unit;
+      digit = 0;
+      lastUnit = unit;
+    }
+  }
+  return zero ? null : total + digit || null;
+}
+
+export function episodeNoFromName(fileName: string): number | null {
+  const name = fileName.replace(/\.[^.]+$/, '');
+  const arabic = [/第\s*0*(\d+)\s*集/i, /Episode\s*0*(\d+)/i, /\bS\d+E0*(\d+)\b/i, /\bEP?0*(\d+)\b/i, /^0*(\d+)(?:\s*集)?(?=$|[\s._-])/];
+  for (const pattern of arabic) {
+    const match = pattern.exec(name);
+    if (match) {
+      const number = Number(match[1]);
+      return Number.isSafeInteger(number) && number > 0 ? number : null;
+    }
+  }
+  const chinese = /第\s*([零〇一二两三四五六七八九十百千]+)\s*集/.exec(name);
+  return chinese ? chineseEpisodeNo(chinese[1]) : null;
+}
+
 export function nextEpisodeNo(episodes: readonly NumberedEpisode[]) {
   return (episodes.at(-1)?.episodeNo ?? 0) + 1;
 }

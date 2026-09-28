@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { defaultEpisodeTitle, nextEpisodeNo, renumberEpisodes, resolveAppendEpisodes } from './episode-draft';
+import { defaultEpisodeTitle, episodeNoFromName, nextEpisodeNo, renumberEpisodes, resolveAppendEpisodes } from './episode-draft';
 import './styles.css';
 
 type MiniApp = 'main' | 'taletv' | 'cinereels' | 'talereels';
@@ -277,15 +277,6 @@ function Status({ value }: { value: string }) {
   };
   const tone = value === 'SUCCEEDED' || value === 'ONLINE' || value === 'READY' || value === 'COMPLETED' || value === 'AUTHORIZED' ? 'green' : value === 'FAILED' || value === 'ERROR' || value === 'OFFLINE' || value === 'REJECTED' || value === 'CONFLICT' || value === 'ACCESS_ERROR' ? 'pink' : 'yellow';
   return <span className={`status ${tone}`}><i />{labels[value] ?? value}</span>;
-}
-
-function episodeNoFromName(fileName: string) {
-  const patterns = [/第\s*0*(\d+)\s*集/i, /Episode\s*0*(\d+)/i, /\bE0*(\d+)\b/i, /\bS\d+E0*(\d+)\b/i];
-  for (const pattern of patterns) {
-    const match = pattern.exec(fileName);
-    if (match) return Number(match[1]);
-  }
-  return null;
 }
 
 function Panel({ title, description, action, children }: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {

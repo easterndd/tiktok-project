@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { defaultEpisodeTitle, nextEpisodeNo, renumberEpisodes, resolveAppendEpisodes } from '../src/episode-draft.ts';
+import { defaultEpisodeTitle, episodeNoFromName, nextEpisodeNo, renumberEpisodes, resolveAppendEpisodes } from '../src/episode-draft.ts';
+
+test('matches Arabic and Chinese episode numbers in video filenames', () => {
+  for (const [name, number] of [
+    ['第1集.mp4', 1], ['第 03 集.mp4', 3], ['1.mp4', 1], ['01.mp4', 1], ['1集.mp4', 1],
+    ['2-结局.mp4', 2], ['第一集.mp4', 1], ['第十集.mp4', 10],
+    ['第二十三集.mp4', 23], ['第一百零二集.mp4', 102],
+    ['Episode 04.mp4', 4], ['S01E05.mp4', 5], ['E06.mp4', 6], ['EP07.mp4', 7]
+  ]) assert.equal(episodeNoFromName(name), number, name);
+});
+
+test('does not mistake unrelated or invalid numbers for episodes', () => {
+  for (const name of ['预告2026.mp4', '第零集.mp4', '0.mp4', '第一二集.mp4', '第一十十集.mp4', '视频.mp4']) {
+    assert.equal(episodeNoFromName(name), null, name);
+  }
+});
 
 const episodes = [
   { localId: 'one', episodeNo: 1, title: '第 1 集', sortOrder: 1 },
