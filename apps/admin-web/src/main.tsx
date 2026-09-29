@@ -1,13 +1,14 @@
 import {
   Activity, AlertTriangle, BarChart3, CalendarDays, CheckCircle2, CircleAlert, Database,
   Film, FileVideo, Gauge, Image, LayoutDashboard, ListVideo, LogIn, Megaphone, MoreHorizontal, Plus,
-  RefreshCw, Save, Settings2, Trash2, Users, Wifi
+  Pencil, RefreshCw, Save, Settings2, Trash2, Users, Wifi
 } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { defaultEpisodeTitle, episodeNoFromName, nextEpisodeNo, renumberEpisodes, resolveAppendEpisodes } from './episode-draft';
 import { uploadMultipart, UploadRequestError, type UploadProgress } from './upload-request';
 import { DramaMaterials } from './drama-materials';
+import { AlbumMetadataDialog, type EditableAlbumMetadata } from './album-metadata-dialog';
 import './styles.css';
 
 const miniAppNames = { main: 'QuicK ReeLS', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks' } as const;
@@ -58,6 +59,8 @@ let adminSessionRecoveryStarted = false;
 type Album = {
   id: string;
   title: string;
+  description?: string;
+  language?: string;
   status: string;
   episodeCount: number;
   coverUrl?: string;
@@ -351,6 +354,7 @@ function AdminApp() {
   const [savingAlbumId, setSavingAlbumId] = useState<string | null>(null);
   const [savingTitleId, setSavingTitleId] = useState<string | null>(null);
   const [titleDrafts, setTitleDrafts] = useState<Record<string, string>>({});
+  const [editingAlbumMetadata, setEditingAlbumMetadata] = useState<Album | null>(null);
   const [deletingAlbumId, setDeletingAlbumId] = useState<string | null>(null);
   const [dirtyAccessAlbumIds, setDirtyAccessAlbumIds] = useState<Set<string>>(() => new Set());
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
@@ -1005,6 +1009,11 @@ function AdminApp() {
       setSavingTitleId(null);
     }
   };
+  const albumMetadataSaved = (updated: EditableAlbumMetadata) => {
+    setAlbums((items) => items.map((item) => item.id === updated.id ? { ...item, ...updated, episodeCount: item.episodeCount } : item));
+    setTitleDrafts((drafts) => { const next = { ...drafts }; delete next[updated.id]; return next; });
+    setMessage(`“${updated.title}”的剧名和简介已保存并同步到当前小程序。`);
+  };
   const syncTikTokMedia = async (album: Album) => {
     setPlatformWorking(`${album.id}:media`);
     try {
@@ -1108,6 +1117,7 @@ function AdminApp() {
           <td><input className="inline-number" type="number" min="1" value={album.accessConfig?.rewardedAdCount ?? 1} onChange={(event) => updateAccessDraft(album.id, { rewardedAdCount: Number(event.target.value) })} /></td>
           <td><div className="access-actions title-actions">
             {titleDirty && <button className="save-button" type="button" disabled={renaming || savingAlbumId === album.id} onClick={() => void saveAlbumTitle(album)}><Save size={14} />{renaming ? '同步中...' : '保存并同步到小程序'}</button>}
+            {canWriteContent && <button className="secondary metadata-edit-button" type="button" disabled={renaming || savingAlbumId === album.id} onClick={() => setEditingAlbumMetadata({ ...album, title })}><Pencil size={14} />编辑简介</button>}
             <button className="save-button" disabled={savingAlbumId === album.id || deletingAlbumId === album.id || !accessDirty} onClick={() => void updateAccess(album)}><Save size={15} />{savingAlbumId === album.id ? '保存中...' : '保存配置'}</button>
             {canDelete && <button className="delete-button" type="button" disabled={deletingAlbumId === album.id || savingAlbumId === album.id} onClick={() => void deleteDraftAlbum(album)} title={`删除草稿剧集 ${album.title}`}><Trash2 size={15} />{deletingAlbumId === album.id ? '删除中...' : '删除'}</button>}
           </div></td>
@@ -1187,6 +1197,7 @@ function AdminApp() {
       {tab === 'audience' && audience && <><section className="metrics"><Metric label="活跃观众" value={String(audience.activeUsers)} change={`${audience.from} 至 ${audience.to}`} icon={Users} tone="green" /><Metric label="新增观众" value={String(audience.newUsers)} change={`日活 ${audience.dau} · 周活 ${audience.wau} · 月活 ${audience.mau}`} icon={Database} tone="cyan" /><Metric label="观看会话" value={String(audience.watchSessions)} change="播放器会话开始次数" icon={Film} tone="pink" /><Metric label="完播集数" value={String(audience.completedEpisodes)} change="每用户每集首次完播" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="观众趋势" description="按天统计新增和活跃用户"><DailyBars title="新增观众" items={audience.dailyNewUsers} /><DailyBars title="日活用户" items={audience.dailyActiveUsers} /></Panel><Panel title="互动概览" description="帮助判断内容和运营活动表现"><BarList title="互动指标" items={[{ label: '收藏', value: audience.favorites }, { label: '分享', value: audience.shares }, { label: '搜索', value: audience.searches }]} color="cyan" /></Panel></div></>}
       {tab === 'playback' && playback && <><section className="metrics"><Metric label="播放器事件" value={String(playback.totalEvents)} change={`近 ${playback.periodDays} 天`} icon={Activity} tone="cyan" /><Metric label="首帧事件" value={String(playback.firstFrames)} change="成功启动" icon={Gauge} tone="green" /><Metric label="错误率" value={`${playback.errorRate}%`} change={`${playback.errorCount} 次错误`} icon={CircleAlert} tone="pink" /><Metric label="平均首帧" value={playback.averageStartupMs === null ? '-' : `${playback.averageStartupMs} 毫秒`} change="启动耗时" icon={Wifi} tone="yellow" /></section><div className="content-grid"><Panel title="播放事件分布" description="根据小程序播放器上报聚合"><BarList title="事件类型" items={playback.eventTypes.map((item) => ({ label: item.eventType, value: item.count }))} /><BarList title="清晰度" items={playback.definitions.map((item) => ({ label: item.definition, value: item.count }))} color="cyan" /><BarList title="网络类型" items={playback.networks.map((item) => ({ label: item.networkType, value: item.count }))} color="green" /></Panel><Panel title="最近播放错误" description="优先定位实际影响用户的剧集"><div className="compact-list">{playback.recentErrors.map((error, index) => <div className="compact-row" key={`${error.createdAt}-${index}`}><CircleAlert size={17} /><span><strong>{error.episodeTitle}</strong><small>{error.errorCode ?? '未知错误'} · {new Date(error.createdAt).toLocaleString('zh-CN')}</small></span></div>)}{!playback.recentErrors.length && <p className="empty-copy">暂无播放错误</p>}</div></Panel></div></>}
       {tab === 'security' && <div className="content-grid"><Panel title="当前管理员" description="角色和账号状态由服务端实时校验"><div className="readiness-list"><div><span className="ready-dot done"><CheckCircle2 size={15} /></span><span><strong>{currentAdmin?.email ?? '-'}</strong><small>角色：{currentAdmin?.role ?? '-'} · 状态：{currentAdmin?.status ?? '-'}</small></span></div><div><span className="ready-dot done"><CalendarDays size={15} /></span><span><strong>最近登录</strong><small>{currentAdmin?.lastLoginAt ? new Date(currentAdmin.lastLoginAt).toLocaleString('zh-CN') : '暂无记录'}</small></span></div></div></Panel><Panel title="修改密码" description="更新后当前登录令牌会立即失效"><form className="policy-form" onSubmit={changePassword}><label>当前密码<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label><label>新密码<input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label><button className="primary" type="submit" disabled={changingPassword}><Save size={17} />{changingPassword ? '更新中...' : '更新密码'}</button></form></Panel></div>}
+      <AlbumMetadataDialog album={editingAlbumMetadata} api={api} onClose={() => setEditingAlbumMetadata(null)} onSaved={albumMetadataSaved} />
     </main></div>;
 }
 
