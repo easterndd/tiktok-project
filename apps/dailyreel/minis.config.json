@@ -1,0 +1,20 @@
+{
+  "appId": "7688950749593913351",
+  "dev": {
+    "name": "DailyReel",
+    "host": "localhost",
+    "port": 5180,
+    "iconUrl": "",
+    "desc": "DailyReel is a TikTok Minis short-drama app where viewers can discover series, watch free episodes, resume viewing, and unlock selected episodes through rewarded ads where available. Content availability varies by region.",
+    "ppLink": "https://www.yya.ai/capy/privacypolicy.html",
+    "tosLink": "https://www.yya.ai/capy/termsofservice.html"
+  },
+  "navbar": {
+    "bgColorLight": "#0f172a",
+    "bgColorDark": "#0f172a"
+  },
+  "build": {
+    "htmlEntry": "index.html",
+    "outputDir": "dist"
+  }
+}
