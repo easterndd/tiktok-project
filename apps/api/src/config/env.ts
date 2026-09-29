@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { resolve } from 'node:path';
+import { miniAppKeys } from './mini-apps';
 
 let processEnvFileLoaded = false;
 
@@ -57,7 +58,7 @@ const environment = z.object({
   CINEREELS_APP_ENTRY_PLACEMENT_ID: z.string().optional(),
   TALEREELS_REWARDED_PLACEMENT_ID: z.string().optional(),
   TALEREELS_APP_ENTRY_PLACEMENT_ID: z.string().optional(),
-  MINI_APP_KEY: z.enum(['main', 'taletv', 'cinereels', 'talereels']).default('main'),
+  MINI_APP_KEY: z.enum(miniAppKeys).default('main'),
   TIKTOK_SHORT_DRAMA_API_BASE: z.string().url().default('https://open.tiktokapis.com'),
   API_PUBLIC_BASE_URL: z.string().url().optional(),
   COVER_ASSET_STORAGE_DIR: z.string().min(1).default('tmp/cover-assets'),
@@ -66,7 +67,7 @@ const environment = z.object({
   LOCAL_PLAYBACK_ENABLED: z.coerce.boolean().default(false),
   UPLOAD_WORKER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
   UPLOAD_MAX_RETRIES: z.coerce.number().int().min(0).max(20).default(5)
-});
+}).catchall(z.unknown());
 
 export type Env = z.infer<typeof environment>;
 
@@ -76,6 +77,12 @@ export function loadEnv(source = process.env): Env {
   if (!parsed.success) {
     const keys = parsed.error.issues.map((issue) => issue.path.join('.')).join(', ');
     throw new Error(`Invalid environment configuration: ${keys}`);
+  }
+  for (const key of miniAppKeys.slice(4)) {
+    const databaseUrl = parsed.data[`${key.toUpperCase()}_DATABASE_URL`];
+    if (databaseUrl && (typeof databaseUrl !== 'string' || !URL.canParse(databaseUrl))) {
+      throw new Error(`Invalid environment configuration: ${key.toUpperCase()}_DATABASE_URL`);
+    }
   }
   return parsed.data;
 }

@@ -1,8 +1,19 @@
 import type { Env } from './env';
 
-export type MiniAppKey = 'main' | 'taletv' | 'cinereels' | 'talereels';
+export const miniAppKeys = ['main', 'taletv', 'cinereels', 'talereels', 'storyland', 'dramacloud', 'dailyreel', 'dramaone', 'dramaup', 'dramavault', 'talehub', 'talebox', 'storyworld', 'storyhub', 'dramaroom', 'dramazone', 'taleflick', 'dramashort', 'storyshort', 'storyflicks', 'dramaflicks'] as const;
+export type MiniAppKey = typeof miniAppKeys[number];
 
 type SecondaryMiniAppKey = Exclude<MiniAppKey, 'main'>;
+
+const definition = (prefix: string) => ({
+  databaseEnv: `${prefix}_DATABASE_URL` as keyof Env,
+  clientKeyEnv: `${prefix}_TIKTOK_CLIENT_KEY` as keyof Env,
+  clientSecretEnv: `${prefix}_TIKTOK_CLIENT_SECRET` as keyof Env,
+  appIdEnv: `${prefix}_TIKTOK_APP_ID` as keyof Env,
+  rewardedPlacementEnv: `${prefix}_REWARDED_PLACEMENT_ID` as keyof Env,
+  entryPlacementEnv: `${prefix}_APP_ENTRY_PLACEMENT_ID` as keyof Env,
+  path: prefix.toLowerCase()
+});
 
 const secondaryMiniApps: Record<SecondaryMiniAppKey, {
   databaseEnv: keyof Env;
@@ -39,11 +50,20 @@ const secondaryMiniApps: Record<SecondaryMiniAppKey, {
     rewardedPlacementEnv: 'TALEREELS_REWARDED_PLACEMENT_ID',
     entryPlacementEnv: 'TALEREELS_APP_ENTRY_PLACEMENT_ID',
     path: 'talereels'
-  }
+  },
+  storyland: definition('STORYLAND'), dramacloud: definition('DRAMACLOUD'),
+  dailyreel: definition('DAILYREEL'), dramaone: definition('DRAMAONE'),
+  dramaup: definition('DRAMAUP'), dramavault: definition('DRAMAVAULT'),
+  talehub: definition('TALEHUB'), talebox: definition('TALEBOX'),
+  storyworld: definition('STORYWORLD'), storyhub: definition('STORYHUB'),
+  dramaroom: definition('DRAMAROOM'), dramazone: definition('DRAMAZONE'),
+  taleflick: definition('TALEFLICK'), dramashort: definition('DRAMASHORT'),
+  storyshort: definition('STORYSHORT'), storyflicks: definition('STORYFLICKS'),
+  dramaflicks: definition('DRAMAFLICKS')
 };
 
 function valueOf(env: Env, key: keyof Env) {
-  return env[key] as string | undefined;
+  return (env as Record<string, unknown>)[key] as string | undefined;
 }
 
 function assertSeparateDatabase(env: Env, key: SecondaryMiniAppKey, databaseUrl: string) {
@@ -95,7 +115,7 @@ export function miniAppEnvironment(env: Env, key: MiniAppKey): Env | null {
 }
 
 export function configuredMiniAppKeys(env: Env): MiniAppKey[] {
-  return ['main', ...Object.keys(secondaryMiniApps)].filter((key) => key === 'main' || Boolean(valueOf(env, secondaryMiniApps[key as SecondaryMiniAppKey].databaseEnv))) as MiniAppKey[];
+  return miniAppKeys.filter((key) => key === 'main' || Boolean(valueOf(env, secondaryMiniApps[key].databaseEnv)));
 }
 
 export function miniAppPath(key: MiniAppKey) {

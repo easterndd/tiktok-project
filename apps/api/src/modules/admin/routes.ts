@@ -28,7 +28,7 @@ import {
   listSharedMediaAssets,
 } from '../../services/shared-platform.service';
 import { authorizeSharedPlayback, sharedPlaybackStatus } from '../../services/shared-playback.service';
-import type { MiniAppKey } from '../../config/mini-apps';
+import { miniAppKeys, type MiniAppKey } from '../../config/mini-apps';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 async function assertPlatformOwner(app: FastifyInstance, albumId: string) {
@@ -51,7 +51,10 @@ const albumInput = z.object({
   regions: z.array(z.string().min(2).max(32)).optional(),
   accessConfig: accessConfigSchema.optional()
 });
-const albumPatch = albumInput.partial();
+const albumPatch = albumInput.partial().extend({
+  description: albumInput.shape.description.removeDefault().optional(),
+  language: albumInput.shape.language.removeDefault().optional()
+});
 const episodeInput = z.object({
   albumId: z.string().min(1).max(128),
   episodeNo: z.number().int().positive(),
@@ -63,16 +66,19 @@ const episodeInput = z.object({
   isFree: z.boolean().default(false),
   sortOrder: z.number().int().positive().optional()
 });
-const episodePatch = episodeInput.omit({ albumId: true, episodeNo: true }).partial();
+const episodePatch = episodeInput.omit({ albumId: true, episodeNo: true }).partial().extend({
+  isFree: episodeInput.shape.isFree.removeDefault().optional()
+});
 const mediaBindingInput = z.object({
   byteplusVid: z.string().trim().min(1).max(256),
+  coverAssetId: z.string().min(1).max(128).nullable().optional(),
   byteplusCoverUrl: z.string().url().optional().nullable(),
   durationMs: z.number().int().positive().optional().nullable()
 });
 const sharedMediaBindingInput = z.object({
   sharedMediaAssetId: z.string().trim().min(1).max(128)
 });
-const playbackTargetsInput = z.array(z.enum(['main', 'taletv', 'cinereels', 'talereels'])).min(1).max(4);
+const playbackTargetsInput = z.array(z.enum(miniAppKeys)).min(1).max(miniAppKeys.length - 1);
 const sharedPlaybackInput = z.object({
   targetApps: playbackTargetsInput,
   action: z.enum(['AUTHORIZE', 'RECONCILE'])
@@ -758,21 +764,31 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const { episodeId } = episodeParams.parse(request.params);
     const input = episodePatch.parse(request.body);
     const cover = await validateReadyCover(app, input.coverAssetId);
-    const episode = await app.prisma.episode.update({ where: { id: episodeId }, data: { ...input, coverUrl: cover?.publicUrl ?? input.coverUrl, coverAssetId: input.coverAssetId === undefined ? undefined : cover?.id ?? null } });
+    const current = input.coverAssetId === null && input.coverUrl === undefined
+      ? await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { byteplusCoverUrl: true } })
+      : null;
+    const episode = await app.prisma.episode.update({ where: { id: episodeId }, data: { ...input, coverUrl: cover?.publicUrl ?? input.coverUrl ?? (input.coverAssetId === null ? current?.byteplusCoverUrl ?? null : undefined), coverAssetId: input.coverAssetId === undefined ? undefined : cover?.id ?? null } });
     await audit(app, request.user.sub, 'UPDATE', 'Episode', episode.id, input);
     return episode;
   });
 
-  app.post('/admin/episodes/:episodeId/bind-byteplus', { preHandler: requireAdmin }, async (request, reply) => {
+  app.post('/admin/episodes/:episodeId/bind-byteplus', { preHandler: requirePermission('content.write') }, async (request, reply) => {
     const { episodeId } = episodeParams.parse(request.params);
-    const ownerEpisode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { albumId: true } });
-    if (ownerEpisode) await assertPlatformOwner(app, ownerEpisode.albumId);
+    const ownerEpisode = await app.prisma.episode.findUnique({ where: { id: episodeId }, include: { album: true, coverAsset: true } });
+    if (!ownerEpisode) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '分集不存在。', requestId: request.id } });
+    await assertPlatformOwner(app, ownerEpisode.albumId);
     const input = mediaBindingInput.parse(request.body);
-    const mediaService = new BytePlusVodService(app.config);
-    const [media] = await mediaService.getMediaInfos({ vids: [input.byteplusVid] });
-    if (!media) {
-      return reply.code(404).send({ error: { code: 'BYTEPLUS_MEDIA_NOT_FOUND', message: '在配置的媒体空间中找不到 BytePlus 视频 ID。', requestId: request.id } });
+    if (input.byteplusVid !== ownerEpisode.byteplusVid) {
+      const active = await app.prisma.platformSyncJob.findFirst({ where: {
+        status: { in: ['PENDING', 'PROCESSING'] },
+        OR: [{ episodeId }, { albumId: ownerEpisode.albumId }]
+      } });
+      if (ownerEpisode.byteplusUploadStatus === 'UPLOADING' || ownerEpisode.tiktokVideoStatus === 'PROCESSING' || ['REVIEWING', '1'].includes(ownerEpisode.album.reviewStatus ?? '') || active) {
+        throw Object.assign(new Error('当前剧目仍有上传、审核或待对账的平台任务，请处理完成后再替换视频。'), { statusCode: 409 });
+      }
     }
+    const cover = input.coverAssetId === undefined ? ownerEpisode.coverAsset : await validateReadyCover(app, input.coverAssetId);
+    const media = (await verifiedImportedMedia(app, [input.byteplusVid])).get(input.byteplusVid)!;
     const sharedMedia = await getOrCreateSharedMediaAsset(app.sharedPrisma as any, {
       byteplusVid: media.vid,
       byteplusAccountId: app.config.BYTEPLUS_ACCOUNT_ID,
@@ -783,14 +799,14 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       coverUrl: input.byteplusCoverUrl ?? media.coverUrl,
       durationMs: input.durationMs ?? media.durationMs
     });
-    const currentEpisode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { coverAsset: { select: { publicUrl: true, status: true } } } });
     const providerCoverUrl = input.byteplusCoverUrl ?? media.coverUrl;
     const episode = await app.prisma.episode.update({
       where: { id: episodeId },
       data: {
         byteplusVid: media.vid,
         byteplusCoverUrl: providerCoverUrl,
-        coverUrl: currentEpisode?.coverAsset?.status === 'READY' ? currentEpisode.coverAsset.publicUrl : providerCoverUrl,
+        coverAssetId: input.coverAssetId === undefined ? undefined : cover?.id ?? null,
+        coverUrl: cover?.status === 'READY' ? cover.publicUrl : providerCoverUrl,
         durationMs: input.durationMs ?? media.durationMs,
         status: 'READY',
         byteplusUploadStatus: 'READY',
@@ -801,6 +817,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     });
     await audit(app, request.user.sub, 'BIND_BYTEPLUS_MEDIA', 'Episode', episode.id, {
       byteplusVid: media.vid,
+      previousByteplusVid: ownerEpisode.byteplusVid,
+      coverAssetId: input.coverAssetId,
       sharedMediaAssetId: sharedMedia.id
     });
     const syncJob = app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET

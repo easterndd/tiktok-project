@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type SharedMediaStatus } from '@prisma/client';
-import { miniAppEnvironment, miniAppPlatformConfig, type MiniAppKey } from '../config/mini-apps';
+import { miniAppEnvironment, miniAppPlatformConfig, miniAppKeys, type MiniAppKey } from '../config/mini-apps';
 import type { Env } from '../config/env';
 import { TikTokShortDramaApiService, TikTokShortDramaApiError, isTikTokAlbumAuthorized, parseTikTokAlbumAuthorizationResults } from './tiktok-short-drama-api.service';
 
@@ -57,7 +57,7 @@ function asNumber(value: unknown) {
 }
 
 function requireMiniAppKey(value: string): MiniAppKey {
-  if (value === 'main' || value === 'taletv' || value === 'cinereels' || value === 'talereels') return value;
+  if (miniAppKeys.includes(value as MiniAppKey)) return value as MiniAppKey;
   throw conflict(`未知的小程序标识：${value}`);
 }
 
@@ -563,7 +563,7 @@ async function processSharedReconcile(sharedPrisma: Db, operation: any, options:
 }
 
 export async function enqueueDueSharedReconciliations(sharedPrisma: Db, now = new Date()) {
-  const albums = await sharedPrisma.sharedTikTokAlbum.findMany({ where: { OR: ['main', 'taletv', 'cinereels', 'talereels'].map((owner) => ({
+  const albums = await sharedPrisma.sharedTikTokAlbum.findMany({ where: { OR: miniAppKeys.map((owner) => ({
     ownerMiniAppKey: owner, authorizations: { some: { miniAppKey: { not: owner }, status: 'AUTHORIZED' as const } }
   })) }, orderBy: { updatedAt: 'asc' }, take: 20 });
   for (const album of albums) {

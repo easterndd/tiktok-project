@@ -3,7 +3,7 @@ import { it } from 'node:test';
 import type { PrismaClient } from '@prisma/client';
 import { buildApp } from './app';
 import { loadEnv } from './config/env';
-import { taletvEnvironment } from './config/mini-apps';
+import { configuredMiniAppKeys, miniAppEnvironment, miniAppKeys, taletvEnvironment } from './config/mini-apps';
 import { accessConfigSchema } from './lib/content-access';
 
 const env = loadEnv({
@@ -178,6 +178,29 @@ it('registers CineReels and TaleReels on independent routes and rejects duplicat
     await app.close();
   }
   assert.throws(() => taletvEnvironment({ ...expanded, TALETV_DATABASE_URL: expanded.CINEREELS_DATABASE_URL }), /different database or PostgreSQL schema/);
+});
+
+it('registers all new Mini routes with separate databases and app-bound admin tokens', async () => {
+  const extraKeys = miniAppKeys.slice(4);
+  const extraEnv = Object.fromEntries(extraKeys.map((key) => [`${key.toUpperCase()}_DATABASE_URL`, `postgresql://test:test@localhost:5432/test?schema=${key}`]));
+  const expanded = loadEnv({ NODE_ENV: 'test', DATABASE_URL: env.DATABASE_URL, TALETV_DATABASE_URL: env.TALETV_DATABASE_URL, JWT_SECRET: env.JWT_SECRET, BYTEPLUS_ACCOUNT_ID: env.BYTEPLUS_ACCOUNT_ID, BYTEPLUS_SPACE_NAME: env.BYTEPLUS_SPACE_NAME, BYTEPLUS_REGION: env.BYTEPLUS_REGION, ...extraEnv });
+  assert.deepEqual(configuredMiniAppKeys(expanded), [...miniAppKeys.slice(0, 2), ...extraKeys]);
+  const miniPrisma = Object.fromEntries(extraKeys.map((key) => [key, databaseFor(key)]));
+  const app = await buildApp(expanded, { prisma: databaseFor('main'), taletvPrisma: databaseFor('taletv'), miniPrisma, sharedPrisma: databaseFor('shared') });
+  try {
+    await app.ready();
+    for (const key of extraKeys) {
+      assert.equal(miniAppEnvironment(expanded, key)?.DATABASE_URL, extraEnv[`${key.toUpperCase()}_DATABASE_URL`]);
+      assert.equal((await app.inject(`/api/${key}/v1/albums`)).json().items[0].id, key);
+      const token = await app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: key, role: 'OWNER', tokenVersion: 0 });
+      assert.equal((await app.inject({ url: `/api/${key}/v1/admin/albums`, headers: { authorization: `Bearer ${token}` } })).statusCode, 200);
+      assert.equal((await app.inject({ url: '/api/v1/admin/albums', headers: { authorization: `Bearer ${token}` } })).statusCode, 401);
+    }
+  } finally {
+    await app.close();
+  }
+  assert.throws(() => miniAppEnvironment({ ...expanded, DRAMACLOUD_DATABASE_URL: expanded.STORYLAND_DATABASE_URL }, 'storyland'), /different database or PostgreSQL schema/);
+  assert.throws(() => loadEnv({ DATABASE_URL: env.DATABASE_URL, JWT_SECRET: env.JWT_SECRET, BYTEPLUS_ACCOUNT_ID: env.BYTEPLUS_ACCOUNT_ID, BYTEPLUS_SPACE_NAME: env.BYTEPLUS_SPACE_NAME, BYTEPLUS_REGION: env.BYTEPLUS_REGION, STORYLAND_DATABASE_URL: 'not-a-url' }), /STORYLAND_DATABASE_URL/);
 });
 
 it('handles Mini bootstrap preflights for all apps and logs the actual allowlist decision before CORS', async () => {

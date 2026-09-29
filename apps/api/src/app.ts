@@ -8,7 +8,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 import type { Env } from './config/env';
-import { configuredMiniAppKeys, miniAppEnvironment, miniAppPath, type MiniAppKey } from './config/mini-apps';
+import { configuredMiniAppKeys, miniAppEnvironment, miniAppPath, miniAppKeys, type MiniAppKey } from './config/mini-apps';
 import { PrismaClient as DatabaseClient } from '@prisma/client';
 import { registerAlbumRoutes } from './modules/albums/routes';
 import { registerAuthRoutes } from './modules/auth/routes';
@@ -67,7 +67,7 @@ function isAllowedCorsOrigin(origin: string | undefined, configuredOrigins: stri
   });
 }
 
-const miniBootstrapPath = /^\/api\/(?:(?:taletv|cinereels|talereels)\/)?v1\/(?:auth\/anonymous\/session|app-entry-ad-sessions)$/;
+const miniBootstrapPath = new RegExp(`^/api/(?:(?:${miniAppKeys.filter((key) => key !== 'main').join('|')})/)?v1/(?:auth/anonymous/session|app-entry-ad-sessions)$`);
 
 function isMiniBootstrapRequest(url: string) {
   return miniBootstrapPath.test(url.split('?', 1)[0]);

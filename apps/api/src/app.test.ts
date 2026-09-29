@@ -301,6 +301,99 @@ describe('QuicK ReeLS API', () => {
     while (apps.length) await apps.pop()!.close();
   });
 
+  it('replaces an episode VID and clears its old independent cover without deleting shared media', async () => {
+    const prisma = await createPrismaStub();
+    const before = await prisma.episode.findUnique();
+    before.coverAsset = { id: 'old-cover', status: 'READY', publicUrl: 'https://example.com/wrong.jpg' };
+    before.coverAssetId = 'old-cover';
+    before.tiktokVideoStatus = 'READY';
+    let update: any;
+    prisma.episode.update = async (args: any) => { update = args.data; return { ...before, ...args.data }; };
+    prisma.platformSyncJob = { findFirst: async () => null };
+    let createdMedia: any;
+    prisma.sharedMediaAsset = { findUnique: async () => null, create: async (args: any) => { createdMedia = args.data; return { id: 'new-media', ...args.data }; } };
+    const app = await buildApp(env, { prisma });
+    apps.push(app);
+    const original = BytePlusVodService.prototype.getMediaInfos;
+    BytePlusVodService.prototype.getMediaInfos = async () => [{ vid: 'correct-vid', title: 'Correct drama', spaceName: env.BYTEPLUS_SPACE_NAME, coverUrl: 'https://example.com/correct.jpg' }];
+    try {
+      const response = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/bind-byteplus', headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { byteplusVid: 'correct-vid', coverAssetId: null } });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(update.byteplusVid, 'correct-vid');
+      assert.equal(update.coverAssetId, null);
+      assert.equal(update.coverUrl, 'https://example.com/correct.jpg');
+      assert.equal(update.tiktokVideoStatus, 'NOT_STARTED');
+      assert.equal(update.tiktokVideoJobId, null);
+      assert.equal(createdMedia.byteplusVid, 'correct-vid');
+      assert.equal(before.byteplusVid, 'vid-1');
+    } finally { BytePlusVodService.prototype.getMediaInfos = original; }
+  });
+
+  it('rejects replacement media in a different space and preserves the original binding', async () => {
+    const prisma = await createPrismaStub();
+    prisma.platformSyncJob = { findFirst: async () => null };
+    let updated = false;
+    prisma.episode.update = async () => { updated = true; return {}; };
+    const app = await buildApp(env, { prisma });
+    apps.push(app);
+    const original = BytePlusVodService.prototype.getMediaInfos;
+    BytePlusVodService.prototype.getMediaInfos = async () => [{ vid: 'wrong-space-vid', title: 'Other space', spaceName: 'other-space' }];
+    try {
+      const response = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/bind-byteplus', headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { byteplusVid: 'wrong-space-vid', coverAssetId: null } });
+      assert.equal(response.statusCode, 409, response.body);
+      assert.equal(updated, false);
+    } finally { BytePlusVodService.prototype.getMediaInfos = original; }
+  });
+
+  it('blocks replacement while a previous platform task is active', async () => {
+    const prisma = await createPrismaStub();
+    prisma.platformSyncJob = { findFirst: async () => ({ status: 'PROCESSING' }) };
+    const app = await buildApp(env, { prisma });
+    apps.push(app);
+    const response = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/bind-byteplus', headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { byteplusVid: 'new-vid' } });
+    assert.equal(response.statusCode, 409, response.body);
+    assert.match(response.json().error.message, /平台任务/);
+  });
+
+  it('clearing an independent episode cover restores the current BytePlus cover', async () => {
+    const prisma = await createPrismaStub();
+    const episode = await prisma.episode.findUnique();
+    episode.byteplusCoverUrl = 'https://example.com/current-vod.jpg';
+    let update: any;
+    prisma.episode.update = async (args: any) => { update = args.data; return { ...episode, ...args.data }; };
+    const app = await buildApp(env, { prisma });
+    apps.push(app);
+    const response = await app.inject({ method: 'PATCH', url: '/api/v1/admin/episodes/episode-1', headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { coverAssetId: null } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(update.coverAssetId, null);
+    assert.equal(update.coverUrl, episode.byteplusCoverUrl);
+  });
+
+  it('updating only an album cover preserves its description and language', async () => {
+    const prisma = await createPrismaStub();
+    const album = await prisma.album.findUnique();
+    album.language = 'es';
+    const description = album.description;
+    const app = await buildApp(env, { prisma });
+    apps.push(app);
+    const response = await app.inject({ method: 'PATCH', url: '/api/v1/admin/albums/album-1', headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { coverUrl: 'https://example.com/new-cover.png' } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(album.description, description);
+    assert.equal(album.language, 'es');
+  });
+
+  it('updating an episode title leaves its free access flag unchanged', async () => {
+    const prisma = await createPrismaStub();
+    let update: any;
+    prisma.episode.update = async (args: any) => { update = args.data; return { id: 'episode-1', isFree: true, ...args.data }; };
+    const app = await buildApp(env, { prisma });
+    apps.push(app);
+    const response = await app.inject({ method: 'PATCH', url: '/api/v1/admin/episodes/episode-1', headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { title: 'Correct Episode 1' } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(Object.hasOwn(update, 'isFree'), false);
+    assert.equal(response.json().isFree, true);
+  });
+
   it('reports liveness and database readiness separately', async () => {
     const app = await createTestApp();
     apps.push(app);

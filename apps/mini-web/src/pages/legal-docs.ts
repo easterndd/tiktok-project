@@ -11,6 +11,19 @@ export type LegalDocument = {
 };
 
 export const legalContactEmail = 'caixuwen@xuyins.com';
+export const taletvLegalContactEmail = 'SAGATHIYA@voisky.com';
+export const newMiniAppLegalContactEmail = 'caijiarong2@xuyins.com';
+const newMiniAppNames = {
+  cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel',
+  dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox',
+  storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick',
+  dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks'
+} as const;
+type LegalApp = 'quickreels' | 'taletv' | keyof typeof newMiniAppNames;
+
+export function legalContactForApp(app: LegalApp) {
+  return app === 'taletv' ? taletvLegalContactEmail : app === 'quickreels' ? legalContactEmail : newMiniAppLegalContactEmail;
+}
 
 const companyDetails = `<dl class="detail-list">
 <div><dt>Operator</dt><dd>evergreenprosper</dd></div>
@@ -146,13 +159,33 @@ export const legalDocuments: Record<LegalDocumentType, LegalDocument> = {
   }
 };
 
-export function legalDocumentForApp(type: LegalDocumentType, app: 'quickreels' | 'taletv'): LegalDocument {
-  const source = legalDocuments[type];
-  if (app === 'quickreels') return source;
+function sagathiyaLegalDocument(source: LegalDocument, brand: string, contactEmail: string): LegalDocument {
+  const forApp = (html: string) => html
+    .replaceAll('QuicK ReeLS', brand)
+    .replaceAll('evergreenprosper, United States', 'SAGATHIYA TECHSOLUTIONS PRIVATE LIMITED, India')
+    .replaceAll('evergreenprosper', 'SAGATHIYA TECHSOLUTIONS PRIVATE LIMITED')
+    .replaceAll('&quot;SAGATHIYA TECHSOLUTIONS PRIVATE LIMITED,&quot;', '&quot;SAGATHIYA,&quot;')
+    .replaceAll('caixuwen@xuyins.com', contactEmail)
+    .replaceAll('3901 Branham Park Unit A, Lexington, KY 40515, United States', 'Laxmi Nivas Opp., Akruti Township Narol, Ahmedabad- 382405, Gujarat, India')
+    .replaceAll('the United States', 'India')
+    .replaceAll('Kentucky, United States', 'India')
+    .replaceAll('the Commonwealth of Kentucky, United States', 'India')
+    .replaceAll('United States controller', 'India controller')
+    .replaceAll('September 15, 2026', 'September 25, 2026');
   return {
     ...source,
-    title: source.title.replaceAll('QuicK ReeLS', 'TaleTV'),
-    introHtml: source.introHtml.replaceAll('QuicK ReeLS', 'TaleTV'),
-    contentHtml: source.contentHtml.replaceAll('QuicK ReeLS', 'TaleTV')
+    title: forApp(source.title),
+    introHtml: forApp(source.introHtml),
+    marketsHtml: forApp(source.marketsHtml),
+    metaHtml: forApp(source.metaHtml),
+    contentHtml: forApp(source.contentHtml)
   };
+}
+
+export function legalDocumentForApp(type: LegalDocumentType, app: LegalApp): LegalDocument {
+  const source = legalDocuments[type];
+  if (app === 'quickreels') return source;
+  if (app === 'taletv') return sagathiyaLegalDocument(source, 'TaleTV', taletvLegalContactEmail);
+  const brand = newMiniAppNames[app];
+  return sagathiyaLegalDocument(source, brand, newMiniAppLegalContactEmail);
 }

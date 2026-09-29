@@ -1,5 +1,6 @@
 import type { FastifyRequest } from 'fastify';
 import type { AdminRole } from '@prisma/client';
+import type { MiniAppKey } from '../config/mini-apps';
 
 export type AdminPermission = 'admin.manage' | 'ads.read' | 'ads.write' | 'analytics.read' | 'audit.read' | 'content.read' | 'content.write' | 'content.sync' | 'content.review' | 'content.publish' | 'settings.read' | 'settings.write';
 
@@ -12,8 +13,8 @@ const permissionsByRole: Record<AdminRole, ReadonlySet<AdminPermission | '*'> > 
 
 declare module '@fastify/jwt' {
   interface FastifyJWT {
-    payload: { sub: string; kind: 'user' | 'admin'; appKey: 'main' | 'taletv' | 'cinereels' | 'talereels'; role?: AdminRole; tokenVersion?: number };
-    user: { sub: string; kind: 'user' | 'admin'; appKey: 'main' | 'taletv' | 'cinereels' | 'talereels'; role?: AdminRole; tokenVersion?: number };
+    payload: { sub: string; kind: 'user' | 'admin'; appKey: MiniAppKey; role?: AdminRole; tokenVersion?: number };
+    user: { sub: string; kind: 'user' | 'admin'; appKey: MiniAppKey; role?: AdminRole; tokenVersion?: number };
   }
 }
 

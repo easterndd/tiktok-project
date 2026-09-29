@@ -11,12 +11,15 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(scriptDir, '..');
 const repoRoot = resolve(packageRoot, '..', '..');
 const app = process.argv[2] ?? 'quickreels';
-if (app !== 'quickreels' && app !== 'taletv') throw new Error('Expected quickreels or taletv as the app name.');
-const appName = app === 'taletv' ? 'TaleTV' : 'QuicK ReeLS';
-const publicPath = app === 'taletv' ? 'taletv' : 'quickreels';
+const appNames = { quickreels: 'QuicK ReeLS', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks' };
+if (!(app in appNames)) throw new Error(`Expected one of: ${Object.keys(appNames).join(', ')}.`);
+const appName = appNames[app];
+const publicPath = app;
 const sourcePath = join(packageRoot, 'src', 'pages', 'legal-docs.ts');
 const outputRoot = join(repoRoot, 'deploy', 'website', publicPath);
-const publicBaseUrl = `https://evergreenprosper.com/${publicPath}`;
+const publicBaseUrl = app === 'quickreels' ? `https://evergreenprosper.com/${publicPath}` : 'https://www.yya.ai/capy';
+const legalOperator = app === 'quickreels' ? 'evergreenprosper' : 'SAGATHIYA TECHSOLUTIONS PRIVATE LIMITED';
+const legalOperatorUrl = app === 'quickreels' ? 'https://evergreenprosper.com/' : 'https://www.yya.ai/';
 
 function loadLegalDocuments(source) {
   const transpiled = ts.transpileModule(source, {
@@ -41,14 +44,19 @@ function loadLegalDocuments(source) {
 function renderPage(type, legalDocument, legalContactEmail) {
   const otherType = type === 'privacy' ? 'terms' : 'privacy';
   const otherLabel = type === 'privacy' ? 'Terms of Service' : 'Privacy Policy';
-  const canonicalUrl = `${publicBaseUrl}/${type}`;
+  const canonicalUrl = app !== 'quickreels'
+    ? `${publicBaseUrl}/${type === 'privacy' ? 'privacypolicy.html' : 'termsofservice.html'}`
+    : `${publicBaseUrl}/${type}`;
+  const relatedUrl = app !== 'quickreels'
+    ? `${publicBaseUrl}/${otherType === 'privacy' ? 'privacypolicy.html' : 'termsofservice.html'}`
+    : `/${publicPath}/${otherType}`;
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${legalDocument.title} | ${appName}</title>
-  <meta name="description" content="${legalDocument.title} for ${appName}, a TikTok Minis short-drama service operated by evergreenprosper.">
+  <meta name="description" content="${legalDocument.title} for ${appName}, a TikTok Minis short-drama service operated by ${legalOperator}.">
   <link rel="canonical" href="${canonicalUrl}">
   <style>
     :root {
@@ -198,8 +206,8 @@ function renderPage(type, legalDocument, legalContactEmail) {
   <main class="page">
     <header class="hero">
       <div class="brand">
-        <a href="https://evergreenprosper.com/">evergreenprosper</a>
-        <span class="mark">${app === 'taletv' ? 'TV' : 'QR'}</span>
+        <a href="${legalOperatorUrl}">${legalOperator}</a>
+        <span class="mark">${app === 'quickreels' ? 'QR' : app === 'taletv' ? 'TV' : appName.replace(/[^A-Z]/g, '').slice(0, 3) || appName.slice(0, 2).toUpperCase()}</span>
       </div>
       <p class="eyebrow">${legalDocument.eyebrow}</p>
       <h1>${legalDocument.title}</h1>
@@ -208,7 +216,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
         <dl class="meta-panel">${legalDocument.metaHtml}</dl>
       </div>
       <div class="actions">
-        <a href="/${publicPath}/${otherType}">${otherLabel}</a>
+        <a href="${relatedUrl}">${otherLabel}</a>
         <a class="primary" href="mailto:${legalContactEmail}">Contact</a>
       </div>
       <div class="markets" aria-label="Supported regional sections">${legalDocument.marketsHtml}</div>
@@ -227,12 +235,13 @@ function renderPage(type, legalDocument, legalContactEmail) {
 }
 
 const source = await readFile(sourcePath, 'utf8');
-const { legalDocumentForApp, legalContactEmail } = loadLegalDocuments(source);
+const { legalDocumentForApp, legalContactForApp } = loadLegalDocuments(source);
+const contactEmail = legalContactForApp(app);
 
 for (const type of ['privacy', 'terms']) {
   const directory = join(outputRoot, type);
   await mkdir(directory, { recursive: true });
-  await writeFile(join(directory, 'index.html'), renderPage(type, legalDocumentForApp(type, app), legalContactEmail), 'utf8');
+  await writeFile(join(directory, 'index.html'), renderPage(type, legalDocumentForApp(type, app), contactEmail), 'utf8');
 }
 
 console.log(`Exported ${appName} legal pages to ${outputRoot}`);
