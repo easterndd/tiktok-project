@@ -382,9 +382,6 @@ export async function projectSharedAlbumToLocal(sharedAlbum: any, authorization:
     await tx.album.update({
       where: { id: authorization.targetLocalAlbumId },
       data: {
-        ...(sharedAlbum.verifiedSource ? { title: sharedAlbum.verifiedSource.title, description: sharedAlbum.verifiedSource.description,
-          coverUrl: sharedAlbum.verifiedSource.coverUrl, language: sharedAlbum.verifiedSource.language,
-          releaseYear: sharedAlbum.verifiedSource.releaseYear, dramaType: sharedAlbum.verifiedSource.dramaType, tagList: sharedAlbum.verifiedSource.tagList as Prisma.InputJsonValue } : {}),
         tiktokAlbumId: sharedAlbum.tiktokAlbumId,
         tiktokVersion: sharedAlbum.onlineVersion,
         onlineVersion: sharedAlbum.onlineVersion,

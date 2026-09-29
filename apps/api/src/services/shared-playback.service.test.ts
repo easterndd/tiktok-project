@@ -95,6 +95,8 @@ test('automatically prepares and authorizes a full target mapping without upload
   const f = fixture();
   const queued = await f.prepare();
   assert.equal(queued.items[0].accepted, true);
+  assert.equal(f.state.targetAlbum.title, 'Online title');
+  assert.equal(f.state.targetAlbum.description, 'Online description');
   assert.equal(f.state.targetAlbum.status, 'OFFLINE');
   assert.equal(f.state.targetAlbum.accessConfig.rewardedPlacementId, 'target-ad');
   await f.run();
@@ -107,6 +109,32 @@ test('automatically prepares and authorizes a full target mapping without upload
   assert.equal(f.state.ops[0].status, 'SUCCEEDED');
   assert.equal(f.state.ops[0].providerRequestId, 'grant-log');
   assert.equal(f.state.ops[0].providerResponse.mappedEpisodeCount, 1);
+});
+
+test('reconciliation preserves target-local display metadata after initial shared album creation', async () => {
+  const f = fixture(); await f.prepare(); await f.run();
+  const localMetadata = {
+    title: 'Target title',
+    description: 'Target description',
+    coverUrl: 'https://example.com/target.jpg',
+    language: 'zh',
+    releaseYear: 2025,
+    dramaType: 9,
+    tagList: [7, 8]
+  };
+  Object.assign(f.state.targetAlbum, localMetadata);
+  f.state.ops.push({ id: 'reconcile-op', kind: 'RECONCILE_ALBUM', sharedAlbumId: 'shared-album', status: 'PENDING', attemptCount: 0 });
+
+  await f.run();
+
+  for (const [field, value] of Object.entries(localMetadata)) assert.deepEqual(f.state.targetAlbum[field], value);
+  assert.equal(f.state.targetAlbum.tiktokAlbumId, 'platform-1');
+  assert.equal(f.state.targetAlbum.tiktokVersion, 1);
+  assert.equal(f.state.targetAlbum.reviewStatus, 'PASSED');
+  assert.equal(f.state.targetAlbum.publishStatus, 'LISTED');
+  assert.equal(f.state.targetAlbum.status, 'ONLINE');
+  assert.equal(f.state.targetEpisodes[0].tiktokEpisodeId, 'online-episode');
+  assert.equal(f.state.targetEpisodes[0].byteplusVid, 'online-vid');
 });
 
 test('records a per-target authorization rejection as FAILED instead of completed', async () => {
