@@ -349,6 +349,8 @@ function AdminApp() {
   const [loading, setLoading] = useState(false);
   const [savingEntryAdPolicy, setSavingEntryAdPolicy] = useState(false);
   const [savingAlbumId, setSavingAlbumId] = useState<string | null>(null);
+  const [savingTitleId, setSavingTitleId] = useState<string | null>(null);
+  const [titleDrafts, setTitleDrafts] = useState<Record<string, string>>({});
   const [deletingAlbumId, setDeletingAlbumId] = useState<string | null>(null);
   const [dirtyAccessAlbumIds, setDirtyAccessAlbumIds] = useState<Set<string>>(() => new Set());
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
@@ -987,6 +989,22 @@ function AdminApp() {
       setPlatformWorking(null);
     }
   };
+  const saveAlbumTitle = async (album: Album) => {
+    const title = (titleDrafts[album.id] ?? album.title).trim();
+    if (!title) { setMessage('剧集名称不能为空。'); return; }
+    if (title === album.title) return;
+    setSavingTitleId(album.id);
+    try {
+      const updated = await api<Album>(`/admin/albums/${album.id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
+      setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, ...updated, episodeCount: item.episodeCount } : item));
+      setTitleDrafts((drafts) => { const next = { ...drafts }; delete next[album.id]; return next; });
+      setMessage(`“${title}”已保存并同步到当前小程序。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `剧集名称同步失败：${error.message}` : '剧集名称同步失败');
+    } finally {
+      setSavingTitleId(null);
+    }
+  };
   const syncTikTokMedia = async (album: Album) => {
     setPlatformWorking(`${album.id}:media`);
     try {
@@ -1074,7 +1092,27 @@ function AdminApp() {
         </Panel>
         <Panel title="上传处理状态" description="所有由内容创建产生的上传记录集中显示；网络中断时先对账 BytePlus，再决定是否补传。"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>来源</th><th>状态</th><th>处理信息</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{jobs.map((job) => { const staleWithoutVid = job.status === 'PROCESSING' && job.sourceType === 'FILE' && !job.providerJobId && job.startedAt && Date.now() - new Date(job.startedAt).getTime() >= 2 * 60 * 60_000; return <tr key={job.id}><td><strong>{job.episode?.title ?? job.episodeId}</strong></td><td>{job.sourceName ?? job.sourceType ?? '链接'}</td><td><Status value={job.status} /></td><td>{job.errorMessage ? <small className="table-error" title={job.errorMessage}>{job.errorMessage}</small> : job.providerJobId ?? '本地上传已确认'}</td><td>{new Date(job.createdAt).toLocaleString('zh-CN')}</td><td>{job.status === 'PROCESSING' && job.sourceType === 'FILE' ? <span className="access-actions"><button className="secondary retry-button" type="button" disabled={reconcilingJobId === job.id} onClick={() => void reconcileUploadJob(job)}><RefreshCw size={14} className={reconcilingJobId === job.id ? 'spin' : ''} />{reconcilingJobId === job.id ? '对账中...' : '对账绑定 VID'}</button>{staleWithoutVid && <button className="text-button retry-button" type="button" disabled={reconcilingJobId === job.id} onClick={() => void releaseUploadJob(job)}>确认无媒资后释放</button>}</span> : job.status === 'FAILED' && job.sourceType !== 'FILE' ? <button className="secondary retry-button" type="button" disabled={retryingJobId === job.id} onClick={() => void retryUploadJob(job)}><RefreshCw size={14} className={retryingJobId === job.id ? 'spin' : ''} />{retryingJobId === job.id ? '排队中...' : '重新排队'}</button> : '—'}</td></tr>; })}</tbody></table>{!jobs.length && <p className="empty-copy table-empty">暂无上传记录</p>}</div></Panel>
       </>}
-      {tab === 'albums' && <Panel title="剧集访问策略" description="免费集号上限和广告解锁配置会立即影响小程序访问"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>发布状态</th><th>解锁配置</th><th>集数</th><th>免费集号上限</th><th>广告解锁</th><th>每集解锁所需广告观看次数</th><th>操作</th></tr></thead><tbody>{albums.map((album) => { const canDelete = album.status === 'DRAFT' && !album.tiktokAlbumId; const accessDirty = dirtyAccessAlbumIds.has(album.id); return <tr key={album.id}><td><span className="drama-thumb" /><strong>{album.title}</strong></td><td><Status value={album.status} /></td><td><span className={`access-config-state ${accessDirty ? 'pending' : 'saved'}`}>{accessDirty ? '待保存' : '已保存'}</span></td><td>{album.episodeCount}</td><td><input className="inline-number" type="number" min="0" value={album.accessConfig?.freeEpisodeCount ?? 0} onChange={(event) => updateAccessDraft(album.id, { freeEpisodeCount: Number(event.target.value) })} /></td><td><input type="checkbox" checked={album.accessConfig?.rewardedAdEnabled ?? Boolean(defaultPlacementId)} onChange={(event) => updateAccessDraft(album.id, { rewardedAdEnabled: event.target.checked })} /></td><td><input className="inline-number" type="number" min="1" value={album.accessConfig?.rewardedAdCount ?? 1} onChange={(event) => updateAccessDraft(album.id, { rewardedAdCount: Number(event.target.value) })} /></td><td><div className="access-actions"><button className="save-button" disabled={savingAlbumId === album.id || deletingAlbumId === album.id || !accessDirty} onClick={() => void updateAccess(album)}><Save size={15} />{savingAlbumId === album.id ? '保存中...' : '保存'}</button>{canDelete && <button className="delete-button" type="button" disabled={deletingAlbumId === album.id || savingAlbumId === album.id} onClick={() => void deleteDraftAlbum(album)} title={`删除草稿剧集 ${album.title}`}><Trash2 size={15} />{deletingAlbumId === album.id ? '删除中...' : '删除'}</button>}</div></td></tr>; })}</tbody></table></div></Panel>}
+      {tab === 'albums' && <Panel title="剧集访问策略" description="免费集号上限和广告解锁配置会立即影响小程序访问"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>发布状态</th><th>解锁配置</th><th>集数</th><th>免费集号上限</th><th>广告解锁</th><th>每集解锁所需广告观看次数</th><th>操作</th></tr></thead><tbody>{albums.map((album) => {
+        const canDelete = album.status === 'DRAFT' && !album.tiktokAlbumId;
+        const accessDirty = dirtyAccessAlbumIds.has(album.id);
+        const title = titleDrafts[album.id] ?? album.title;
+        const titleDirty = title.trim() !== album.title;
+        const renaming = savingTitleId === album.id;
+        return <tr key={album.id}>
+          <td><div className="album-title-editor"><span className="drama-thumb" /><input className="table-input" aria-label={`剧集名称：${album.title}`} value={title} maxLength={160} disabled={!canWriteContent} onChange={(event) => setTitleDrafts((drafts) => ({ ...drafts, [album.id]: event.target.value }))} /></div></td>
+          <td><Status value={album.status} /></td>
+          <td><span className={`access-config-state ${accessDirty ? 'pending' : 'saved'}`}>{accessDirty ? '待保存' : '已保存'}</span></td>
+          <td>{album.episodeCount}</td>
+          <td><input className="inline-number" type="number" min="0" value={album.accessConfig?.freeEpisodeCount ?? 0} onChange={(event) => updateAccessDraft(album.id, { freeEpisodeCount: Number(event.target.value) })} /></td>
+          <td><input type="checkbox" checked={album.accessConfig?.rewardedAdEnabled ?? Boolean(defaultPlacementId)} onChange={(event) => updateAccessDraft(album.id, { rewardedAdEnabled: event.target.checked })} /></td>
+          <td><input className="inline-number" type="number" min="1" value={album.accessConfig?.rewardedAdCount ?? 1} onChange={(event) => updateAccessDraft(album.id, { rewardedAdCount: Number(event.target.value) })} /></td>
+          <td><div className="access-actions title-actions">
+            {titleDirty && <button className="save-button" type="button" disabled={renaming || savingAlbumId === album.id} onClick={() => void saveAlbumTitle(album)}><Save size={14} />{renaming ? '同步中...' : '保存并同步到小程序'}</button>}
+            <button className="save-button" disabled={savingAlbumId === album.id || deletingAlbumId === album.id || !accessDirty} onClick={() => void updateAccess(album)}><Save size={15} />{savingAlbumId === album.id ? '保存中...' : '保存配置'}</button>
+            {canDelete && <button className="delete-button" type="button" disabled={deletingAlbumId === album.id || savingAlbumId === album.id} onClick={() => void deleteDraftAlbum(album)} title={`删除草稿剧集 ${album.title}`}><Trash2 size={15} />{deletingAlbumId === album.id ? '删除中...' : '删除'}</button>}
+          </div></td>
+        </tr>;
+      })}</tbody></table></div></Panel>}
       {tab === 'albums' && canWriteContent && <DramaMaterials albums={albums} api={api} onSaved={loadData} />}
       {tab === 'albums' && <Panel title="TikTok 媒资库发布链路" description="按顺序完成每部剧的媒资、版本、审核和上架；点击按钮仅表示加入异步队列。">
         <div className="platform-guide">

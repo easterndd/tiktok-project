@@ -179,6 +179,9 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .save-button { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 0 10px; color: #fff; border: 0; border-radius: 6px; background: var(--pink); font-size: 11px; font-weight: 800; cursor: pointer; }
 .save-button:disabled, .delete-button:disabled { cursor: not-allowed; opacity: .55; }
 .access-actions { display: flex; align-items: center; gap: 6px; min-width: 150px; }
+.album-title-editor { display: flex; align-items: center; gap: 8px; min-width: 260px; }
+.album-title-editor .table-input { box-sizing: border-box; width: min(100%, 320px); min-width: 180px; }
+.title-actions { flex-wrap: wrap; min-width: 190px; }
 .access-config-state { display: inline-flex; align-items: center; min-height: 24px; font-size: 11px; font-weight: 800; }
 .access-config-state.saved { color: var(--green); }.access-config-state.pending { color: #b36f00; }
 .delete-button { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 0 10px; color: #b4233b; border: 1px solid #f0b7c1; border-radius: 6px; background: #fff; font-size: 11px; font-weight: 800; cursor: pointer; }
