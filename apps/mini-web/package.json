@@ -16,7 +16,7 @@
     "debug:minis": "ttdx minis debug",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "tsc --noEmit -p tsconfig.app.json",
-    "test": "pnpm lint"
+    "test": "node --test tests/*.test.mjs && pnpm lint"
   },
   "dependencies": {
     "@quickreels/shared-types": "workspace:*",

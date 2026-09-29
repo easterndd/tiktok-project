@@ -148,6 +148,7 @@ async function createPrismaStub() {
       }
     },
     adEvent: {
+      findUnique: async (args: any) => state.adEvents.get(`${args.where.userId_clientEventId.userId}:${args.where.userId_clientEventId.clientEventId}`) ?? null,
       upsert: async (args: any) => {
         const key = `${args.where.userId_clientEventId.userId}:${args.where.userId_clientEventId.clientEventId}`;
         const existing = state.adEvents.get(key);
@@ -161,7 +162,18 @@ async function createPrismaStub() {
         return event;
       },
       findFirst: async (args: any) => Array.from(state.adEvents.values()).find((event) => Object.entries(args.where).every(([key, value]) => event[key] === value)) ?? null,
-      create: async () => ({ id: 'ad-event-1' }),
+      update: async (args: any) => {
+        const entry = Array.from(state.adEvents.entries()).find(([, event]) => event.id === args.where.id);
+        if (!entry) throw new Error('Ad event not found');
+        const event = { ...entry[1], ...args.data };
+        state.adEvents.set(entry[0], event);
+        return event;
+      },
+      create: async (args: any) => {
+        const event = { id: `ad-event-${state.adEvents.size + 1}`, ...args.data };
+        state.adEvents.set(`${event.userId}:${event.clientEventId}`, event);
+        return event;
+      },
       count: async () => state.adEvents.size
     },
     albumLike: {
@@ -614,6 +626,71 @@ describe('QuicK ReeLS API', () => {
     assert.equal(repeatedLaunch.json().required, false);
   });
 
+  it('replays the current entry ad on an early close in completed mode', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const policy = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 1, onUnavailable: 'ALLOW' } });
+    assert.equal(policy.statusCode, 200);
+    assert.equal(policy.json().countMode, 'COMPLETED');
+    const headers = { authorization: `Bearer ${await token(app, 'user')}` };
+    const start = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId: 'e2c11116-0563-4ac0-a971-c5819d2058cc' } });
+    const sessionId = start.json().sessionId as string;
+    assert.equal(start.json().countMode, 'COMPLETED');
+    const firstEventId = 'fc404158-ef01-491b-87c5-2eeae259aa80';
+    const shown = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers, payload: { clientEventId: firstEventId, adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'SHOWN', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1 } });
+    assert.equal(shown.statusCode, 200);
+    const closed = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId: firstEventId, isEnded: false } });
+    assert.equal(closed.statusCode, 200);
+    assert.equal(closed.json().completedCount, 0);
+    assert.equal(closed.json().retryCurrent, true);
+    const repeatedClose = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId: firstEventId, isEnded: false } });
+    assert.equal(repeatedClose.statusCode, 200);
+    assert.equal(repeatedClose.json().completedCount, 0);
+    const replay = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId: firstEventId, isEnded: true } });
+    assert.equal(replay.statusCode, 409);
+    const replayShown = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers, payload: { clientEventId: firstEventId, adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'SHOWN', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1 } });
+    assert.equal(replayShown.statusCode, 409);
+    const secondEventId = '243150fb-1078-4d0e-a7f6-c1d7bb037d4c';
+    const shownAgain = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers, payload: { clientEventId: secondEventId, adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'SHOWN', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1 } });
+    assert.equal(shownAgain.statusCode, 200);
+    const completed = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId: secondEventId, isEnded: true } });
+    assert.equal(completed.statusCode, 200);
+    assert.equal(completed.json().shouldContinue, false);
+  });
+
+  it('counts three closed entry ads in shown mode and preserves the session policy snapshot', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 3, countMode: 'SHOWN', onUnavailable: 'ALLOW' } });
+    const headers = { authorization: `Bearer ${await token(app, 'user')}` };
+    const launchId = '84085b67-3e4d-4467-93c9-4ebd0859edaa';
+    const start = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId } });
+    assert.equal(start.json().countMode, 'SHOWN');
+    const sessionId = start.json().sessionId as string;
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 1, countMode: 'COMPLETED', onUnavailable: 'ALLOW' } });
+    const resumed = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId } });
+    assert.equal(resumed.json().countMode, 'SHOWN');
+    assert.equal(resumed.json().requiredCount, 3);
+    const ids = ['4cdde205-78bc-4c53-9af2-3c67952d8121', 'e7e38eea-f756-49cf-8439-1863350d7190', 'ab037ca6-3b28-4118-adc0-65d75065d8d1'];
+    for (const [index, clientEventId] of ids.entries()) {
+      const premature = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId, isEnded: false } });
+      assert.equal(premature.statusCode, 409);
+      const shown = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers, payload: { clientEventId, adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'SHOWN', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: index + 1 } });
+      assert.equal(shown.statusCode, 200);
+      const closed = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId, isEnded: false } });
+      assert.equal(closed.statusCode, 200);
+      assert.equal(closed.json().completedCount, index + 1);
+      assert.equal(closed.json().shouldContinue, index < 2);
+      const duplicate = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId, isEnded: false } });
+      assert.equal(duplicate.statusCode, 200);
+      assert.equal(duplicate.json().completedCount, index + 1);
+    }
+    const finished = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId } });
+    assert.equal(finished.json().required, false);
+  });
+
   it('renews an expired unfinished app-entry session for the same launch', async () => {
     const app = await createTestApp();
     apps.push(app);
@@ -629,6 +706,29 @@ describe('QuicK ReeLS API', () => {
     assert.equal(resumed.json().sessionId, sessionId);
     assert.equal(resumed.json().completedCount, 0);
     assert.equal(resumed.json().required, true);
+  });
+
+  it('preserves the counted progress and policy snapshot when an unfinished entry session expires', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 2, countMode: 'SHOWN', onUnavailable: 'BLOCK' } });
+    const headers = { authorization: `Bearer ${await token(app, 'user')}` };
+    const launchId = '385fc614-b274-4718-ac59-477035260bf2';
+    const started = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId } });
+    const sessionId = started.json().sessionId as string;
+    const clientEventId = '80630ff9-af43-42f7-8758-b93416012c85';
+    await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers, payload: { clientEventId, adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'SHOWN', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1 } });
+    const closed = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId, isEnded: false } });
+    assert.equal(closed.json().completedCount, 1);
+    await app.prisma.appEntryAdSession.update({ where: { id: sessionId }, data: { status: 'EXPIRED', expiresAt: new Date(0) } });
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'INTERSTITIAL', placementId: 'new-placement', requiredCount: 1, countMode: 'COMPLETED', onUnavailable: 'BLOCK' } });
+    const resumed = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId } });
+    assert.equal(resumed.statusCode, 200);
+    assert.equal(resumed.json().completedCount, 1);
+    assert.equal(resumed.json().requiredCount, 2);
+    assert.equal(resumed.json().countMode, 'SHOWN');
+    assert.equal(resumed.json().placementId, 'entry-rewarded');
   });
 
   it('separates user and admin tokens', async () => {

@@ -7,7 +7,7 @@ import { miniAppAdConfig } from '../../config/mini-apps';
 const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
 const startInput = z.object({ launchId: z.string().uuid() });
-const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.literal(true) });
+const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.boolean() });
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
 
 function disabledPolicy(app: FastifyInstance) {
@@ -17,6 +17,7 @@ function disabledPolicy(app: FastifyInstance) {
     mode: 'INTERSTITIAL' as const,
     placementId: miniAppAdConfig(app.config).appEntryPlacementId,
     requiredCount: 1,
+    countMode: 'COMPLETED' as const,
     onUnavailable: 'ALLOW' as const,
     version: 1
   };
@@ -24,7 +25,7 @@ function disabledPolicy(app: FastifyInstance) {
 
 export type AppEntryAdPolicyInput = ReturnType<typeof disabledPolicy>;
 
-function sessionResponse(session: { id: string; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; requiredCount: number; completedCount: number; status: string }, fallback: 'ALLOW' | 'BLOCK') {
+function sessionResponse(session: { id: string; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; requiredCount: number; countMode: 'COMPLETED' | 'SHOWN'; completedCount: number; status: string }, fallback: 'ALLOW' | 'BLOCK') {
   if (session.status === 'COMPLETED' || session.completedCount >= session.requiredCount) return { required: false as const };
   return {
     required: true as const,
@@ -32,6 +33,7 @@ function sessionResponse(session: { id: string; mode: 'INTERSTITIAL' | 'REWARDED
     mode: session.mode,
     placementId: session.placementId,
     requiredCount: session.requiredCount,
+    countMode: session.countMode,
     completedCount: session.completedCount,
     onUnavailable: fallback
   };
@@ -62,11 +64,6 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       const renewed = await app.prisma.appEntryAdSession.update({
         where: { id: existing.id },
         data: {
-          policyVersion: policy.version,
-          placementId: policy.placementId,
-          mode: policy.mode,
-          requiredCount: policy.requiredCount,
-          completedCount: 0,
           status: 'ACTIVE',
           expiresAt: new Date(now.getTime() + sessionTtlMs)
         }
@@ -84,6 +81,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
           placementId: policy.placementId,
           mode: policy.mode,
           requiredCount: policy.requiredCount,
+          countMode: policy.countMode,
           expiresAt: new Date(now.getTime() + sessionTtlMs)
         }
       });
@@ -100,18 +98,25 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 30, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request, reply) => {
     const { sessionId } = sessionParams.parse(request.params);
-    const { clientEventId } = completionInput.parse(request.body);
-    const result = await app.prisma.$transaction(async (tx) => {
+    const { clientEventId, isEnded } = completionInput.parse(request.body);
+    const transact = () => app.prisma.$transaction(async (tx) => {
       const session = await tx.appEntryAdSession.findUnique({ where: { id: sessionId } });
-      if (!session || session.userId !== request.user.sub || session.status !== 'ACTIVE' || session.expiresAt <= new Date()) return null;
+      if (!session || session.userId !== request.user.sub) return null;
 
       const completion = await tx.appEntryAdCompletion.findUnique({ where: { sessionId_clientEventId: { sessionId, clientEventId } } });
       if (completion) {
-        const current = await tx.appEntryAdSession.findUniqueOrThrow({ where: { id: sessionId } });
-        return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue: current.completedCount < current.requiredCount };
+        return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: session.completedCount < session.requiredCount, retryCurrent: false };
       }
+      if (session.status !== 'ACTIVE' || session.expiresAt <= new Date()) return null;
 
       const adIndex = session.completedCount + 1;
+      if (!isEnded && session.countMode === 'COMPLETED') {
+        const closed = await tx.adEvent.findFirst({
+          where: { userId: request.user.sub, clientEventId, scope: 'APP_ENTRY', eventType: 'CLOSED_INCOMPLETE', appEntrySessionId: sessionId, adIndex, adType: 'REWARDED', placementId: session.placementId },
+          select: { id: true }
+        });
+        if (closed) return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: true, retryCurrent: true };
+      }
       const shown = await tx.adEvent.findFirst({
         where: {
           userId: request.user.sub,
@@ -126,17 +131,30 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
         select: { id: true }
       });
       if (!shown) return null;
+      if (!isEnded && session.countMode === 'COMPLETED') {
+        await tx.adEvent.update({ where: { id: shown.id }, data: { eventType: 'CLOSED_INCOMPLETE' } });
+        return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: true, retryCurrent: true };
+      }
       const event = await tx.adEvent.upsert({
         where: { userId_clientEventId: { userId: request.user.sub, clientEventId } },
-        create: { userId: request.user.sub, clientEventId, adType: session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED', scope: 'APP_ENTRY', eventType: 'CLOSED_COMPLETED', placementId: session.placementId, sessionId, appEntrySessionId: sessionId, adIndex },
-        update: { scope: 'APP_ENTRY', eventType: 'CLOSED_COMPLETED', placementId: session.placementId, sessionId, appEntrySessionId: sessionId, adIndex }
+        create: { userId: request.user.sub, clientEventId, adType: session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED', scope: 'APP_ENTRY', eventType: isEnded ? 'CLOSED_COMPLETED' : 'CLOSED_INCOMPLETE', placementId: session.placementId, sessionId, appEntrySessionId: sessionId, adIndex },
+        update: { scope: 'APP_ENTRY', eventType: isEnded ? 'CLOSED_COMPLETED' : 'CLOSED_INCOMPLETE', placementId: session.placementId, sessionId, appEntrySessionId: sessionId, adIndex }
       });
       await tx.appEntryAdCompletion.create({ data: { sessionId, clientEventId, adIndex, adEventId: event.id } });
       const completedCount = adIndex;
       const status = completedCount >= session.requiredCount ? 'COMPLETED' as const : 'ACTIVE' as const;
       await tx.appEntryAdSession.update({ where: { id: sessionId }, data: { completedCount, status } });
-      return { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE' };
+      return { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE', retryCurrent: false };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    let result: Awaited<ReturnType<typeof transact>> | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        result = await transact();
+        break;
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt === 2) throw error;
+      }
+    }
 
     if (!result) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
     return { ...result, access: result.shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };

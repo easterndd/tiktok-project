@@ -174,6 +174,7 @@ const appEntryAdPolicyInput = z.object({
   mode: z.enum(['INTERSTITIAL', 'REWARDED_GATED']),
   placementId: z.string().trim().max(128),
   requiredCount: z.number().int().min(1),
+  countMode: z.enum(['COMPLETED', 'SHOWN']).default('COMPLETED'),
   onUnavailable: z.enum(['ALLOW', 'BLOCK'])
 }).refine((value) => !value.enabled || value.placementId.length > 0, { path: ['placementId'], message: '启用进入广告时必须填写广告位 ID。' });
 

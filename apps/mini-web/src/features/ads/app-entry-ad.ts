@@ -8,6 +8,7 @@ export type AppEntryAdSession = {
   mode?: 'INTERSTITIAL' | 'REWARDED_GATED';
   placementId?: string;
   requiredCount?: number;
+  countMode?: 'COMPLETED' | 'SHOWN';
   completedCount?: number;
   onUnavailable?: 'ALLOW' | 'BLOCK';
 };
@@ -36,14 +37,16 @@ export async function startAppEntryAdSession(): Promise<AppEntryAdSession> {
   return apiClient.post<AppEntryAdSession>('/app-entry-ad-sessions', { launchId: getLaunchId() });
 }
 
-export async function completeAppEntryAd(sessionId: string, clientEventId: string) {
-  if (isDemoMode()) return { shouldContinue: false };
-  const payload = { clientEventId, isEnded: true };
+type EntryAdProgress = { shouldContinue: boolean; completedCount: number; requiredCount: number };
+
+export async function completeAppEntryAd(sessionId: string, clientEventId: string, isEnded: boolean) {
+  if (isDemoMode()) return { shouldContinue: false, completedCount: 0, requiredCount: 0 };
+  const payload = { clientEventId, isEnded };
   try {
-    return await apiClient.post<{ shouldContinue: boolean }>(`/app-entry-ad-sessions/${sessionId}/complete`, payload);
+    return await apiClient.post<EntryAdProgress>(`/app-entry-ad-sessions/${sessionId}/complete`, payload);
   } catch (error) {
     if (error instanceof ApiError && error.status < 500) throw error;
-    return apiClient.post<{ shouldContinue: boolean }>(`/app-entry-ad-sessions/${sessionId}/complete`, payload);
+    return apiClient.post<EntryAdProgress>(`/app-entry-ad-sessions/${sessionId}/complete`, payload);
   }
 }
 
@@ -51,7 +54,7 @@ export function recordAppEntryAdEvent(input: { eventType: 'REQUESTED' | 'SHOWN' 
   return apiClient.post('/ad-events', { ...input, scope: 'APP_ENTRY', appEntrySessionId: input.sessionId, clientEventId: input.clientEventId ?? eventId() });
 }
 
-export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; sessionId: string; adIndex: number }) {
+export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; sessionId: string; adIndex: number }): Promise<{ clientEventId: string; isEnded: boolean }> {
   const { mode, placementId, sessionId, adIndex } = input;
   const adType = mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED';
   const completionEventId = eventId();
@@ -60,46 +63,62 @@ export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_G
     if (!window.TTMinis?.canIUse('createInterstitialAd')) throw new Error('ENTRY_AD_UNAVAILABLE');
     const ad = window.TTMinis.createInterstitialAd({ adUnitId: placementId });
     await new Promise<void>((resolve, reject) => {
-      let shownRecorded: Promise<unknown> | undefined;
+      let settled = false;
+      let closed = false;
+      let shownRecorded = false;
       const cleanup = () => { ad.offClose(onClose); ad.offError(onError); };
       const onClose = () => {
-        cleanup();
-        if (!shownRecorded) return reject(new Error('ENTRY_AD_SHOW_NOT_CONFIRMED'));
-        void shownRecorded.then(() => resolve(), reject);
+        if (settled) return;
+        closed = true;
+        if (shownRecorded) { settled = true; cleanup(); resolve(); }
       };
       const onError = (error: unknown) => {
+        if (settled) return;
+        settled = true;
         cleanup();
         void recordAppEntryAdEvent({ eventType: 'FAILED', placementId, sessionId, adType, adIndex, errorCode: error instanceof Error ? error.message : 'ENTRY_AD_SHOW_FAILED' }).catch(() => undefined);
         reject(error);
       };
       ad.onClose(onClose);
       ad.onError(onError);
-      ad.show().then(() => { shownRecorded = recordAppEntryAdEvent({ eventType: 'SHOWN', placementId, sessionId, adType, adIndex, clientEventId: completionEventId }); }).catch(onError);
+      void Promise.resolve().then(() => ad.show()).then(async () => {
+        if (settled) return;
+        await recordAppEntryAdEvent({ eventType: 'SHOWN', placementId, sessionId, adType, adIndex, clientEventId: completionEventId });
+        shownRecorded = true;
+        if (closed) { settled = true; cleanup(); resolve(); }
+      }).catch(onError);
     });
-    return completionEventId;
+    return { clientEventId: completionEventId, isEnded: true };
   }
 
   if (!window.TTMinis?.canIUse('createRewardedVideoAd')) throw new Error('ENTRY_AD_UNAVAILABLE');
   const ad = window.TTMinis.createRewardedVideoAd({ adUnitId: placementId });
-  await new Promise<void>((resolve, reject) => {
-    let shownRecorded: Promise<unknown> | undefined;
+  const isEnded = await new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    let closed: boolean | undefined;
+    let shownRecorded = false;
     const cleanup = () => { ad.offClose(onClose); ad.offError(onError); };
-    const onClose = ({ isEnded }: { isEnded: boolean }) => {
-      cleanup();
-      if (!isEnded) {
-        void recordAppEntryAdEvent({ eventType: 'CLOSED_INCOMPLETE', placementId, sessionId, adType, adIndex }).catch(() => undefined);
-        reject(new Error('ENTRY_AD_NOT_COMPLETED'));
-      } else if (!shownRecorded) reject(new Error('ENTRY_AD_SHOW_NOT_CONFIRMED'));
-      else void shownRecorded.then(() => resolve(), reject);
+    const onClose = (result: { isEnded: boolean }) => {
+      if (settled || closed !== undefined) return;
+      closed = result?.isEnded === true;
+      if (shownRecorded) { settled = true; cleanup(); resolve(closed); }
     };
     const onError = (error: unknown) => {
+      if (settled) return;
+      settled = true;
       cleanup();
       void recordAppEntryAdEvent({ eventType: 'FAILED', placementId, sessionId, adType, adIndex, errorCode: error instanceof Error ? error.message : 'ENTRY_AD_SHOW_FAILED' }).catch(() => undefined);
       reject(error);
     };
     ad.onClose(onClose);
     ad.onError(onError);
-    ad.show().then(() => { shownRecorded = recordAppEntryAdEvent({ eventType: 'SHOWN', placementId, sessionId, adType, adIndex, clientEventId: completionEventId }); }).catch(onError);
+    void Promise.resolve().then(() => ad.show()).then(async () => {
+      if (settled) return;
+      await recordAppEntryAdEvent({ eventType: 'SHOWN', placementId, sessionId, adType, adIndex, clientEventId: completionEventId });
+      shownRecorded = true;
+      if (closed !== undefined) { settled = true; cleanup(); resolve(closed); }
+    }).catch(onError);
   });
-  return completionEventId;
+  if (!isEnded) void recordAppEntryAdEvent({ eventType: 'CLOSED_INCOMPLETE', placementId, sessionId, adType, adIndex }).catch(() => undefined);
+  return { clientEventId: completionEventId, isEnded };
 }

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
@@ -37,6 +38,25 @@ export async function registerAdRoutes(app: FastifyInstance) {
       if (!session || session.userId !== request.user.sub || session.episodeId !== body.episodeId || session.status !== 'ACTIVE' || session.expiresAt <= new Date() || session.placementId !== body.placementId || body.adIndex !== session.completedCount + 1) {
         throw Object.assign(new Error('Rewarded unlock session is unavailable.'), { statusCode: 409 });
       }
+    }
+    if (body.scope === 'APP_ENTRY') {
+      const where = { userId_clientEventId: { userId: request.user.sub, clientEventId: body.clientEventId } };
+      const acceptExisting = async () => {
+        const existing = await app.prisma.adEvent.findUnique({ where });
+        if (!existing) return false;
+        if (existing.eventType !== body.eventType || existing.scope !== body.scope || existing.adType !== body.adType || existing.appEntrySessionId !== body.appEntrySessionId || existing.sessionId !== body.sessionId || existing.adIndex !== body.adIndex || existing.placementId !== body.placementId) {
+          throw Object.assign(new Error('App-entry ad event ID was already used.'), { statusCode: 409 });
+        }
+        return true;
+      };
+      if (await acceptExisting()) return { accepted: true };
+      try {
+        await app.prisma.adEvent.create({ data: { ...body, userId: request.user.sub } });
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+        if (!(await acceptExisting())) throw error;
+      }
+      return { accepted: true };
     }
     await app.prisma.adEvent.upsert({
       where: { userId_clientEventId: { userId: request.user.sub, clientEventId: body.clientEventId } },

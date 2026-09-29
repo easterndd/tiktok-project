@@ -124,6 +124,11 @@ enum AppEntryAdFallback {
   BLOCK
 }
 
+enum AppEntryAdCountMode {
+  COMPLETED
+  SHOWN
+}
+
 enum AppEntryAdSessionStatus {
   ACTIVE
   COMPLETED
@@ -649,6 +654,7 @@ model AppEntryAdPolicy {
   mode          AppEntryAdMode     @default(INTERSTITIAL)
   placementId   String             @default("")
   requiredCount Int                @default(1)
+  countMode     AppEntryAdCountMode @default(COMPLETED)
   onUnavailable AppEntryAdFallback @default(ALLOW)
   version       Int                @default(1)
   updatedBy     String?
@@ -664,6 +670,7 @@ model AppEntryAdSession {
   placementId    String
   mode           AppEntryAdMode
   requiredCount  Int
+  countMode      AppEntryAdCountMode     @default(COMPLETED)
   completedCount Int                     @default(0)
   status         AppEntryAdSessionStatus @default(ACTIVE)
   expiresAt      DateTime
