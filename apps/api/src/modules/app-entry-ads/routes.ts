@@ -6,13 +6,15 @@ import { miniAppAdConfig } from '../../config/mini-apps';
 
 const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
-const startInput = z.object({ launchId: z.string().uuid() });
+const releaseIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default');
+const startInput = z.object({ launchId: z.string().uuid(), releaseId: releaseIdSchema });
 const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.boolean() });
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
 
-function disabledPolicy(app: FastifyInstance) {
+function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
   return {
-    id: policyId,
+    id: releaseId === 'default' ? policyId : `release:${releaseId}`,
+    releaseId,
     enabled: false,
     mode: 'INTERSTITIAL' as const,
     placementId: miniAppAdConfig(app.config).appEntryPlacementId,
@@ -39,9 +41,9 @@ function sessionResponse(session: { id: string; mode: 'INTERSTITIAL' | 'REWARDED
   };
 }
 
-export async function readAppEntryAdPolicy(app: FastifyInstance) {
-  return await app.prisma.appEntryAdPolicy.findUnique({ where: { id: policyId } })
-    ?? disabledPolicy(app);
+export async function readAppEntryAdPolicy(app: FastifyInstance, releaseId = 'default') {
+  return await app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } })
+    ?? disabledPolicy(app, releaseId);
 }
 
 export async function registerAppEntryAdRoutes(app: FastifyInstance) {
@@ -49,13 +51,13 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     preHandler: requireUser,
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
-    const { launchId } = startInput.parse(request.body);
-    const policy = await readAppEntryAdPolicy(app);
+    const { launchId, releaseId } = startInput.parse(request.body);
+    const policy = await readAppEntryAdPolicy(app, releaseId);
     if (!policy.enabled) return { required: false as const };
     const now = new Date();
 
     const existing = await app.prisma.appEntryAdSession.findUnique({
-      where: { userId_launchId: { userId: request.user.sub, launchId } }
+      where: { userId_releaseId_launchId: { userId: request.user.sub, releaseId, launchId } }
     });
     if (existing) {
       if (existing.status === 'COMPLETED' || existing.completedCount >= existing.requiredCount) return sessionResponse(existing, policy.onUnavailable);
@@ -76,6 +78,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       session = await app.prisma.appEntryAdSession.create({
         data: {
           userId: request.user.sub,
+          releaseId,
           launchId,
           policyVersion: policy.version,
           placementId: policy.placementId,
@@ -87,7 +90,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       });
     } catch (error) {
       if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
-      session = await app.prisma.appEntryAdSession.findUnique({ where: { userId_launchId: { userId: request.user.sub, launchId } } });
+      session = await app.prisma.appEntryAdSession.findUnique({ where: { userId_releaseId_launchId: { userId: request.user.sub, releaseId, launchId } } });
       if (!session) throw error;
     }
     return sessionResponse(session, policy.onUnavailable);

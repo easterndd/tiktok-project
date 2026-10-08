@@ -90,7 +90,7 @@ async function createPrismaStub() {
     playbackSessions: new Map<string, any>(),
     completionEvents: new Map<string, any>(),
     uiConfigVersions: new Map<number, any>(),
-    entryPolicy: null as any,
+    entryPolicies: new Map<string, any>(),
     shareCount: 0,
     admin: { id: 'admin-1', email: 'operator@example.com', passwordHash: '', role: 'OWNER', status: 'ACTIVE', tokenVersion: 0, createdAt: new Date(), updatedAt: new Date() }
   };
@@ -208,29 +208,32 @@ async function createPrismaStub() {
       findMany: async () => []
     },
     appEntryAdPolicy: {
-      findUnique: async () => state.entryPolicy,
+      findUnique: async (args: any) => state.entryPolicies.get(args.where.releaseId ?? 'default') ?? null,
       upsert: async (args: any) => {
-        state.entryPolicy = { ...(state.entryPolicy ?? args.create), ...args.update, id: 'default' };
-        return state.entryPolicy;
+        const releaseId = args.where.releaseId;
+        const policy = { ...(state.entryPolicies.get(releaseId) ?? args.create), ...args.update, releaseId };
+        state.entryPolicies.set(releaseId, policy);
+        return policy;
       }
     },
     appEntryAdSession: {
       findUnique: async (args: any) => {
         if (args.where.id) return state.entrySessions.get(args.where.id) ?? null;
-        const key = `${args.where.userId_launchId.userId}:${args.where.userId_launchId.launchId}`;
+        const unique = args.where.userId_releaseId_launchId ?? { ...args.where.userId_launchId, releaseId: 'default' };
+        const key = `${unique.userId}:${unique.releaseId}:${unique.launchId}`;
         return state.entrySessions.get(key) ?? null;
       },
       findUniqueOrThrow: async (args: any) => state.entrySessions.get(args.where.id),
       create: async (args: any) => {
         const session = { id: `entry-session-${state.entrySessions.size + 1}`, completedCount: 0, status: 'ACTIVE', ...args.data };
         state.entrySessions.set(session.id, session);
-        state.entrySessions.set(`${session.userId}:${session.launchId}`, session);
+        state.entrySessions.set(`${session.userId}:${session.releaseId ?? 'default'}:${session.launchId}`, session);
         return session;
       },
       update: async (args: any) => {
         const session = { ...state.entrySessions.get(args.where.id), ...args.data };
         state.entrySessions.set(session.id, session);
-        state.entrySessions.set(`${session.userId}:${session.launchId}`, session);
+        state.entrySessions.set(`${session.userId}:${session.releaseId ?? 'default'}:${session.launchId}`, session);
         return session;
       }
     },
@@ -624,6 +627,30 @@ describe('QuicK ReeLS API', () => {
     const repeatedLaunch = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId } });
     assert.equal(repeatedLaunch.statusCode, 200);
     assert.equal(repeatedLaunch.json().required, false);
+  });
+
+  it('keeps entry-ad policies independent by release while old clients use default', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const userHeaders = { authorization: `Bearer ${await token(app, 'user')}` };
+    const legacyPolicy = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'INTERSTITIAL', placementId: 'v5-entry', requiredCount: 1, onUnavailable: 'ALLOW' } });
+    assert.equal(legacyPolicy.json().releaseId, 'default');
+    const candidatePolicy = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { releaseId: 'taletv-v6', enabled: false, mode: 'INTERSTITIAL', placementId: 'v6-entry', requiredCount: 1, onUnavailable: 'ALLOW' } });
+    assert.equal(candidatePolicy.statusCode, 200);
+
+    const legacyStart = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders, payload: { launchId: '7e553a3a-13c2-49dd-835d-65a7744be1c1' } });
+    const candidateStart = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders, payload: { launchId: '7e553a3a-13c2-49dd-835d-65a7744be1c1', releaseId: 'taletv-v6' } });
+    assert.equal(legacyStart.json().required, true);
+    assert.equal(candidateStart.json().required, false);
+
+    const enabledCandidate = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { releaseId: 'taletv-v6', enabled: true, mode: 'INTERSTITIAL', placementId: 'v6-entry', requiredCount: 1, onUnavailable: 'ALLOW' } });
+    assert.equal(enabledCandidate.statusCode, 200);
+    const approvedReleaseStart = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders, payload: { launchId: '7e553a3a-13c2-49dd-835d-65a7744be1c1', releaseId: 'taletv-v6' } });
+    assert.equal(approvedReleaseStart.json().required, true);
+    const unchangedLegacyPolicy = await app.inject({ method: 'GET', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders });
+    assert.equal(unchangedLegacyPolicy.json().enabled, true);
+    assert.equal(unchangedLegacyPolicy.json().placementId, 'v5-entry');
   });
 
   it('replays the current entry ad on an early close in completed mode', async () => {

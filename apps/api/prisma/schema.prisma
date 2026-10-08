@@ -650,6 +650,7 @@ model AdEvent {
 
 model AppEntryAdPolicy {
   id            String             @id @default("default")
+  releaseId     String             @unique @default("default")
   enabled       Boolean            @default(false)
   mode          AppEntryAdMode     @default(INTERSTITIAL)
   placementId   String             @default("")
@@ -665,6 +666,7 @@ model AppEntryAdPolicy {
 model AppEntryAdSession {
   id             String                  @id @default(cuid())
   userId         String
+  releaseId      String                  @default("default")
   launchId       String
   policyVersion  Int
   placementId    String
@@ -681,7 +683,7 @@ model AppEntryAdSession {
   completions AppEntryAdCompletion[]
   adEvents    AdEvent[]              @relation("AdEventAppEntrySession")
 
-  @@unique([userId, launchId])
+  @@unique([userId, releaseId, launchId])
   @@index([userId, status, expiresAt])
 }
 

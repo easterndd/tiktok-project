@@ -170,6 +170,7 @@ const analyticsQuery = z.object({
   days: z.coerce.number().int().min(1).max(90).optional()
 }).refine((value) => Boolean(value.from) === Boolean(value.to), { message: '开始日期和结束日期必须同时填写。' });
 const appEntryAdPolicyInput = z.object({
+  releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default'),
   enabled: z.boolean(),
   mode: z.enum(['INTERSTITIAL', 'REWARDED_GATED']),
   placementId: z.string().trim().max(128),
@@ -495,13 +496,16 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return { items: visible, nextCursor: hasMore ? visible.at(-1)?.id ?? null : null };
   });
 
-  app.get('/admin/app-entry-ad-policy', { preHandler: requireAdmin }, async () => readAppEntryAdPolicy(app));
+  app.get('/admin/app-entry-ad-policy', { preHandler: requireAdmin }, async (request) => {
+    const { releaseId } = z.object({ releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default') }).parse(request.query);
+    return readAppEntryAdPolicy(app, releaseId);
+  });
   app.put('/admin/app-entry-ad-policy', { preHandler: requireAdmin }, async (request) => {
     const input = appEntryAdPolicyInput.parse(request.body);
-    const current = await readAppEntryAdPolicy(app);
+    const current = await readAppEntryAdPolicy(app, input.releaseId);
     const policy = await app.prisma.appEntryAdPolicy.upsert({
-      where: { id: 'default' },
-      create: { id: 'default', ...input, version: 1, updatedBy: request.user.sub },
+      where: { releaseId: input.releaseId },
+      create: { id: input.releaseId === 'default' ? 'default' : `release:${input.releaseId}`, ...input, version: 1, updatedBy: request.user.sub },
       update: { ...input, version: current.version + 1, updatedBy: request.user.sub }
     });
     await audit(app, request.user.sub, 'UPDATE', 'AppEntryAdPolicy', policy.id, input);
