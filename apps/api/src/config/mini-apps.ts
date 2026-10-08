@@ -1,6 +1,6 @@
 import type { Env } from './env';
 
-export const miniAppKeys = ['main', 'taletv', 'cinereels', 'talereels', 'storyland', 'dramacloud', 'dailyreel', 'dramaone', 'dramaup', 'dramavault', 'talehub', 'talebox', 'storyworld', 'storyhub', 'dramaroom', 'dramazone', 'taleflick', 'dramashort', 'storyshort', 'storyflicks', 'dramaflicks'] as const;
+export const miniAppKeys = ['main', 'taletv', 'cinereels', 'talereels', 'storyland', 'dramacloud', 'dailyreel', 'dramaone', 'dramaup', 'dramavault', 'talehub', 'talebox', 'storyworld', 'storyhub', 'dramaroom', 'dramazone', 'taleflick', 'dramashort', 'storyshort', 'storyflicks', 'dramaflicks', 'crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama'] as const;
 export type MiniAppKey = typeof miniAppKeys[number];
 
 type SecondaryMiniAppKey = Exclude<MiniAppKey, 'main'>;
@@ -59,7 +59,11 @@ const secondaryMiniApps: Record<SecondaryMiniAppKey, {
   dramaroom: definition('DRAMAROOM'), dramazone: definition('DRAMAZONE'),
   taleflick: definition('TALEFLICK'), dramashort: definition('DRAMASHORT'),
   storyshort: definition('STORYSHORT'), storyflicks: definition('STORYFLICKS'),
-  dramaflicks: definition('DRAMAFLICKS')
+  dramaflicks: definition('DRAMAFLICKS'),
+  crownrush: definition('CROWNRUSH'), sugarreel: definition('SUGARREEL'), crimsonshorts: definition('CRIMSONSHORTS'),
+  sweetreel: definition('SWEETREEL'), dramablaze: definition('DRAMABLAZE'), heartreel: definition('HEARTREEL'),
+  dramahit: definition('DRAMAHIT'), crownreel: definition('CROWNREEL'), luxereel: definition('LUXEREEL'),
+  elitedrama: definition('ELITEDRAMA')
 };
 
 function valueOf(env: Env, key: keyof Env) {

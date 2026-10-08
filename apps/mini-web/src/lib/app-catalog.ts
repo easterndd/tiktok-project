@@ -5,7 +5,10 @@ export const newMiniApps = {
   talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld',
   storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone',
   taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort',
-  storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks'
+  storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks',
+  crownrush: 'CrownRush', sugarreel: 'SugarReel', crimsonshorts: 'CrimsonShorts',
+  sweetreel: 'SweetReel', dramablaze: 'DramaBlaze', heartreel: 'HeartReel',
+  dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama'
 } as const;
 
 export type NewMiniAppKey = keyof typeof newMiniApps;

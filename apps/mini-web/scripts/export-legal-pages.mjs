@@ -11,15 +11,16 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(scriptDir, '..');
 const repoRoot = resolve(packageRoot, '..', '..');
 const app = process.argv[2] ?? 'quickreels';
-const appNames = { quickreels: 'QuicK ReeLS', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks' };
+const appNames = { quickreels: 'QuicK ReeLS', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks', crownrush: 'CrownRush', sugarreel: 'SugarReel', crimsonshorts: 'CrimsonShorts', sweetreel: 'SweetReel', dramablaze: 'DramaBlaze', heartreel: 'HeartReel', dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama' };
 if (!(app in appNames)) throw new Error(`Expected one of: ${Object.keys(appNames).join(', ')}.`);
 const appName = appNames[app];
 const publicPath = app;
 const sourcePath = join(packageRoot, 'src', 'pages', 'legal-docs.ts');
 const outputRoot = join(repoRoot, 'deploy', 'website', publicPath);
-const publicBaseUrl = app === 'quickreels' ? `https://evergreenprosper.com/${publicPath}` : 'https://www.yya.ai/capy';
-const legalOperator = app === 'quickreels' ? 'evergreenprosper' : 'SAGATHIYA TECHSOLUTIONS PRIVATE LIMITED';
-const legalOperatorUrl = app === 'quickreels' ? 'https://evergreenprosper.com/' : 'https://www.yya.ai/';
+const breezeApp = ['crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama'].includes(app);
+const publicBaseUrl = breezeApp ? 'https://xuyins.com/static' : app === 'quickreels' ? `https://evergreenprosper.com/${publicPath}` : 'https://www.yya.ai/capy';
+const legalOperator = breezeApp ? 'Breeze and Azure Sky Culture Limited' : app === 'quickreels' ? 'evergreenprosper' : 'SAGATHIYA TECHSOLUTIONS PRIVATE LIMITED';
+const legalOperatorUrl = breezeApp ? 'https://xuyins.com/' : app === 'quickreels' ? 'https://evergreenprosper.com/' : 'https://www.yya.ai/';
 
 function loadLegalDocuments(source) {
   const transpiled = ts.transpileModule(source, {
@@ -44,10 +45,14 @@ function loadLegalDocuments(source) {
 function renderPage(type, legalDocument, legalContactEmail) {
   const otherType = type === 'privacy' ? 'terms' : 'privacy';
   const otherLabel = type === 'privacy' ? 'Terms of Service' : 'Privacy Policy';
-  const canonicalUrl = app !== 'quickreels'
+  const canonicalUrl = breezeApp
+    ? `${publicBaseUrl}/${type === 'privacy' ? 'privacy-policy' : 'terms-of-service'}.html`
+    : app !== 'quickreels'
     ? `${publicBaseUrl}/${type === 'privacy' ? 'privacypolicy.html' : 'termsofservice.html'}`
     : `${publicBaseUrl}/${type}`;
-  const relatedUrl = app !== 'quickreels'
+  const relatedUrl = breezeApp
+    ? `${publicBaseUrl}/${otherType === 'privacy' ? 'privacy-policy' : 'terms-of-service'}.html`
+    : app !== 'quickreels'
     ? `${publicBaseUrl}/${otherType === 'privacy' ? 'privacypolicy.html' : 'termsofservice.html'}`
     : `/${publicPath}/${otherType}`;
   return `<!doctype html>
@@ -55,8 +60,8 @@ function renderPage(type, legalDocument, legalContactEmail) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${legalDocument.title} | ${appName}</title>
-  <meta name="description" content="${legalDocument.title} for ${appName}, a TikTok Minis short-drama service operated by ${legalOperator}.">
+  <title>${legalDocument.title}${breezeApp ? '' : ` | ${appName}`}</title>
+  <meta name="description" content="${legalDocument.title} for ${breezeApp ? 'TikTok Minis short-drama services' : appName}, operated by ${legalOperator}.">
   <link rel="canonical" href="${canonicalUrl}">
   <style>
     :root {
@@ -84,6 +89,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
     .page { max-width: 1160px; margin: 0 auto; padding: 32px 20px 48px; }
     .hero {
       display: grid;
+      grid-template-columns: minmax(0, 1fr);
       gap: 18px;
       padding: 32px;
       border: 1px solid var(--line);
@@ -91,6 +97,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
       background: var(--surface);
     }
     .brand { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .brand a { min-width: 0; overflow-wrap: anywhere; }
     .brand a, .actions a {
       display: inline-flex;
       align-items: center;
@@ -107,6 +114,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
     }
     .mark {
       display: grid;
+      flex: 0 0 40px;
       width: 40px;
       height: 40px;
       place-items: center;
@@ -125,11 +133,13 @@ function renderPage(type, legalDocument, legalContactEmail) {
       text-transform: uppercase;
     }
     h1 { max-width: 860px; margin: 0; font-size: clamp(34px, 6vw, 64px); line-height: 1.04; letter-spacing: 0; }
-    .hero-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 24px; align-items: start; }
-    .intro { max-width: 760px; color: var(--muted); font-size: 16px; }
+    .hero-layout { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 24px; align-items: start; }
+    .intro { min-width: 0; max-width: 760px; color: var(--muted); font-size: 16px; }
+    .intro, .document, .meta-panel, .detail-list { overflow-wrap: anywhere; }
     .intro p { margin: 0 0 14px; }
     .meta-panel, .detail-list {
       display: grid;
+      min-width: 0;
       margin: 0;
       overflow: hidden;
       border: 1px solid var(--line);
@@ -188,7 +198,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
     .policy-list { margin: 8px 0 16px; padding-left: 22px; }
     .policy-list li { margin: 6px 0; padding-left: 4px; }
     @media (max-width: 900px) {
-      .hero-layout, .reader { grid-template-columns: 1fr; }
+      .hero-layout, .reader { grid-template-columns: minmax(0, 1fr); }
       .toc { position: static; max-height: none; }
     }
     @media (max-width: 560px) {
@@ -207,7 +217,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
     <header class="hero">
       <div class="brand">
         <a href="${legalOperatorUrl}">${legalOperator}</a>
-        <span class="mark">${app === 'quickreels' ? 'QR' : app === 'taletv' ? 'TV' : appName.replace(/[^A-Z]/g, '').slice(0, 3) || appName.slice(0, 2).toUpperCase()}</span>
+        <span class="mark">${breezeApp ? 'BA' : app === 'quickreels' ? 'QR' : app === 'taletv' ? 'TV' : appName.replace(/[^A-Z]/g, '').slice(0, 3) || appName.slice(0, 2).toUpperCase()}</span>
       </div>
       <p class="eyebrow">${legalDocument.eyebrow}</p>
       <h1>${legalDocument.title}</h1>
@@ -242,6 +252,16 @@ for (const type of ['privacy', 'terms']) {
   const directory = join(outputRoot, type);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, 'index.html'), renderPage(type, legalDocumentForApp(type, app), contactEmail), 'utf8');
+  if (breezeApp) {
+    const staticDirectory = join(repoRoot, 'deploy', 'website', 'static');
+    await mkdir(staticDirectory, { recursive: true });
+    const page = renderPage(type, legalDocumentForApp(type, app), contactEmail);
+    const suffix = type === 'privacy' ? 'privacy-policy' : 'terms-of-service';
+    await writeFile(join(staticDirectory, `${suffix}.html`), page, 'utf8');
+    if (['crownrush', 'sugarreel', 'crimsonshorts'].includes(app)) {
+      await writeFile(join(staticDirectory, `${app}-${suffix}.html`), page, 'utf8');
+    }
+  }
 }
 
 console.log(`Exported ${appName} legal pages to ${outputRoot}`);
