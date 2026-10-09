@@ -211,6 +211,15 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .button-row { display: flex; flex-wrap: wrap; gap: 6px; min-width: 280px; }
 .button-row button { min-height: 30px; padding: 0 8px; font-size: 10px; }
 .button-row:empty { display: none; }
+.platform-release-table { min-width: 1160px; table-layout: fixed; }
+.platform-release-album-column { width: 32%; }
+.platform-release-version-column { width: 14%; }
+.platform-release-status-column { width: 18%; }
+.platform-release-actions-column { width: 36%; }
+.platform-release-table td { vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
+.platform-release-table td:first-child { display: table-cell; }
+.platform-release-table td small { display: block; margin-top: 5px; }
+.platform-release-table .button-row { min-width: 0; }
 .platform-guide { margin: 0 22px 20px; padding: 16px 18px; border: 1px solid #c9e4e8; border-radius: 8px; background: #f5fbfc; }
 .platform-guide h3 { margin: 0 0 12px; color: var(--ink); font-size: 14px; }
 .platform-guide ol { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 20px; padding-left: 20px; margin: 0; }
@@ -223,6 +232,15 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .review-priority select { width: auto; min-height: 30px; padding: 0 5px; border: 1px solid #c9d4dc; border-radius: 5px; background: #fff; color: var(--ink); font-size: 11px; }
 .platform-jobs-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 22px 8px; }
 .platform-jobs-heading h3 { margin: 0; font-size: 13px; color: var(--ink); }
+.platform-submissions { padding: 4px 22px 0; }
+.platform-submissions h3 { margin: 12px 0 8px; font-size: 13px; color: var(--ink); }
+.platform-submission { display: flex; gap: 9px; padding: 10px 12px; border-top: 1px solid var(--line); color: #18794e; font-size: 11px; }
+.platform-submission.failed { color: #b5364e; }
+.platform-submission > span { flex: none; padding-top: 1px; }
+.platform-submission > div { min-width: 0; }
+.platform-submission strong { color: var(--ink); }
+.platform-submission p { margin: 3px 0; color: inherit; line-height: 1.5; overflow-wrap: anywhere; }
+.platform-submission small { color: var(--muted); }
 .platform-jobs-table { min-width: 760px; table-layout: fixed; }
 .platform-job-target-column { width: 22%; }
 .platform-job-action-column { width: 14%; }

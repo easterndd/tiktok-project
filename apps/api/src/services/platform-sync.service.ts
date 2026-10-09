@@ -175,8 +175,12 @@ export async function buildAlbumSnapshot(prisma: Db, albumId: string): Promise<A
     throw workflowConflict('剧目缺少 TikTok 所需的年份、剧目类型或 1 至 3 个标签。');
   }
   const albumCoverPicId = album.coverAsset.providerImageId;
+  const missingVideos = album.episodes.filter((episode: any) => !episode.byteplusVid || episode.tiktokVideoStatus !== 'READY');
+  if (missingVideos.length) {
+    const episodeNumbers = missingVideos.map((episode: any) => episode.episodeNo).join('、');
+    throw workflowConflict(`第 ${episodeNumbers} 集视频尚未完成 TikTok 登记（共 ${missingVideos.length} 集）；请先同步媒资并等待任务成功。`);
+  }
   const episodes = album.episodes.map((episode: any) => {
-    if (!episode.byteplusVid || episode.tiktokVideoStatus !== 'READY') throw workflowConflict(`第 ${episode.episodeNo} 集视频尚未完成 TikTok 登记。`);
     const coverPicId = episode.coverAsset?.providerImageId ?? albumCoverPicId;
     if (!coverPicId) throw workflowConflict(`第 ${episode.episodeNo} 集封面尚未同步到 TikTok。`);
     return {
