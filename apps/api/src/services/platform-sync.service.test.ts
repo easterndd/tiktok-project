@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enqueueAlbumAction, enqueueDueReviewReconciliations, enqueuePlatformSyncJob, processPlatformSyncJobs } from './platform-sync.service';
+import { buildAlbumSnapshot, enqueueAlbumAction, enqueueDueReviewReconciliations, enqueuePlatformSyncJob, processPlatformSyncJobs } from './platform-sync.service';
 import { TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
+
+test('reports every episode missing TikTok registration before version sync', async () => {
+  const prisma = { album: { findUnique: async () => ({
+    coverAsset: { providerImageId: 'cover-1' }, releaseYear: 2026, dramaType: 2, tagList: [1],
+    episodes: [
+      { episodeNo: 15, byteplusVid: 'vid-15', tiktokVideoStatus: 'READY' },
+      { episodeNo: 16, byteplusVid: 'vid-16', tiktokVideoStatus: 'PENDING' },
+      { episodeNo: 18, byteplusVid: null, tiktokVideoStatus: 'NOT_STARTED' }
+    ]
+  }) } };
+  await assert.rejects(() => buildAlbumSnapshot(prisma as any, 'album-1'), (error: any) => {
+    assert.equal(error.statusCode, 409);
+    assert.match(error.message, /第 16、18 集视频/);
+    assert.match(error.message, /共 2 集/);
+    return true;
+  });
+});
 
 test('requeues a failed platform sync job when an operator retries it', async () => {
   const updateInputs: Record<string, unknown>[] = [];
