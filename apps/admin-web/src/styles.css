@@ -282,6 +282,13 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .switch { display: flex; width: 46px; height: 26px; align-items: center; padding: 3px; border: 0; border-radius: 13px; background: #bbc4d1; cursor: pointer; transition: background .2s ease; }.switch span { width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .2s ease; }.switch.on { background: var(--green); }.switch.on span { transform: translateX(20px); }
 .login-shell { display: grid; min-height: 100vh; padding: 24px; place-items: center; background: #f4f6fa; }.login-panel { display: grid; width: min(100%, 410px); gap: 13px; padding: 34px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: 0 16px 45px rgba(23,32,51,.08); }.login-panel .brand { padding: 0; margin-bottom: 17px; color: var(--ink); }.login-panel h1 { margin-bottom: 0; font-size: 26px; }.login-panel label { display: grid; gap: 6px; color: var(--ink); font-size: 12px; font-weight: 800; }.login-panel input { min-height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 6px; outline: none; }.login-panel input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(27,183,194,.12); }.form-error { margin: 0; color: #c5344d; font-size: 12px; }
 .chart-panel { min-height: 320px; }
+.metadata-sync { margin: 16px 28px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.metadata-sync > p, .metadata-sync small { color: var(--muted); font-size: 12px; }
+.metadata-sync-target { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.metadata-sync-target > div { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.metadata-sync-target .form-error { color: #c5344d; }
+.metadata-sync-confirm { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; line-height: 1.6; }
+.metadata-sync-confirm input { flex: 0 0 auto; margin-top: 4px; }
 .chart-panel select { min-height: 32px; padding: 0 8px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; background: #fff; font-size: 11px; }
 .chart { display: grid; grid-template-columns: 42px minmax(0, 1fr); min-height: 218px; padding: 8px 22px 20px; }
 .chart-y { display: flex; flex-direction: column; justify-content: space-between; padding: 0 5px 26px 0; color: #a3adbb; font-size: 9px; text-align: right; }

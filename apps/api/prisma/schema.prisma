@@ -183,6 +183,7 @@ enum AlbumAuthorizationStatus {
 }
 
 enum SharedPlatformOperationKind {
+  SYNC_DISPLAY_METADATA
   AUTHORIZE_ALBUM
   REVOKE_ALBUM
   RECONCILE_ALBUM
@@ -217,6 +218,8 @@ model User {
 
 model Album {
   id                       String             @id @default(cuid())
+  displayMetadataVersion   Int                @default(0)
+  displayMetadataSharedId  String?
   tiktokAlbumId            String?            @unique
   tiktokVersion            Int?
   onlineVersion            Int?
@@ -402,6 +405,10 @@ model SharedMediaAsset {
 
 model SharedTikTokAlbum {
   id                  String   @id @default(cuid())
+  displayMetadata     Json?
+  displayMetadataVersion Int   @default(0)
+  displayMetadataUpdatedBy String?
+  displayMetadataUpdatedAt DateTime?
   canonicalKey        String   @unique
   ownerMiniAppKey     String
   ownerClientKey      String
@@ -443,6 +450,7 @@ model SharedTikTokEpisode {
 
 model MiniAppAlbumAuthorization {
   id                String                    @id @default(cuid())
+  metadataSyncedVersion Int                    @default(0)
   sharedAlbumId     String
   miniAppKey        String
   targetClientKey   String

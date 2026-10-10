@@ -3,6 +3,7 @@ import { Prisma, type PrismaClient, type SharedMediaStatus } from '@prisma/clien
 import { miniAppEnvironment, miniAppPlatformConfig, miniAppKeys, type MiniAppKey } from '../config/mini-apps';
 import type { Env } from '../config/env';
 import { TikTokShortDramaApiService, TikTokShortDramaApiError, isTikTokAlbumAuthorized, parseTikTokAlbumAuthorizationResults } from './tiktok-short-drama-api.service';
+import { enqueueDisplayMetadata, processDisplayMetadataOperation } from './display-metadata.service';
 
 type Db = PrismaClient & { [key: string]: any };
 
@@ -403,7 +404,9 @@ async function completeSharedOperation(sharedPrisma: Db, operation: any, data: R
 }
 
 async function failSharedOperation(sharedPrisma: Db, operation: any, error: unknown, now: Date, maxRetries: number) {
-  const retryable = Boolean((error as { retryable?: boolean }).retryable);
+  const retryable = operation.kind === 'SYNC_DISPLAY_METADATA'
+    ? ![403, 404, 409].includes((error as { statusCode?: number }).statusCode ?? 0)
+    : Boolean((error as { retryable?: boolean }).retryable);
   const attemptCount = operation.attemptCount + 1;
   const uncertain = operation.kind === 'AUTHORIZE_ALBUM' && retryable && !(operation.providerResponse as any)?.platformAuthorized;
   const retry = !uncertain && retryable && attemptCount <= maxRetries;
@@ -506,6 +509,7 @@ async function processSharedAuthorization(sharedPrisma: Db, operation: any, opti
   if (!localPrisma) throw conflict('目标数据库未配置，平台授权尚未完成本地映射。');
   await projectSharedAlbumToLocal(album, authorization, localPrisma);
   await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: { status: 'AUTHORIZED', errorCode: null, errorMessage: null, lastReconciledAt: now } });
+  await enqueueDisplayMetadata(sharedPrisma, album, [authorization]);
   await completeSharedOperation(sharedPrisma, operation, { providerResponse: { platformAuthorized: true, targetClientKey: authorization.targetClientKey, mappedEpisodeCount: album.episodes.length, onlineVersion: album.onlineVersion } }, now);
 }
 
@@ -674,6 +678,7 @@ export async function processSharedPlatformOperations(sharedPrisma: Db, options:
     try {
       if (job.kind === 'AUTHORIZE_ALBUM') await processSharedAuthorization(sharedPrisma, job, options, current);
       else if (job.kind === 'RECONCILE_ALBUM') await processSharedReconcile(sharedPrisma, job, options, current);
+      else if (job.kind === 'SYNC_DISPLAY_METADATA') await processDisplayMetadataOperation(sharedPrisma, job, options.localPrismaByApp, current);
       else throw new Error(`暂不支持的共享平台任务：${job.kind}`);
       options.log?.('Shared platform operation completed.', { jobId: job.id, kind: job.kind });
     } catch (error) {

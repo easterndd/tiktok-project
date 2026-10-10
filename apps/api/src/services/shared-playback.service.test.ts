@@ -400,3 +400,25 @@ test('clears old target proof before authorizing a changed client key', async ()
   assert.equal(f.state.grantCalls, 1);
   assert.equal(f.state.ops[0].status, 'SUCCEEDED');
 });
+
+test('new playback copies inherit unified display text and translations instead of the old platform title', async () => {
+  const f = fixture(); await f.prepare();
+  f.state.album.displayMetadata = { title: 'Unified display title', description: 'Unified description', translations: [{ locale: 'en', title: 'Unified EN', description: 'Unified EN description' }] };
+  f.state.album.displayMetadataVersion = 1;
+  f.state.targetAlbum = null;
+  f.state.targetEpisodes = [];
+  const translations: any[] = [];
+  f.targetDb.albumTranslation = {
+    updateMany: async () => ({ count: 0 }),
+    upsert: async ({ create }: any) => { translations.push(create); return create; }
+  };
+  await f.prepare();
+  assert.equal(f.state.targetAlbum.title, 'Unified display title');
+  assert.equal(f.state.targetAlbum.status, 'OFFLINE');
+  await f.run();
+  assert.equal(f.state.targetAlbum.title, 'Unified display title');
+  assert.equal(f.state.targetAlbum.description, 'Unified description');
+  assert.equal(translations[0].title, 'Unified EN');
+  assert.equal(f.state.targetAlbum.displayMetadataVersion, 1);
+  assert.equal(f.state.album.displayMetadata.title, 'Unified display title');
+});

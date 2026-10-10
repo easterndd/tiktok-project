@@ -362,7 +362,7 @@ function AdminApp() {
   const [savingAlbumId, setSavingAlbumId] = useState<string | null>(null);
   const [savingTitleId, setSavingTitleId] = useState<string | null>(null);
   const [titleDrafts, setTitleDrafts] = useState<Record<string, string>>({});
-  const [editingAlbumMetadata, setEditingAlbumMetadata] = useState<Album | null>(null);
+  const [editingAlbumMetadata, setEditingAlbumMetadata] = useState<EditableAlbumMetadata | null>(null);
   const [deletingAlbumId, setDeletingAlbumId] = useState<string | null>(null);
   const [dirtyAccessAlbumIds, setDirtyAccessAlbumIds] = useState<Set<string>>(() => new Set());
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
@@ -1022,10 +1022,17 @@ function AdminApp() {
     if (title === album.title) return;
     setSavingTitleId(album.id);
     try {
-      const updated = await api<Album>(`/admin/albums/${album.id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
+      const scope = await api<EditableAlbumMetadata>(`/admin/albums/${album.id}/display-metadata`);
+      if (scope.shared) {
+        setEditingAlbumMetadata({ ...album, initialTitle: title });
+        return;
+      }
+      const updated = await api<EditableAlbumMetadata>(`/admin/albums/${album.id}/display-metadata`, { method: 'PATCH', body: JSON.stringify({
+        title, description: scope.description ?? '', translations: scope.translations ?? [], expectedVersion: scope.version ?? 0
+      }) });
       setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, ...updated, episodeCount: item.episodeCount } : item));
       setTitleDrafts((drafts) => { const next = { ...drafts }; delete next[album.id]; return next; });
-      setMessage(`“${title}”已保存并同步到当前小程序。`);
+      setMessage(`“${title}”已保存到当前小程序。`);
     } catch (error) {
       setMessage(error instanceof Error ? `剧集名称同步失败：${error.message}` : '剧集名称同步失败');
     } finally {
@@ -1035,7 +1042,7 @@ function AdminApp() {
   const albumMetadataSaved = (updated: EditableAlbumMetadata) => {
     setAlbums((items) => items.map((item) => item.id === updated.id ? { ...item, ...updated, episodeCount: item.episodeCount } : item));
     setTitleDrafts((drafts) => { const next = { ...drafts }; delete next[updated.id]; return next; });
-    setMessage(`“${updated.title}”的剧名和简介已保存并同步到当前小程序。`);
+    setMessage(updated.shared ? `“${updated.title}”的统一资料已保存，正在同步到 ${updated.targets?.length ?? 0} 个关联小程序。` : `“${updated.title}”的剧名和简介已保存到当前小程序。`);
   };
   const syncTikTokMedia = async (album: Album) => {
     setPlatformWorking(`${album.id}:media`);
