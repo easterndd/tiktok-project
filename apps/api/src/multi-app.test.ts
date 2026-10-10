@@ -3,7 +3,7 @@ import { it } from 'node:test';
 import type { PrismaClient } from '@prisma/client';
 import { buildApp } from './app';
 import { loadEnv } from './config/env';
-import { configuredMiniAppKeys, miniAppEnvironment, miniAppKeys, taletvEnvironment } from './config/mini-apps';
+import { assertSameMiniAppOrganization, configuredMiniAppKeys, miniAppEnvironment, miniAppKeys, miniAppOrganization, miniAppOrganizations, sameMiniAppOrganization, taletvEnvironment } from './config/mini-apps';
 import { accessConfigSchema } from './lib/content-access';
 
 const env = loadEnv({
@@ -126,20 +126,22 @@ it('retires independent publishing and blocks platform changes to authorized cop
 });
 
 it('accepts a different-email target OWNER session for shared playback status', async () => {
-  const mainDb = databaseFor('source-album') as any;
+  const mainDb = databaseFor('main') as any;
   mainDb.sharedTikTokAlbum = { findUnique: async () => null };
-  mainDb.adminUser.findUnique = async () => ({ id: 'source-owner', email: 'source@example.com', role: 'OWNER', status: 'ACTIVE', tokenVersion: 0 });
+  const sourceDb = databaseFor('source-album') as any;
+  sourceDb.adminUser.findUnique = async () => ({ id: 'source-owner', email: 'source@example.com', role: 'OWNER', status: 'ACTIVE', tokenVersion: 0 });
   const targetDb = databaseFor('target-album') as any;
   targetDb.adminUser.findUnique = async ({ where }: any) => where.id === 'target-owner'
     ? { id: 'target-owner', email: 'target@example.com', role: 'OWNER', status: 'ACTIVE', tokenVersion: 0 }
     : null;
   targetDb.album.findUnique = async () => null;
-  const app = await buildApp(env, { prisma: mainDb, taletvPrisma: targetDb });
+  const expanded = { ...env, STORYLAND_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=storyland', STORYLAND_TIKTOK_CLIENT_KEY: 'storyland-key', STORYLAND_TIKTOK_CLIENT_SECRET: 'storyland-secret' };
+  const app = await buildApp(expanded, { prisma: mainDb, taletvPrisma: targetDb, miniPrisma: { storyland: sourceDb } });
   try {
     await app.ready();
-    const sourceToken = await app.jwt.sign({ sub: 'source-owner', kind: 'admin', appKey: 'main', role: 'OWNER', tokenVersion: 0 });
+    const sourceToken = await app.jwt.sign({ sub: 'source-owner', kind: 'admin', appKey: 'storyland', role: 'OWNER', tokenVersion: 0 });
     const targetToken = await app.jwt.sign({ sub: 'target-owner', kind: 'admin', appKey: 'taletv', role: 'OWNER', tokenVersion: 0 });
-    const url = '/api/v1/admin/shared-playback/source-album?targetApps=taletv';
+    const url = '/api/storyland/v1/admin/shared-playback/source-album?targetApps=taletv';
     const withoutApproval = await app.inject({ url, headers: { authorization: `Bearer ${sourceToken}` } });
     assert.equal(withoutApproval.statusCode, 200);
     assert.equal(withoutApproval.json().items[0].status, 'ACCESS_ERROR');
@@ -202,6 +204,18 @@ it('registers all new Mini routes with separate databases and app-bound admin to
   assert.throws(() => miniAppEnvironment({ ...expanded, DRAMACLOUD_DATABASE_URL: expanded.STORYLAND_DATABASE_URL }, 'storyland'), /different database or PostgreSQL schema/);
   assert.throws(() => loadEnv({ DATABASE_URL: env.DATABASE_URL, JWT_SECRET: env.JWT_SECRET, BYTEPLUS_ACCOUNT_ID: env.BYTEPLUS_ACCOUNT_ID, BYTEPLUS_SPACE_NAME: env.BYTEPLUS_SPACE_NAME, BYTEPLUS_REGION: env.BYTEPLUS_REGION, STORYLAND_DATABASE_URL: 'not-a-url' }), /STORYLAND_DATABASE_URL/);
   assert.throws(() => loadEnv({ DATABASE_URL: env.DATABASE_URL, JWT_SECRET: env.JWT_SECRET, BYTEPLUS_ACCOUNT_ID: env.BYTEPLUS_ACCOUNT_ID, BYTEPLUS_SPACE_NAME: env.BYTEPLUS_SPACE_NAME, BYTEPLUS_REGION: env.BYTEPLUS_REGION, CROWNRUSH_DATABASE_URL: 'not-a-url' }), /CROWNRUSH_DATABASE_URL/);
+});
+
+it('keeps mini apps in the configured organization groups and rejects cross-organization sharing', () => {
+  assert.deepEqual(Object.values(miniAppOrganizations).map((group) => group.miniApps.length), [1, 20, 10]);
+  assert.deepEqual(Object.values(miniAppOrganizations).flatMap((group) => group.miniApps).sort(), [...miniAppKeys].sort());
+  assert.equal(miniAppOrganization('main'), 'quickreels');
+  assert.equal(miniAppOrganization('storyland'), miniAppOrganization('taletv'));
+  assert.equal(miniAppOrganization('crownrush'), miniAppOrganization('elitedrama'));
+  assert.equal(sameMiniAppOrganization('dramacloud', 'cinereels'), true);
+  assert.equal(sameMiniAppOrganization('taletv', 'crownrush'), false);
+  assert.throws(() => assertSameMiniAppOrganization('main', ['taletv']), /同一组织/);
+  assert.throws(() => assertSameMiniAppOrganization('storyland', ['crownrush']), /同一组织/);
 });
 
 it('handles Mini bootstrap preflights for all apps and logs the actual allowlist decision before CORS', async () => {

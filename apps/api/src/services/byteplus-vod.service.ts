@@ -31,6 +31,7 @@ export type BytePlusMedia = {
   durationMs?: number;
   publishStatus?: string;
   createTime?: string;
+  tags?: string[];
 };
 
 type LocalUploadInput = {
@@ -39,6 +40,7 @@ type LocalUploadInput = {
   title: string;
   spaceName: string;
   byteplusAccountId: string;
+  tags?: string[];
 };
 
 const uploadPartSize = 20 * 1024 * 1024;
@@ -299,7 +301,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
           CallbackArgs: JSON.stringify({ byteplusAccountId: input.byteplusAccountId }),
           Functions: JSON.stringify([
             { Name: 'GetMeta' },
-            { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128) } }
+            { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128), ...(input.tags ? { Tags: input.tags.join(',') } : {}) } }
           ])
         });
       } else {
@@ -329,7 +331,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
         CallbackArgs: JSON.stringify({ byteplusAccountId: input.byteplusAccountId }),
         Functions: JSON.stringify([
           { Name: 'GetMeta' },
-          { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128) } }
+          { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128), ...(input.tags ? { Tags: input.tags.join(',') } : {}) } }
         ])
       });
       }
@@ -339,7 +341,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
       throw Object.assign(new BytePlusVodError(
         `BytePlus ${stage}失败：${detail}`,
         true,
-        stage === '提交媒资'
+        stage === '提交媒资' || typeof service.UploadMedia === 'function'
       ), { cause: error });
     }
     const providerError = response.ResponseMetadata?.Error;
@@ -502,17 +504,19 @@ export class BytePlusVodService implements TikTokShortDramaService {
           ? Math.round(media.SourceInfo.Duration * 1000)
           : undefined,
         publishStatus: media.BasicInfo?.PublishStatus,
-        createTime: media.BasicInfo?.CreateTime
+        createTime: media.BasicInfo?.CreateTime,
+        tags: media.BasicInfo?.Tags
       }];
     });
   }
 
-  async listMedia(input: { offset?: number; pageSize?: number; status?: string }) {
+  async listMedia(input: { offset?: number; pageSize?: number; status?: string; tags?: string }) {
     const response = await this.createSdkService().GetMediaList({
       SpaceName: this.env.BYTEPLUS_SPACE_NAME,
       Offset: String(input.offset ?? 0),
       PageSize: String(Math.min(Math.max(input.pageSize ?? 50, 1), 100)),
-      Status: input.status
+      Status: input.status,
+      Tags: input.tags
     });
     const providerError = response.ResponseMetadata?.Error;
     if (providerError) throw new Error(`${providerError.Code ?? 'BytePlusError'}: ${providerError.Message ?? 'Unable to list BytePlus media.'}`);
@@ -521,13 +525,15 @@ export class BytePlusVodService implements TikTokShortDramaService {
       if (!vid) return [];
       return [{
         vid,
+        spaceName: media.BasicInfo?.SpaceName,
         title: media.BasicInfo?.Title ?? vid,
         coverUrl: media.BasicInfo?.PosterUri,
         durationMs: typeof media.SourceInfo?.Duration === 'number'
           ? Math.round(media.SourceInfo.Duration * 1000)
           : undefined,
         publishStatus: media.BasicInfo?.PublishStatus,
-        createTime: media.BasicInfo?.CreateTime
+        createTime: media.BasicInfo?.CreateTime,
+        tags: media.BasicInfo?.Tags
       }];
     });
     return { items, total: response.Result?.TotalCount ?? items.length };

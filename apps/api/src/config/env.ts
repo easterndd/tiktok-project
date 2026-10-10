@@ -63,6 +63,7 @@ const environment = z.object({
   API_PUBLIC_BASE_URL: z.string().url().optional(),
   COVER_ASSET_STORAGE_DIR: z.string().min(1).default('tmp/cover-assets'),
   COVER_ASSET_PUBLIC_BASE_URL: z.string().url().optional(),
+  LOCAL_UPLOAD_STORAGE_DIR: z.string().min(1).optional(),
   // Development-only switch for browser playback tests without BytePlus VOD.
   LOCAL_PLAYBACK_ENABLED: z.coerce.boolean().default(false),
   UPLOAD_WORKER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),

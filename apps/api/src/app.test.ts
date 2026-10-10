@@ -5,6 +5,7 @@ import { buildApp } from './app';
 import type { Env } from './config/env';
 import { hashPassword } from './services/password';
 import { BytePlusVodService } from './services/byteplus-vod.service';
+import { uploadScope, uploadTags } from './services/local-upload.service';
 
 const env: Env = {
   NODE_ENV: 'test',
@@ -289,7 +290,7 @@ async function createPrismaStub() {
       count: async () => state.completionEvents.size
     },
     adRevenue: { findMany: async () => [], upsert: async () => ({ id: 'revenue-1' }) },
-    uploadJob: { findMany: async () => [], findUnique: async () => null, create: async () => ({ id: 'job-1' }) },
+    uploadJob: { findMany: async () => [], findUnique: async () => null, findFirst: async () => null, create: async () => ({ id: 'job-1' }), updateMany: async () => ({ count: 1 }) },
     $transaction: async <T>(callback: (tx: typeof prisma) => Promise<T>) => callback(prisma),
     $queryRaw: async () => [{ '?column?': 1 }]
   };
@@ -330,7 +331,7 @@ describe('QuicK ReeLS API', () => {
     const app = await buildApp(env, { prisma });
     apps.push(app);
     const original = BytePlusVodService.prototype.getMediaInfos;
-    BytePlusVodService.prototype.getMediaInfos = async () => [{ vid: 'correct-vid', title: 'Correct drama', spaceName: env.BYTEPLUS_SPACE_NAME, coverUrl: 'https://example.com/correct.jpg' }];
+    BytePlusVodService.prototype.getMediaInfos = async () => [{ vid: 'correct-vid', title: 'Correct drama', spaceName: env.BYTEPLUS_SPACE_NAME, coverUrl: 'https://example.com/correct.jpg', tags: uploadTags(uploadScope(env), 'original-upload') }];
     try {
       const response = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/bind-byteplus', headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { byteplusVid: 'correct-vid', coverAssetId: null } });
       assert.equal(response.statusCode, 200, response.body);
@@ -368,6 +369,71 @@ describe('QuicK ReeLS API', () => {
     const response = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/bind-byteplus', headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { byteplusVid: 'new-vid' } });
     assert.equal(response.statusCode, 409, response.body);
     assert.match(response.json().error.message, /平台任务/);
+  });
+
+  it('resets a wrongly bound episode even when the album has an existing platform version', async () => {
+    const prisma = await createPrismaStub();
+    const episode = await prisma.episode.findUnique();
+    episode.tiktokEpisodeId = null;
+    episode.status = 'READY';
+    episode.tiktokVideoStatus = 'NOT_STARTED';
+    episode.byteplusUploadStatus = 'READY';
+    prisma.episode.updateMany = async (args: any) => { Object.assign(episode, args.data); return { count: 1 }; };
+    prisma.episode.findUniqueOrThrow = async () => episode;
+    prisma.platformSyncJob = { findFirst: async () => null };
+    prisma.uploadJob.findFirst = async () => null;
+    const app = await buildApp(env, { prisma });
+    apps.push(app);
+    const response = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/reset-byteplus', headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { confirmation: 'RESET_VIDEO_BINDING' } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(episode.byteplusVid, null);
+    assert.equal(episode.byteplusUploadStatus, 'PENDING');
+    assert.equal(episode.status, 'DRAFT');
+  });
+
+  it('deletes an offline shared playback copy without deleting its source authorization', async () => {
+    const prisma = await createPrismaStub();
+    const album = await prisma.album.findUnique();
+    album.status = 'OFFLINE';
+    album.tiktokAlbumId = 'shared-platform-album';
+    const authorization: any = { id: 'auth-1', sharedAlbumId: 'shared-1', miniAppKey: 'main', targetLocalAlbumId: album.id, status: 'AUTHORIZED', album: { ownerMiniAppKey: 'storyland' } };
+    prisma.album.findUnique = async () => album;
+    prisma.album.delete = async () => album;
+    prisma.miniAppAlbumAuthorization.findFirst = async () => authorization;
+    prisma.miniAppAlbumAuthorization.update = async ({ data }: any) => Object.assign(authorization, data);
+    prisma.sharedPlatformOperation = { findFirst: async () => null };
+    prisma.platformSyncJob = { findFirst: async () => null };
+    const app = await buildApp(env, { prisma });
+    apps.push(app);
+    const response = await app.inject({ method: 'DELETE', url: `/api/v1/admin/albums/${album.id}`, headers: { authorization: `Bearer ${await token(app, 'admin')}` } });
+    assert.equal(response.statusCode, 204, response.body);
+    assert.equal(authorization.status, 'FAILED');
+    assert.equal(authorization.targetLocalAlbumId, null);
+    assert.match(authorization.errorMessage, /TikTok 平台授权仍保留/);
+  });
+
+  it('cleans up an online legacy shared copy from another organization', async () => {
+    const prisma = await createPrismaStub();
+    const album = await prisma.album.findUnique();
+    const authorization: any = { id: 'auth-1', sharedAlbumId: 'shared-1', miniAppKey: 'main', targetLocalAlbumId: album.id, status: 'FAILED', album: { ownerMiniAppKey: 'storyland' } };
+    let albumUpdate: any;
+    let episodeUpdate: any;
+    prisma.album.findUnique = async () => album;
+    prisma.album.update = async ({ data }: any) => { albumUpdate = data; Object.assign(album, data); return album; };
+    prisma.episode.updateMany = async ({ data }: any) => { episodeUpdate = data; return { count: 1 }; };
+    prisma.album.delete = async () => album;
+    prisma.miniAppAlbumAuthorization.findFirst = async () => authorization;
+    prisma.miniAppAlbumAuthorization.update = async ({ data }: any) => Object.assign(authorization, data);
+    prisma.sharedPlatformOperation = { findFirst: async () => null };
+    prisma.platformSyncJob = { findFirst: async () => null };
+    const app = await buildApp(env, { prisma });
+    apps.push(app);
+    const response = await app.inject({ method: 'DELETE', url: `/api/v1/admin/albums/${album.id}`, headers: { authorization: `Bearer ${await token(app, 'admin')}` } });
+    assert.equal(response.statusCode, 204, response.body);
+    assert.equal(albumUpdate.status, 'OFFLINE');
+    assert.equal(episodeUpdate.status, 'OFFLINE');
+    assert.equal(authorization.status, 'FAILED');
+    assert.equal(authorization.targetLocalAlbumId, null);
   });
 
   it('clearing an independent episode cover restores the current BytePlus cover', async () => {

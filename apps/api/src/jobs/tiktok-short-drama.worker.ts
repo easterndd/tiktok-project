@@ -8,6 +8,7 @@ import {
   type UploadStatusResult
 } from '../services/tiktok-short-drama.service';
 import { BytePlusVodService } from '../services/byteplus-vod.service';
+import { processLocalUploadJobs } from '../services/local-upload.service';
 import { TikTokShortDramaApiService } from '../services/tiktok-short-drama-api.service';
 import { enqueueDueReviewReconciliations, enqueueVideoSync, processPlatformSyncJobs } from '../services/platform-sync.service';
 import { enqueueDueSharedReconciliations, processSharedPlatformOperations } from '../services/shared-platform.service';
@@ -245,6 +246,9 @@ export async function startUploadWorker() {
   const run = async () => {
     for (const context of contexts) {
       try {
+        if (context.service instanceof BytePlusVodService) await processLocalUploadJobs(context.prisma, sharedPrisma, context.service, context.env, {
+          log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
+        });
         await processJobs(context.prisma, context.service, {
           maxRetries: context.env.UPLOAD_MAX_RETRIES,
           log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
@@ -273,7 +277,12 @@ export async function startUploadWorker() {
   };
 
   await run().catch((error) => console.error('Upload worker cycle failed.', error));
-  const timer = setInterval(() => void run().catch((error) => console.error('Upload worker cycle failed.', error)), env.UPLOAD_WORKER_INTERVAL_MS || defaultIntervalMs);
+  let running = false;
+  const timer = setInterval(() => {
+    if (running) return;
+    running = true;
+    void run().catch((error) => console.error('Upload worker cycle failed.', error)).finally(() => { running = false; });
+  }, env.UPLOAD_WORKER_INTERVAL_MS || defaultIntervalMs);
   const shutdown = async () => {
     clearInterval(timer);
     await Promise.all([

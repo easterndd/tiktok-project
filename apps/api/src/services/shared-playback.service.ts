@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { Env } from '../config/env';
-import { miniAppAdConfig, miniAppPlatformConfig, type MiniAppKey } from '../config/mini-apps';
+import { assertSameMiniAppOrganization, miniAppAdConfig, miniAppPlatformConfig, type MiniAppKey } from '../config/mini-apps';
 import { readAccessConfig } from '../lib/content-access';
 import { registerSharedPlaybackSnapshot, enqueueSharedAlbumAuthorization, enqueueSharedAlbumReconcile } from './shared-platform.service';
 import { TikTokShortDramaApiService } from './tiktok-short-drama-api.service';
@@ -59,6 +59,7 @@ export async function targetPlaybackOwner(db: Db, email: string, adminId?: strin
 }
 
 export async function preparePlaybackTarget(db: Db, env: Env, sourceApp: MiniAppKey, target: MiniAppKey, source: any, previousTargetId?: string | null) {
+  assertSameMiniAppOrganization(sourceApp, [target]);
   const linked = await db.album.findUnique({ where: { tiktokAlbumId: source.tiktokAlbumId }, include: { episodes: true } });
   const legacyId = `release_${createHash('sha256').update(`${sourceApp}:${source.id}`).digest('hex').slice(0, 24)}`;
   const existing = linked ?? await db.album.findUnique({ where: { id: previousTargetId ?? playbackAlbumId(sourceApp, source.id) }, include: { episodes: true } })
@@ -93,6 +94,7 @@ type PlaybackInput = { sharedDb: Db; sourceDb: Db; dbByApp: Record<string, Db>; 
   targetApps: MiniAppKey[]; operatorEmail: string; authorizedAdminIds?: Partial<Record<MiniAppKey, string>>; sourceApi?: TikTokShortDramaApiService };
 
 export async function authorizeSharedPlayback(input: PlaybackInput) {
+  assertSameMiniAppOrganization(input.sourceApp, input.targetApps);
   const api = input.sourceApi ?? new TikTokShortDramaApiService({ ...input.env, TIKTOK_CLIENT_KEY: miniAppPlatformConfig(input.env, input.sourceApp).clientKey, TIKTOK_CLIENT_SECRET: miniAppPlatformConfig(input.env, input.sourceApp).clientSecret });
   const source = await verifyPlaybackSource(input.sourceDb, api, input.sourceAlbumId);
   let shared = await registerSharedPlaybackSnapshot(input.sharedDb, input.env, input.sourceApp, source);
@@ -125,6 +127,7 @@ export async function authorizeSharedPlayback(input: PlaybackInput) {
 }
 
 export async function sharedPlaybackStatus(input: Omit<PlaybackInput, 'env'>) {
+  assertSameMiniAppOrganization(input.sourceApp, input.targetApps);
   const shared = await input.sharedDb.sharedTikTokAlbum.findUnique({ where: { canonicalKey: `${input.sourceApp}:${input.sourceAlbumId}` }, include: { authorizations: true, episodes: { include: { media: true } } } });
   const items = [];
   for (const target of [...new Set(input.targetApps)]) {

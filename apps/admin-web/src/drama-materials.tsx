@@ -6,7 +6,7 @@ import type { EditableAlbumMetadata } from './album-metadata-dialog';
 type Api = <T>(path: string, options?: RequestInit) => Promise<T>;
 type Cover = { id: string; publicUrl: string };
 type Media = { vid: string; title: string };
-type Episode = { id: string; episodeNo: number; title: string; isFree?: boolean; byteplusVid?: string | null; byteplusCoverUrl?: string | null; coverUrl?: string | null; coverAssetId?: string | null };
+type Episode = { id: string; episodeNo: number; title: string; isFree?: boolean; status?: string; byteplusVid?: string | null; byteplusUploadStatus?: string; byteplusCoverUrl?: string | null; coverUrl?: string | null; coverAssetId?: string | null };
 type Translation = { locale: string; title: string; description?: string; coverUrl?: string | null };
 type Drama = { id: string; title: string; description?: string; language?: string; coverUrl?: string; coverAssetId?: string | null; reviewStatus?: string | null; episodes: Episode[]; translations?: Translation[]; metadata?: EditableAlbumMetadata };
 type AlbumOption = { id: string; title: string; sharedPlayback?: boolean; reviewStatus?: string | null };
@@ -37,10 +37,20 @@ function EpisodeMaterials({ episode, media, api, onSaved, locked, albumCoverUrl 
   const coverPreview = useCoverPreview(coverFile, saved.coverUrl);
   const [clearCover, setClearCover] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [uploadQueued, setUploadQueued] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const changedVid = vid.trim() !== (saved.byteplusVid ?? '');
   const dirty = changedVid || title.trim() !== saved.title || Boolean(coverFile) || clearCover;
+
+  useEffect(() => {
+    if (episode.byteplusVid && episode.byteplusVid !== saved.byteplusVid) {
+      setSaved(episode);
+      setVid(episode.byteplusVid);
+      setUploadQueued(false);
+    }
+    if (!episode.byteplusVid && episode.byteplusUploadStatus !== 'UPLOADING') setUploadQueued(false);
+  }, [episode, saved.byteplusVid]);
 
   function selectVid(value: string) {
     setVid(value);
@@ -80,15 +90,40 @@ function EpisodeMaterials({ episode, media, api, onSaved, locked, albumCoverUrl 
     } finally { setBusy(false); }
   }
 
+  async function resetVideo() {
+    if (!window.confirm(`解除第 ${episode.episodeNo} 集的视频绑定，以便在当前小程序重新上传？原 BytePlus 视频将保留。`)) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const next = await api<Episode>(`/admin/episodes/${episode.id}/reset-byteplus`, { method: 'POST', body: JSON.stringify({ confirmation: 'RESET_VIDEO_BINDING' }) });
+      setSaved(next); setVid(''); setUploadQueued(false);
+      setMessage('已解除绑定，请选择当前小程序的视频文件上传。');
+      await onSaved();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '解除绑定失败'); }
+    finally { setBusy(false); }
+  }
+
+  async function uploadVideo(file: File) {
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const form = new FormData(); form.append('episodeId', episode.id); form.append('file', file);
+      await api('/admin/upload-jobs/local', { method: 'POST', body: form });
+      setUploadQueued(true);
+      setMessage('视频已入队。');
+      await onSaved();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '提交视频失败'); }
+    finally { setBusy(false); }
+  }
+
   return <form className="material-episode" onSubmit={save}>
     <div className="material-episode-heading"><strong>第 {episode.episodeNo} 集</strong>{coverPreview && <img className="episode-cover-preview" src={coverPreview} alt={`第 ${episode.episodeNo} 集封面`} />}</div>
-    <fieldset disabled={busy || locked}>
+    <fieldset disabled={busy || locked || uploadQueued}>
       <label>分集标题<input value={title} maxLength={160} required onChange={(event) => setTitle(event.target.value)} /></label>
       <label>BytePlus VID<input value={vid} required maxLength={256} onChange={(event) => selectVid(event.target.value)} /><small>当前：{saved.byteplusVid ?? '未绑定'}</small></label>
       <label>VOD 媒资<select value={media.some((item) => item.vid === vid) ? vid : ''} onChange={(event) => { if (event.target.value) selectVid(event.target.value); }}><option value="">选择媒资</option>{media.map((item) => <option key={item.vid} value={item.vid}>{item.title} · {item.vid}</option>)}</select></label>
       <label>分集封面<input ref={coverInput} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { setCoverFile(event.target.files?.[0] ?? null); }} />{coverFile && <small>{coverFile.name}</small>}</label>
       <label className="material-check"><input type="checkbox" checked={clearCover} onChange={(event) => setClearCover(event.target.checked)} />清除原独立封面</label>
       <button className="secondary" type="submit" disabled={!dirty}><Save size={15} />{busy ? '保存中...' : '保存此集'}</button>
+      {saved.byteplusVid ? <button className="secondary" type="button" onClick={() => void resetVideo()}><RefreshCw size={15} />解除绑定并重传</button> : <label>上传视频<input type="file" accept="video/mp4,video/quicktime,.m4v" disabled={uploadQueued} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void uploadVideo(file); }} /></label>}
     </fieldset>
     {message && <p className="material-success" role="status">{message}</p>}
     {error && <p className="form-error" role="alert">{error}</p>}

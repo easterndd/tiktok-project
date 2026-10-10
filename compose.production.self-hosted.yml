@@ -5,6 +5,8 @@ services:
       dockerfile: apps/api/Dockerfile
     env_file:
       - ${QUICKREELS_ENV_FILE:-.env.production}
+    environment:
+      LOCAL_UPLOAD_STORAGE_DIR: /var/lib/quickreels/video-uploads
     dns:
       - 183.60.83.19
       - 183.60.82.98
@@ -22,6 +24,7 @@ services:
       start_period: 20s
     volumes:
       - cover_assets:/var/lib/quickreels/cover-assets
+      - video_uploads:/var/lib/quickreels/video-uploads
     networks:
       - quickreels-proxy
       - quickreels-internal
@@ -32,6 +35,8 @@ services:
       dockerfile: apps/api/Dockerfile
     env_file:
       - ${QUICKREELS_ENV_FILE:-.env.production}
+    environment:
+      LOCAL_UPLOAD_STORAGE_DIR: /var/lib/quickreels/video-uploads
     dns:
       - 183.60.83.19
       - 183.60.82.98
@@ -42,6 +47,7 @@ services:
         condition: service_healthy
     volumes:
       - cover_assets:/var/lib/quickreels/cover-assets
+      - video_uploads:/var/lib/quickreels/video-uploads
     networks:
       - quickreels-proxy
       - quickreels-internal
@@ -175,3 +181,4 @@ networks:
 volumes:
   postgres_data:
   cover_assets:
+  video_uploads:
