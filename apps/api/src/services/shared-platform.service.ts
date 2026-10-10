@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type SharedMediaStatus } from '@prisma/client';
-import { miniAppEnvironment, miniAppPlatformConfig, miniAppKeys, type MiniAppKey } from '../config/mini-apps';
+import { assertSameMiniAppOrganization, miniAppEnvironment, miniAppPlatformConfig, miniAppKeys, sameMiniAppOrganization, type MiniAppKey } from '../config/mini-apps';
 import type { Env } from '../config/env';
 import { TikTokShortDramaApiService, TikTokShortDramaApiError, isTikTokAlbumAuthorized, parseTikTokAlbumAuthorizationResults } from './tiktok-short-drama-api.service';
 import { enqueueDisplayMetadata, processDisplayMetadataOperation } from './display-metadata.service';
@@ -108,6 +108,7 @@ export async function getOrCreateSharedMediaAsset(
     if (existing.byteplusAccountId !== input.byteplusAccountId || existing.byteplusSpaceName !== input.byteplusSpaceName || existing.byteplusRegion !== input.byteplusRegion) {
       throw conflict('BytePlus VID 已存在，但所属账号、空间或地区与当前共享配置不一致。');
     }
+    if (existing.firstUploadedByApp !== input.miniAppKey) throw conflict('此 BytePlus VID 属于其他小程序，请独立上传或使用剧目授权。');
     return existing;
   }
   return sharedPrisma.sharedMediaAsset.create({
@@ -133,6 +134,7 @@ export async function bindEpisodeToSharedMedia(sharedPrisma: Db, localPrisma: Db
   const media = await sharedPrisma.sharedMediaAsset.findUnique({ where: { id: sharedMediaAssetId } });
   if (!media) throw Object.assign(new Error('共享媒资不存在。'), { statusCode: 404 });
   if (media.status !== 'READY') throw conflict('共享媒资尚未就绪，不能绑定。');
+  if (media.firstUploadedByApp !== miniAppKey) throw conflict('此 BytePlus VID 属于其他小程序，请独立上传或使用剧目授权。');
   if (media.byteplusAccountId !== env.BYTEPLUS_ACCOUNT_ID || media.byteplusSpaceName !== env.BYTEPLUS_SPACE_NAME || media.byteplusRegion !== env.BYTEPLUS_REGION) {
     throw conflict('共享媒资不属于当前 BytePlus 账号、空间或地区。');
   }
@@ -277,6 +279,7 @@ export async function enqueueSharedAlbumAuthorization(
   const album = await sharedPrisma.sharedTikTokAlbum.findUnique({ where: { id: sharedAlbumId } });
   if (!album) throw Object.assign(new Error('共享主剧目不存在。'), { statusCode: 404 });
   if (album.ownerMiniAppKey === target) throw conflict('主小程序已经拥有该剧目，无需再次授权。');
+  assertSameMiniAppOrganization(requireMiniAppKey(album.ownerMiniAppKey), [target]);
   const previous = await sharedPrisma.miniAppAlbumAuthorization.findUnique({ where: { sharedAlbumId_miniAppKey: { sharedAlbumId, miniAppKey: target } } });
   const changedClient = previous && previous.targetClientKey !== targetConfig.clientKey;
 
@@ -451,6 +454,19 @@ async function processSharedAuthorization(sharedPrisma: Db, operation: any, opti
   const target = requireMiniAppKey(operation.targetMiniAppKey);
   const authorization = album.authorizations.find((item: any) => item.miniAppKey === target);
   if (!authorization) throw new Error('共享主剧目授权记录不存在。');
+  const owner = requireMiniAppKey(album.ownerMiniAppKey);
+  if (!sameMiniAppOrganization(owner, target)) {
+    const message = '只能在同一组织内共享剧目；该旧授权已停止本地播放，请在目标小程序清理共享副本。';
+    const localPrisma = options.localPrismaByApp[target];
+    if (localPrisma && authorization.targetLocalAlbumId) {
+      await localPrisma.album.updateMany({ where: { id: authorization.targetLocalAlbumId }, data: { status: 'OFFLINE', platformPublishedVersion: null, platformPublishedAt: null } });
+      await localPrisma.episode.updateMany({ where: { albumId: authorization.targetLocalAlbumId }, data: { status: 'OFFLINE' } });
+    }
+    await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: {
+      status: 'FAILED', errorCode: 'ORGANIZATION_MISMATCH', errorMessage: message, providerResponse: Prisma.JsonNull
+    } });
+    throw conflict(message);
+  }
   if (sharedMiniAppConfig(options.env, target).clientKey !== authorization.targetClientKey) throw conflict('目标 Client Key 已变化，请核实授权对象。');
   if ((operation.snapshotJson as any)?.targetClientKey && (operation.snapshotJson as any).targetClientKey !== authorization.targetClientKey) throw conflict('授权排队后目标 Client Key 已变化，不能使用旧批准操作新凭据。');
   const targetOwnerAdminId = (operation.snapshotJson as any)?.targetOwnerAdminId;
@@ -544,6 +560,18 @@ async function processSharedReconcile(sharedPrisma: Db, operation: any, options:
     if (authorization.miniAppKey === updated.ownerMiniAppKey) continue;
     if (authorization.status !== 'AUTHORIZED' && !(authorization.providerResponse as any)?.platformAuthorized) continue;
     const localPrisma = options.localPrismaByApp[authorization.miniAppKey];
+    if (!sameMiniAppOrganization(requireMiniAppKey(updated.ownerMiniAppKey), requireMiniAppKey(authorization.miniAppKey))) {
+      const message = '只能在同一组织内共享剧目；该旧授权已停止本地播放，请在目标小程序清理共享副本。';
+      if (localPrisma && authorization.targetLocalAlbumId) {
+        await localPrisma.album.updateMany({ where: { id: authorization.targetLocalAlbumId }, data: { status: 'OFFLINE', platformPublishedVersion: null, platformPublishedAt: null } });
+        await localPrisma.episode.updateMany({ where: { albumId: authorization.targetLocalAlbumId }, data: { status: 'OFFLINE' } });
+      }
+      await sharedPrisma.miniAppAlbumAuthorization.update({ where: { id: authorization.id }, data: {
+        status: 'FAILED', errorCode: 'ORGANIZATION_MISMATCH', errorMessage: message, providerResponse: Prisma.JsonNull
+      } });
+      failures.push({ miniAppKey: authorization.miniAppKey, message });
+      continue;
+    }
     try {
       if (sharedMiniAppConfig(options.env, authorization.miniAppKey).clientKey !== authorization.targetClientKey) throw conflict('目标 Client Key 已变化，旧授权不能开放当前小程序播放。');
       if (!localPrisma) throw conflict('目标数据库未配置。');

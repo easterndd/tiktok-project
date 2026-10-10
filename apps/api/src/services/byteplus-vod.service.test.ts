@@ -85,12 +85,13 @@ describe('BytePlusVodService', () => {
           }
         } as never
       });
-      const result = await service.uploadLocalVideo({ filePath, fileName: '第1集.mp4', title: 'TaleTV - 第1集', spaceName: 'space', byteplusAccountId: 'account' });
+      const result = await service.uploadLocalVideo({ filePath, fileName: '第1集.mp4', title: 'TaleTV - 第1集', spaceName: 'space', byteplusAccountId: 'account', tags: ['qr-scope-test', 'qr-upload-job'] });
       assert.equal(result.byteplusVid, 'vid-sdk');
       assert.equal(request?.SpaceName, 'space');
       assert.equal(request?.FilePath, filePath);
       assert.match(String(request?.FileName), /^1-[a-f0-9-]+\.mp4$/);
       assert.equal(JSON.parse(String(request?.Functions))[1].Input.Title, 'TaleTV - 第1集');
+      assert.equal(JSON.parse(String(request?.Functions))[1].Input.Tags, 'qr-scope-test,qr-upload-job');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

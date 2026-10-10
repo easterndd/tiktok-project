@@ -3,6 +3,28 @@ import type { Env } from './env';
 export const miniAppKeys = ['main', 'taletv', 'cinereels', 'talereels', 'storyland', 'dramacloud', 'dailyreel', 'dramaone', 'dramaup', 'dramavault', 'talehub', 'talebox', 'storyworld', 'storyhub', 'dramaroom', 'dramazone', 'taleflick', 'dramashort', 'storyshort', 'storyflicks', 'dramaflicks', 'crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama'] as const;
 export type MiniAppKey = typeof miniAppKeys[number];
 
+export const miniAppOrganizations = {
+  quickreels: { label: 'Quick Reels 组织', miniApps: ['main'] },
+  taletv: { label: 'TaleTV / StoryLand 组织', miniApps: ['storyland', 'dramacloud', 'dailyreel', 'dramaone', 'dramaup', 'dramavault', 'talehub', 'talebox', 'storyworld', 'storyhub', 'dramaroom', 'dramazone', 'taleflick', 'dramashort', 'storyshort', 'storyflicks', 'dramaflicks', 'cinereels', 'taletv', 'talereels'] },
+  crownrush: { label: 'CrownRush 组织', miniApps: ['crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama'] }
+} as const satisfies Record<string, { label: string; miniApps: readonly MiniAppKey[] }>;
+
+const miniAppOrganizationByKey = Object.fromEntries(Object.entries(miniAppOrganizations).flatMap(([organization, group]) => group.miniApps.map((key) => [key, organization]))) as Record<MiniAppKey, keyof typeof miniAppOrganizations>;
+
+export function miniAppOrganization(key: MiniAppKey) {
+  return miniAppOrganizationByKey[key];
+}
+
+export function sameMiniAppOrganization(left: MiniAppKey, right: MiniAppKey) {
+  return miniAppOrganization(left) === miniAppOrganization(right);
+}
+
+export function assertSameMiniAppOrganization(source: MiniAppKey, targets: readonly MiniAppKey[]) {
+  if (targets.some((target) => !sameMiniAppOrganization(source, target))) {
+    throw Object.assign(new Error('只能在同一组织内共享剧目；请切换到剧目所属组织的小程序。'), { statusCode: 409 });
+  }
+}
+
 type SecondaryMiniAppKey = Exclude<MiniAppKey, 'main'>;
 
 const definition = (prefix: string) => ({

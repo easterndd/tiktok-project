@@ -5,7 +5,7 @@ import { authorizeSharedPlayback, preparePlaybackTarget, verifyPlaybackSource } 
 import { processSharedPlatformOperations, projectSharedAlbumToLocal, recoverSavedAuthorization, retryUnknownAuthorizationOnce } from './shared-platform.service';
 import { TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
 
-const env = { MINI_APP_KEY: 'main', TIKTOK_CLIENT_KEY: 'main-key', TIKTOK_CLIENT_SECRET: 'main-secret', TALETV_TIKTOK_CLIENT_KEY: 'target-key', TALETV_TIKTOK_CLIENT_SECRET: 'target-secret', BYTEPLUS_ACCOUNT_ID: 'account', BYTEPLUS_SPACE_NAME: 'space', BYTEPLUS_REGION: 'region', REWARDED_PLACEMENT_ID: 'main-ad', TALETV_REWARDED_PLACEMENT_ID: 'target-ad' } as Env;
+const env = { MINI_APP_KEY: 'storyland', TIKTOK_CLIENT_KEY: 'source-key', TIKTOK_CLIENT_SECRET: 'source-secret', STORYLAND_TIKTOK_CLIENT_KEY: 'source-key', STORYLAND_TIKTOK_CLIENT_SECRET: 'source-secret', TALETV_TIKTOK_CLIENT_KEY: 'target-key', TALETV_TIKTOK_CLIENT_SECRET: 'target-secret', BYTEPLUS_ACCOUNT_ID: 'account', BYTEPLUS_SPACE_NAME: 'space', BYTEPLUS_REGION: 'region', REWARDED_PLACEMENT_ID: 'main-ad', TALETV_REWARDED_PLACEMENT_ID: 'target-ad' } as unknown as Env;
 
 function fixture() {
   const localSource: any = { id: 'source-1', tiktokAlbumId: 'platform-1', title: 'Draft title', coverUrl: 'https://example.com/draft.jpg', description: 'Draft', language: 'en', status: 'ONLINE', accessConfig: { rewardedAdEnabled: true, freeEpisodeCount: 1, rewardedPlacementId: 'main-ad', rewardedAdCount: 1 }, episodes: [{ id: 'source-episode', episodeNo: 1, byteplusVid: 'new-draft-vid', tiktokEpisodeId: 'new-draft-id', isFree: true, durationMs: 1000 }] };
@@ -76,8 +76,8 @@ function fixture() {
     createVideo: async () => assert.fail('must not upload or register videos'),
     submitReview: async () => assert.fail('must not submit a new review')
   };
-  const prepare = () => authorizeSharedPlayback({ sharedDb, sourceDb, dbByApp: { main: sourceDb, taletv: targetDb }, env, sourceApp: 'main', sourceAlbumId: 'source-1', targetApps: ['taletv'], operatorEmail: 'source@example.com', authorizedAdminIds: { taletv: 'target-owner' }, sourceApi: api });
-  const run = () => processSharedPlatformOperations(sharedDb, { env, localPrismaByApp: { main: sourceDb, taletv: targetDb }, apiByApp: { main: api, taletv: api } });
+  const prepare = () => authorizeSharedPlayback({ sharedDb, sourceDb, dbByApp: { storyland: sourceDb, taletv: targetDb }, env, sourceApp: 'storyland', sourceAlbumId: 'source-1', targetApps: ['taletv'], operatorEmail: 'source@example.com', authorizedAdminIds: { taletv: 'target-owner' }, sourceApi: api });
+  const run = () => processSharedPlatformOperations(sharedDb, { env, localPrismaByApp: { storyland: sourceDb, taletv: targetDb }, apiByApp: { storyland: api, taletv: api } });
   return { sourceDb, sharedDb, targetDb, api, state, online, localSource, prepare, run };
 }
 
@@ -109,6 +109,23 @@ test('automatically prepares and authorizes a full target mapping without upload
   assert.equal(f.state.ops[0].status, 'SUCCEEDED');
   assert.equal(f.state.ops[0].providerRequestId, 'grant-log');
   assert.equal(f.state.ops[0].providerResponse.mappedEpisodeCount, 1);
+});
+
+test('refuses to share a drama across organization boundaries before creating a shared record', async () => {
+  const f = fixture();
+  await assert.rejects(() => authorizeSharedPlayback({
+    sharedDb: f.sharedDb,
+    sourceDb: f.sourceDb,
+    dbByApp: { storyland: f.sourceDb, taletv: f.targetDb },
+    env,
+    sourceApp: 'storyland',
+    sourceAlbumId: 'source-1',
+    targetApps: ['crownrush'],
+    operatorEmail: 'source@example.com',
+    sourceApi: f.api
+  }), /同一组织/);
+  assert.equal(f.state.album, null);
+  assert.equal(f.state.grantCalls, 0);
 });
 
 test('reconciliation preserves target-local display metadata after initial shared album creation', async () => {
@@ -189,7 +206,7 @@ test('saves missing-result evidence without opening target playback or retrying 
 });
 
 function maintenanceOptions(f: ReturnType<typeof fixture>) {
-  return { env, localPrismaByApp: { main: f.sourceDb, taletv: f.targetDb }, apiByApp: { main: f.api, taletv: f.api } };
+  return { env, localPrismaByApp: { storyland: f.sourceDb, taletv: f.targetDb }, apiByApp: { storyland: f.api, taletv: f.api } };
 }
 
 async function uncertainFixture() {
@@ -335,7 +352,7 @@ test('refuses to overwrite a separately published target drama', async () => {
   const f = fixture();
   const source = await verifyPlaybackSource(f.sourceDb, f.api, 'source-1');
   f.targetDb.album.findUnique = async () => ({ id: 'existing', title: source.title, tiktokAlbumId: 'different-platform-album', episodes: [] });
-  await assert.rejects(() => preparePlaybackTarget(f.targetDb, env, 'main', 'taletv', source), /不会覆盖/);
+  await assert.rejects(() => preparePlaybackTarget(f.targetDb, env, 'storyland', 'taletv', source), /不会覆盖/);
 });
 
 test('fails verification if a video was deleted from the platform', async () => {

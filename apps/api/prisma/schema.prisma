@@ -904,6 +904,11 @@ model UploadJob {
   sourceUrl       String
   sourceType      UploadSourceType @default(URL)
   sourceName      String?
+  localFilePath   String?
+  uploadScope     String?
+  leaseExpiresAt  DateTime?
+  leaseToken      String?
+  remoteStartedAt DateTime?
   sourceExpiresAt DateTime?
   status          UploadStatus     @default(PENDING)
   errorMessage    String?
