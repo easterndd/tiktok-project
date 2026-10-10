@@ -16,11 +16,15 @@ type RewardComplete = {
 
 async function completeReward(episodeId: string, sessionId: string, eventId: string) {
   const payload = { clientEventId: eventId, isEnded: true };
-  try {
-    return await apiClient.post<RewardComplete>(`/episodes/${episodeId}/reward-session/${sessionId}/complete`, payload);
-  } catch (error) {
-    if (error instanceof ApiError && error.status < 500) throw error;
-    return apiClient.post<RewardComplete>(`/episodes/${episodeId}/reward-session/${sessionId}/complete`, payload);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await apiClient.post<RewardComplete>(`/episodes/${episodeId}/reward-session/${sessionId}/complete`, payload);
+    } catch (error) {
+      const retryable = !(error instanceof ApiError)
+        || error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+      if (!retryable || attempt >= 2) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, 500 * 2 ** attempt));
+    }
   }
 }
 

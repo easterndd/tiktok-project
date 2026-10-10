@@ -1,0 +1,703 @@
+P0: TikTok小程序短剧媒资库接入文档
+P1: 更新记录
+P2: 整体流程
+P4: 前置准备
+P5: TODO:参考产品&BP接入文档，完成短剧小程序的入驻+BytePlus的注册及账号绑定
+P6: 授权获取
+P7: 基本信息
+P8: 请求参数
+P9: 请求示例
+P10: 返回值
+P11: OpenAPI
+P12: 资源管理
+P13: 1. 资源上传
+P14: 创建图片
+P15: 基本信息
+P16: 请求参数
+P17: 请求示例
+P18: 返回值
+P19: 2. 上传视频 - 异步
+P20: 基本信息
+P21: 请求参数
+P22: 请求示例
+P23: 返回值
+P24: 3. 查询视频
+P25: 基本信息
+P26: 请求参数
+P27: 请求示例
+P28: 返回值
+P30: 4. 创建剧目
+P31: 基本信息
+P32: 请求参数
+P33: 请求示例
+P34: 返回值
+P35: 5. 编辑剧目
+P36: 基本信息
+P37: 请求参数
+P38: AlbumInfoInput
+P39: Language List
+P40: 媒资审核语种List
+P41: tag_list
+P42: EpisodeInfoInput
+P43: 请求示例
+P44: 返回值
+P45: 6. 查询剧目
+P46: 基本信息
+P47: 请求参数
+P48: 请求示例
+P49: 返回值
+P50: AlbumVersionInfo
+P51: episode_info_list中的对象EpisodeInfo
+P54: 7. 上传字幕
+P55: 基本信息
+P56: 请求参数
+P57: 请求示例
+P58: 返回值
+P60: 点击图片可查看完整电子表格
+P61: 8. 剧集授权
+P62: 基本信息
+P64: 请求参数
+P65: 请求示例
+P66: 返回值
+P67: ClientKeyResult
+P68: 9. 设置线上版本
+P69: 基本信息
+P70: 请求参数
+P71: 请求示例
+P72: 返回值
+P73: 10. 剧目上下架
+P74: 基本信息
+P75: 请求参数
+P76: 请求示例
+P77: 返回值
+P78: 11. 批量删除视频
+P79: 基本信息
+P80: 请求参数
+P81: 以下参数通过 JSON 请求体传入。BytePlus 账号及空间需已绑定到当前调用方小程序；同一批次仅支持同一账号、同一空间的视频。
+P82: 同批重复 VID 的后续条目返回参数错误 4001，首次出现的条目正常处理。重复项计入 20 条上限，建议提交前去重。
+P83: 请求示例
+P84: 将 {{...}} 替换为调用方实际参数后使用。
+P85: 返回值
+P86: 以下为响应中 data 的字段。
+P87: BatchDeleteShortDramaVideoItemResult
+P88: ShortDramaAlbumVersionReference
+P89: 返回字段均为可选字段。请求参数校验失败时，可能仅返回顶层 error，不返回 data。error.code 为字符串，result_list[].error_code 为整数。album_id 为 int64，解析时请保留 64 位整数精度。
+P90: 审核
+P91: 审核状态可通过剧目查询接口获取，如果审核被拒可参考媒资常见错误原因解读自查
+P92: 1. 送审剧目
+P93: 基本信息
+P95: 请求参数
+P96: 请求示例
+P97: 返回值
+P98: 2. 申述
+P99: 基本信息
+P100: 请求参数
+P101: 请求示例
+P102: 返回值
+P103: 3. 撤回送审
+P104: 基本信息
+P106: 请求参数
+P107: 请求示例
+P108: 返回值
+P110: 转码
+P112: 1. 批量发起转码任务
+P113: 基本信息
+P114: 请求参数
+P115: 请求示例
+P116: 返回值
+P117: 返回示例
+P118: 2. 查询批量转码任务状态
+P119: 基本信息
+P120: 请求参数
+P121: 请求示例
+P122: 返回值
+P123: TaskResultItem
+P124: ErrorInfo
+P125: 返回示例
+P126: 3. 查询视频 media-info
+P127: 基本信息
+P128: 请求参数
+P129: 请求示例
+P130: 返回值
+P131: MediaInfoItem
+P132: MediaInfo
+P133: BasicInfo
+P134: SourceInfo
+P135: TranscodeInfo
+P136: 返回示例
+P138: 注意事项
+P140: FAQ
+P141: 1. 为什么要转码？
+P142: 转码的目的与好处一句话总结，就是让用户点开更快、追剧更顺，同时降低开发者控制播放流量成本。使用此文档中的转码能力，TT用户在观看tt minis短剧的时候可以自主选择不同码率的短剧。
+P143: 2. 如果已经在其他平台转码过，可以直接跳过这里的转码流程么？
+P144: 如果只是想要实现，把剧集视频引入的能力，是可以的（等同于上传特定码率的视频）； 但是如果想实现让“用户能在观看tt minis短剧的时候可以自主选择不同码率的短剧”的效果，那必须接本文中的转码
+
+TABLE 0 rows=5 cols=3
+更新时间 | 更新内容 | 变更人
+2026/8/31 | 兼容已有Byteplus VID视频同步（免重复上传） | @宗星烨
+2026/8/21 | 新增转码OpenAPI能力 | @宗星烨@杨德宏
+2026/5/18 | 新增domain分配Open API说明 & 字幕语言编码说明 | @康健
+2026/5/9 | 初版接入文档 | @康健
+
+TABLE 1 rows=1 cols=1
+所有的Open API调用都需要 获取客户端授权凭证。并在调用Open API时向Header中添加授权凭证。 TikTok将根据授权凭证校验客户端的身份信息。
+
+TABLE 2 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/oauth/token/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/x-www-form-urlencoded
+
+TABLE 3 rows=4 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+client_key | string | ✅ | 小程序客户端唯一标识 | mnxxxxxxxxxxxxx
+client_secret | string | ✅ | 客户端密钥 | xxxxxxxxxxxxxx
+grant_type | string | ✅ | 授权token的类型 / 固定填写client_credentials | client_credentials /
+
+TABLE 4 rows=1 cols=1
+Go / curl --location --request POST 'https://open.tiktokapis.com/v2/oauth/token/' \ / --header 'Content-Type: application/x-www-form-urlencoded' \ / --header 'Cache-Control: no-cache' \ / --data-urlencode 'client_key=CLIENT_KEY' \ / --data-urlencode 'client_secret=CLIENT_SECRET' \ / --data-urlencode 'grant_type=client_credentials'
+
+TABLE 5 rows=4 cols=4
+字段名 | 类型 | 描述 | 示例值
+access_token | string | 小程序客户端鉴权token | clt.example12345Example12345Example
+expires_in | string | access_token的过期时间（以秒为单位）。调用后2小时内有效。 | 7200
+token_type | string | 固定为：Bearer / | client_credentials /
+
+TABLE 6 rows=1 cols=1
+以下接口均有用例，可以将以下调用Curl示例导入postman或同类型软件，并将header中Authorization修改成对应的调用小程序的client_auth_token
+
+TABLE 7 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/image
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 8 rows=2 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+image_url | string | ✅ | 图片url。注意：提供的图片url需要为公网可下载 | https://tiktok.com/5d1c6fee2b2ad23d3466708/63ec5da3f441a7bb0ca9067f_janan-lagerwall-p2UbTX6Uoig-xxx.jpg
+
+TABLE 9 rows=1 cols=1
+Plain Text / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/image' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ /     "image_url": "https://cdn.prod.website-files.com/5d1c6fee2b2ad23d3b466708/63ec5da3f441a7bb0ca9067f_janan-lagerwall-p2UbTX6Uoig-xxx.jpg" / }' /
+
+TABLE 10 rows=2 cols=4
+字段名 | 类型 | 描述 | 示例值
+open_pic_id | string | 上传后的图片id,用于后续接口绑定到剧集/剧目封面 | b4c45eb643861b84b3b678a2f20e7acd
+
+TABLE 11 rows=1 cols=1
+该接口为异步上传接口，请使用返回的 job_id 调用“查询视频”接口轮询上传结果，结果中成功返回的vid才有效，仅byteplus侧可见的vid是无效的，不能作为合法的vid供剧集使用。 / 暂不支持HLS / m3u8 的分片格式为fmp4的视频上传。
+
+TABLE 12 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/video
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 13 rows=7 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+url | string | ✅（注意如果已经有在Byteplus的vid，此字段可以不填） | 视频下载地址，需为公网可访问的 http 或 https 链接 / 支持的视频格式 / MP4 / m3u8 / HLS / FLV / ASF（WMV） / RM / RMVB / MPEG / MOV / AVI / FLASH / MPEG-TS（MTS) / M4S / MKV | https://example.com/demo.mp4 /
+vid | string | ❌ | 在Byteplus中已经存在的VID | v0026ag01110d7irup73ksl7gtjralm0
+byteplus_region | string | ❌ / | Byteplus内的地区，不填默认ap-southeast-1即Asia Pacific(Johor) /  / | ap-singapore-1  / ap-southeast-1
+title | string | ✅ | 视频标题 | episode_01
+space_name | string | ✅ | 视频需要上传到的byteplus空间名称 | test_space
+byteplus_account_id | string | ✅ | 视频需要上传到的byteplus_账号id | 333234234
+
+TABLE 14 rows=1 cols=1
+Plain Text / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/video' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ /     "client_key": "mnxxxxxxxxxxxxx", /     "url": "https://example.com/demo.mp4", /     "title": "episode_01", /     "space_name": "shortdrama-sg", /     "byteplus_account_id":"234234234" / }' /
+
+TABLE 15 rows=5 cols=4
+字段名 | 类型 | 描述 | 示例值
+result_type | int | 上传任务受理结果。1: 成功；2: 异步上传成功；3: 失败。该接口正常受理时通常返回 2 | 2
+job_id | string | 异步上传任务ID，用于后续轮询查询上传结果 | vod:job:1234567890
+byteplus_vid | string | 视频上传完成后的 BytePlus 视频ID。异步受理阶段可能为空 | v188ebg00018d7v1vpf3ksl0c0f9goig
+byteplus_url | string | 视频播放地址。异步受理阶段通常为空 | https://vod.example.com/play/xxx.m3u8
+
+TABLE 16 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/video
+HTTP Method | GET
+HTTP Header | Authorization : Bearer access_token
+
+TABLE 17 rows=4 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+job_id | string | ❌ / | job_id、vid 二选一至少传一个。推荐上传后优先使用该字段轮询 | vod:job:1234567890
+vid / | string | ❌ / | job_id、vid 二选一至少传一个。上传完成后可通过 vid 查询视频详情 | v188ebg00018d7v1vpf3ksl0c0f9goig
+byteplus_account_id | string | ✅ | 视频需要上传到的byteplus_账号id | 333234234
+
+TABLE 18 rows=1 cols=1
+Bash / curl --location --request GET 'https://open.tiktokapis.com/v2/sg/shortdrama/video?client_key=mnxxxxxxxxxxxxx&job_id=vod%3Ajob%3A1234567890&byteplus_account_id=4324234' \ / --header 'Authorization: Bearer xxxxx' /
+
+TABLE 19 rows=7 cols=4
+字段名 | 类型 | 描述 | 示例值
+upload_status | int | 上传状态。1: 处理中；2: 成功；3: 失败 | 1
+vid | string | 视频上传完成后的 BytePlus 视频ID | v188ebg00018d7v1vpf3ksl0c0f9goig
+job_id | string | 上传任务ID | vod:job:1234567890
+byteplus_url | string | 视频播放地址 | https://vod.example.com/play/xxx.m3u8
+title | string | 视频标题 | episode_01
+raw_video_info_json | string | 底层视频信息原始JSON，便于调试和排障 | {"Vid":"xxx"}
+
+TABLE 20 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/album/create/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 21 rows=1 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+
+TABLE 22 rows=1 cols=1
+Bash / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/album/create/' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ / }' /
+
+TABLE 23 rows=2 cols=4
+字段名 | 类型 | 描述 | 示例值
+album_id | int64 | 新建剧目ID | 7637420375425239060
+
+TABLE 24 rows=1 cols=1
+该接口会生成新的剧目版本，不会原地覆盖历史版本。 /
+
+TABLE 25 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/album/update/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 26 rows=8 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+client_key | string | ✅ | 小程序客户端唯一标识 | mnxxxxxxxxxxxxx
+album_id | int64 | ✅ | 剧目ID | 7637420375425239060
+operation_type | int | ❌ | 操作类型。1: 草稿新增/更新；2: 仅更新剧目编辑状态。不传时默认 1 | 1
+version | int | ❌ / | 期望编辑的当前版本号，用于并发保护 | 1
+album_status | int | ❌ / | 当 operation_type=2 时必填。1: 未发布；2: 更新中；3: 已完成 | 3
+album_info | object(AlbumInfoInput) | ❌ / | 当 operation_type=1 且为首次上传剧目信息时必填 | 见示例
+episode_info_list | array(object(EpisodeInfoInput)) | ❌ / | 当 operation_type=1 时必填 | 见示例
+
+TABLE 27 rows=11 cols=4
+字段名 | 类型 | 描述 | 示例值
+language | string | 剧集原生的语种代码 | ar
+title | string | 剧目标题 | demo drama
+seq_num | int | 剧集总集数 | 40
+cover_list | array(string) | 剧目封面图片 ID 列表 / | ["b4c45eb643861b84b3b678a2f20e7acd"]
+year | int | 上线年份 | 2026
+album_status | int | 剧目编辑状态。1: 未发布；2: 更新中；3: 已完成 | 3
+desp | string | 剧目描述 | demo description
+drama_type | int | 剧目类型。1: AIGC；2: 漫剧；3: 真人配音；4: 真人本地化 | 2
+tag_list | array(int) | 短剧类目标签（1-3 个） | [1]
+publish_status | int | 剧目上下架状态。0: 默认；1: 上架；2: 下架 | 1
+
+TABLE 28 rows=45 cols=2
+1 | 医神
+2 | 赘婿
+3 | 鉴宝
+4 | 战神
+5 | 娱乐明星
+6 | 神医
+7 | 重生
+8 | 职场
+9 | 逆袭
+10 | 复仇
+11 | 青春
+12 | 官场
+13 | 家庭情感
+14 | 乡村
+15 | 正能量
+16 | 成长
+17 | 伦理
+18 | 都市情感
+19 | 社会话题
+20 | 灵异
+21 | 悬疑推理
+22 | 虐恋
+23 | 甜宠
+24 | 军婚
+25 | 年代
+26 | 萌宝
+27 | 腹黑
+28 | 总裁
+29 | 宫斗宅斗
+30 | 穿越
+31 | 种田经商
+33 | 民俗
+34 | 古装
+35 | 穿越战争
+36 | 现代军事
+37 | 奇幻
+38 | 科幻
+39 | 玄幻
+40 | 热血
+41 | 历史
+42 | 搞笑
+43 | 仙侠
+44 | 武侠
+45 | 二次元
+46 | 其他
+
+TABLE 29 rows=6 cols=4
+字段名 | 类型 | 描述 | 示例值
+episode_id | string | 剧集 ID（该剧集上个版本的episode_id,如果是新增剧集，可不传）。除新建剧集时可不传，其它场景都要传 | 7637437361307027476
+title | string | 剧集标题 | episode_01
+seq | int | 剧集序号 | 1
+cover_list | array(string) | 剧集封面图片 ID 列表 / | ["b4c45eb643861b84b3b678a2f20e7acd"]
+byteplus_vid | string | BytePlus 视频唯一标识 | v188ebg00018d7v1vpf3ksl0c0f9goig
+
+TABLE 30 rows=1 cols=1
+Bash / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/album/update/' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ /     "album_id": 7637420375425239060, /     "operation_type": 1, /     "version": 1, /     "album_info": { /         "language": "en", /         "title": "demo drama", /         "seq_num": 40, /         "cover_list": ["b4c45eb643861b84b3b678a2f20e7acd"], /         "year": 2026, /         "album_status": 3, /         "desp": "demo description", /         "drama_type": 2, /         "tag_list": [101] /     }, /     "episode_info_list": [ /         { /             "title": "episode_01", /             "seq": 1, /             "cover_list": ["b4c45eb643861b84b3b678a2f20e7acd"], /             "byteplus_vid": "v188ebg00018d7v1vpf3ksl0c0f9goig" /         } /     ] / }' /
+
+TABLE 31 rows=6 cols=4
+字段名 | 类型 | 描述 | 示例值
+album_id | int64 | 剧目ID | 7637420375425239060
+version | int | 新生成的剧目版本号 | 2
+episode_id_map | map(string,string) | 新生成的剧集ID映射。key 可能是调用方传入的 episode_id，或在未传 episode_id 时按 seq 生成的占位键 | {"seq_1":"7637437361307027476"}
+album_status | int | 剧目编辑状态。1: 未发布；2: 更新中；3: 已完成 | 3
+publish_status | int | 剧目上下架状态。0: 默认；1: 上架；2: 下架 | 0
+
+TABLE 32 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/album/query/
+HTTP Method | GET
+HTTP Header | Authorization : Bearer access_token
+
+TABLE 33 rows=4 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+client_key | string | ✅ | 小程序客户端唯一标识 | mnxxxxxxxxxxxxx
+album_id | int64 | ✅ | 剧目ID | 7637420375425239060
+version | int | ❌ | 指定查询某个版本。不传时返回该剧目的全部版本信息 | 2
+
+TABLE 34 rows=1 cols=1
+Bash / curl --location --request GET 'https://open.tiktokapis.com/v2/sg/shortdrama/album/query/?album_id=7637420375425239060&version=2' \ / --header 'Authorization: Bearer xxxxx' /
+
+TABLE 35 rows=2 cols=4
+字段名 | 类型 | 描述 | 示例值
+album_version_list | array(object(AlbumVersionInfo)) | 剧目版本列表 | 
+
+TABLE 36 rows=10 cols=4
+字段名 | 类型 | 描述 | 示例值
+album_id | int64 | 剧目 ID | 7637420375425239060
+version | int | 版本号 | 2
+album_info | object(AlbumInfo) | 剧目信息 | / 对于审核状态是以下状态的 剧目结果中会包含review_result : overall_review_status字段,用于追踪申述状态 / 3 REJECTED / 5 APPEALING / 6 APPEAL_PASSED / 7 APPEAL_REJECTED
+episode_info_list | array(object(EpisodeInfo)) / | 剧集信息列表 | / 对于审核状态是以下状态的 剧集结果中会包含review_result : overall_review_status字段,用于追踪申述状态 / 3 REJECTED / 5 APPEALING / 6 APPEAL_PASSED / 7 APPEAL_REJECTED
+review_fail_reasons | array(string) | 剧目审批原因列表 | "review_fail_reasons": [ /                     "Album: Album Title: Suggested, Something went wrong. Try again later.; Album Description: Related Stories and reposts will be picked for you.; Album Cover: Select a topic", /                     "Episode (7675472634260834325): Episode Title: Undo, Suggestion turned off; Episode Cover: Non-compliant content 0170; Episode Video: Delete" /                 ],
+current_version | int | 当前草稿版本号 | 2
+online_version | int | 当前线上版本号；未设置时为空 | 1
+publish_status | int | 剧目上下架状态。0: 默认；1: 上架；2: 下架 | 1
+review_status | int | 剧目审核状态。0: 未送审；1: 审核中；2: 通过；3: 驳回；4: 已撤回 | 2
+
+TABLE 37 rows=2 cols=4
+字段名 | 类型 | 描述 | 示例值
+exception_reason | string | 20260921新增，表示当前视频在byteplus中已经被删除 | this video has already been removed /
+
+TABLE 38 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/subtitle/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 39 rows=9 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+client_key | string | ✅ | 小程序客户端唯一标识 | mnxxxxxxxxxxxxx
+subtitle_url | string | ✅ / | 字幕文件下载地址，需为公网可访问的 http 或 https 链接 / 目前支持：WebVTT、SRT、ASS和SSA | https://vod.example.com/subtitle/xxx.vtt
+space_name | string | ✅ | 视频需要上传到的byteplus空间名称 | test_space
+byteplus_account_id | string / | ✅ | 视频需要上传到的byteplus_账号id | 333234234
+title | string / | ✅ | 字幕文件名称 | xxx.vtt /
+format | string | ✅ / | 字幕格式 | vtt /
+vid / | string | ✅ / | 需要绑定到的视频id | v188ebg00018d7v1vpf3ksl0c0f9goig
+language | string | ❌ | 字幕language | eng-US
+
+TABLE 40 rows=1 cols=1
+Plain Text / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/subtitle/' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'client-key: mnxxxxxxxxxxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ /     "subtitle_url": "https://vod.example.com/subtitle/xxx.srt", /     "language": "eng-US", /     "byteplus_account_id":"234234234" / }' /
+
+TABLE 41 rows=2 cols=4
+字段名 | 类型 | 描述 | 示例值
+mid | string | Byte Plus素材ID | vsadfasdfasdfasdfas
+
+TABLE 42 rows=1 cols=1
+该接口的应用场景为小程序A上传送审剧目，但是需要在小程序B内播放 / 非此类场景不需要走授权流程 / 该接口为批量操作接口，请逐项检查返回的 client_key_result_list。
+
+TABLE 43 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/album/authorize/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 44 rows=4 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+album_id | int64 | ✅ | 剧目ID | 7637420375425239060
+operate_type | int | ✅ | 授权操作类型。1: 新增授权；2: 移除授权 | 1
+target_client_key_list | array(string) | ✅ | 目标小程序 client_key 列表 / | ["mnabc123","mndef456"]
+
+TABLE 45 rows=1 cols=1
+Bash / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/album/authorize/' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ /     "album_id": 7637420375425239060, /     "operate_type": 1, /     "target_client_key_list": ["mnabc123", "mndef456"] / }' /
+
+TABLE 46 rows=2 cols=4
+字段名 | 类型 | 描述 | 示例值
+client_key_result_list | array(object(ClientKeyResult)) | 各目标 client_key 的处理结果列表 / | 
+
+TABLE 47 rows=5 cols=4
+字段名 | 类型 | 描述 | 示例值
+client_key | string | 目标 client_key | mnabc123
+auth_status | int | 授权状态。1: 已授权；2: 已移除 | 1
+error_code | int | 单个目标处理失败时的错误码 | 22010
+error_message | string | 单个目标处理失败时的错误信息 | authorization already exists
+
+TABLE 48 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/album/online_version/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 49 rows=3 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+album_id | int64 | ✅ | 剧目ID | 7637420375425239060
+version | int | ✅ | 需要设置为线上版本的版本号。该版本必须已审核通过 | 2
+
+TABLE 50 rows=1 cols=1
+Bash / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/album/online_version/' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ /     "album_id": 7637420375425239060, /     "version": 2 / }' /
+
+TABLE 51 rows=3 cols=4
+字段名 | 类型 | 描述 | 示例值
+album_id | int64 | 剧目ID | 7637420375425239060
+online_version | int | 当前线上版本号 | 2
+
+TABLE 52 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/album/status/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 53 rows=4 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+client_key | string | ✅ | 小程序客户端唯一标识 | mnxxxxxxxxxxxxx
+album_id | int64 | ✅ | 剧目ID | 7637420375425239060
+status | int | ✅ | 剧目上下架状态。1: 上架；2: 下架 | 1
+
+TABLE 54 rows=1 cols=1
+Bash / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/album/status/' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ /     "album_id": 7637420375425239060, /     "status": 1 / }' /
+
+TABLE 55 rows=3 cols=4
+字段名 | 类型 | 描述 | 示例值
+album_id | int64 | 剧目ID | 7637420375425239060
+status | int | 当前剧目上下架状态。1: 上架；2: 下架 | 1
+
+TABLE 56 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/video/delete/
+HTTP Method | POST
+HTTP Header | Content-Type：传固定值 application/json / Authorization：Bearer {{ACCESS_TOKEN}} / client-key：当前调用方小程序的 {{CLIENT_KEY}}
+
+TABLE 57 rows=4 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+byteplus_account_id | string | ✅ | BytePlus 账号 ID，以字符串传入 | {{BYTEPLUS_ACCOUNT_ID}}
+space_name | string | ✅ | 空间名（VOD space） | {{SPACE_NAME}}
+vid_list | array(string) | ✅ | 待删除的视频 VID 列表，1～20 个；不允许空列表或空 VID | ["{{VID_1}}", "{{VID_2}}"]
+
+TABLE 58 rows=1 cols=1
+Bash / curl --location --request POST 'https://open.tiktokapis.com/v2/sg/shortdrama/video/delete/' \ / --header 'Authorization: Bearer {{ACCESS_TOKEN}}' \ / --header 'client-key: {{CLIENT_KEY}}' \ / --header 'Content-Type: application/json' \ / --data-raw '{ /   "byteplus_account_id": "{{BYTEPLUS_ACCOUNT_ID}}", /   "space_name": "{{SPACE_NAME}}", /   "vid_list": ["{{VID_1}}", "{{VID_2}}"] / }'
+
+TABLE 59 rows=3 cols=4
+字段名 | 类型 | 描述 | 示例值
+result_type | int | 整批结果。1：全部成功；2：部分成功；3：全部失败 | 2
+result_list | array(object(BatchDeleteShortDramaVideoItemResult)) | 各 VID 的处理结果列表，与请求输入顺序一致 | 见 BatchDeleteShortDramaVideoItemResult
+
+TABLE 60 rows=6 cols=4
+字段名 | 类型 | 描述 | 示例值
+vid | string | 本条结果对应的 VID | {{VID_2}}
+result_type | int | 单条结果。1：成功；3：失败 | 3
+error_code | int | 单条处理失败时的错误码；成功时可不返回 | 22101
+error_message | string | 单条处理失败时的错误说明 | Video is referenced by a currently online album version
+related_album_versions | array(object(ShortDramaAlbumVersionReference)) | 因当前上架版本引用而拒绝删除时，返回全部相关剧目及版本 | 见 ShortDramaAlbumVersionReference
+
+TABLE 61 rows=3 cols=4
+字段名 | 类型 | 描述 | 示例值
+album_id | int64 | 引用该 VID 的剧目 ID | 123456789
+version | int | 引用该 VID 的当前上架版本号 | 2
+
+TABLE 62 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/album/review/submit/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 63 rows=3 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+album_id | int64 | ✅ | 剧目ID | 7637420375425239060
+version | int | ✅ | 待送审的剧目版本号 | 2
+
+TABLE 64 rows=1 cols=1
+Bash / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/album/review/submit/' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ /     "album_id": 7637420375425239060, /     "version": 2 / }' /
+
+TABLE 65 rows=2 cols=4
+字段名 | 类型 | 描述 | 示例值
+review_id | int64 | 审核任务ID | 7637437361307027000
+
+TABLE 66 rows=1 cols=1
+仅支持对已驳回的审核项发起申诉。
+
+TABLE 67 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/album/review/appeal/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 68 rows=8 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+client_key | string | ✅ | 小程序客户端唯一标识 | mnxxxxxxxxxxxxx
+album_id | int64 | ✅ | 剧目ID | 7637420375425239060
+review_id | int64 | ✅ | 审核任务ID | 7637437361307027000
+appeal_item_type | int | ✅ | 申诉对象类型。1: 剧目；2: 剧集 | 2
+item_id | string | ✅ | 申诉对象ID。剧目申诉时传 album_id；剧集申诉时传对应 episode_id | 7637437361307027476
+appeal_reason | string | ✅ | 申诉理由 | this content should pass policy review
+attachment_urls | array(string) | ❌ | 申诉附件URL列表，最多10条，单个文件最大200M | ["https://example.com/appeal-1.png"]
+
+TABLE 69 rows=1 cols=1
+Bash / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/album/review/appeal/' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ /     "client_key": "mnxxxxxxxxxxxxx", /     "album_id": 7637420375425239060, /     "review_id": 7637437361307027000, /     "appeal_item_type": 2, /     "item_id": "7637437361307027476", /     "appeal_reason": "this content should pass policy review", /     "attachment_urls": ["https://example.com/appeal-1.png"] / }' /
+
+TABLE 70 rows=2 cols=4
+字段名 | 类型 | 描述 | 示例值
+无业务数据字段 | ​- | 申诉成功后仅返回通用成功响应，业务结果通过 BaseResp / Error 表示 | ​-
+
+TABLE 71 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/album/review/withdraw/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值application/json / Authorization : Bearer access_token
+
+TABLE 72 rows=3 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+album_id | int64 | ✅ | 剧目ID | 7637420375425239060
+version | int | ✅ | 需要撤回送审的版本号 | 2
+
+TABLE 73 rows=1 cols=1
+Bash / curl --location 'https://open.tiktokapis.com/v2/sg/shortdrama/album/review/withdraw/' \ / --header 'Authorization: Bearer xxxxx' \ / --header 'Content-Type: application/json' \ / --data '{ /     "album_id": 7637420375425239060, /     "version": 2 / }' /
+
+TABLE 74 rows=1 cols=1
+如果使用了转码的openapi，会默认在byteplus平台中的Callbacks里自动新增一个Callback subscription：https://open.tiktokapis.com/v2/sg/shortdrama/video/transcode/callback/，请勿修改或删除
+
+TABLE 75 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/video/transcode/batch/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值 application/json / Authorization : Bearer {{ACCESS_TOKEN}} / Idempotency-Key : 任务的幂等 key（建议 UUID），相同幂等key的任务多次提交不会处理
+
+TABLE 76 rows=6 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+byteplus_account_id | string | ✅ | BytePlus 账号 ID | 3001222279
+vids | array(string) | ✅ | 待转码的视频 vid 列表，最大长度1000 | ["v25b3...700","v25b3...fs0","v25b3...hh0"]
+template_id | string | ✅ | 转码模板 ID / | 根据template_type的值填写不同的template_id。 其中： / 1. byteplus自定义模板id: 6fda4c575d2643bb9d596b4f6ed5a55c / 2. 默认模板id：default_0
+template_type | int | ✅ | 模板类型 | 若为1，则使用byteplus的自定义模板；若为0，则采用默认模板。
+space_name | string | ✅ | 空间名（VOD space） | Byteplus space name
+
+TABLE 77 rows=1 cols=1
+Bash / curl --location --request POST 'https://open.tiktokapis.com/v2/sg/shortdrama/video/transcode/batch/' \ / --header 'Authorization: Bearer {{ACCESS_TOKEN}}' \ / --header 'Idempotency-Key: {{IDEMPOTENCY_KEY}}' \ / --header 'Content-Type: application/json' \ / --data-raw '{ /   "byteplus_account_id": "3001222279", /   "vids": [ /     "v25b3bgm0018da2kklatgd646irem700", /     "v25b3bgm0018da2kkditgd6ep5flsfs0", /     "v25b3bgm0018da2kkaatgd6cle99phh0" /   ], /   "template_id": "default_0", /   "template_type": 0, /   "space_name": "travis-test" / }'
+
+TABLE 78 rows=4 cols=4
+字段名 | 类型 | 描述 | 示例值
+task_id | string | 批量转码任务 ID | transcode:batch:7675349785457133575
+task_status | string | 任务状态 | PROCESSING
+total_count | int | 本批次 vid 总数 | 3
+
+TABLE 79 rows=1 cols=1
+json / { /   "data": { /     "task_id": "transcode:batch:7675349785457133575", /     "task_status": "PROCESSING", /     "total_count": 3 /   } / }
+
+TABLE 80 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/video/transcode/batch/
+HTTP Method | GET
+HTTP Header | Content-Type : 传固定值 application/json / Authorization : Bearer {{ACCESS_TOKEN}} / client-key : 客户端标识（如平台要求）
+
+TABLE 81 rows=3 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+byteplus_account_id | string | ✅ | BytePlus 账号 ID | 3001222279
+task_id | string | ✅ | 批量任务 ID | transcode:batch:7675349785457133575
+
+TABLE 82 rows=1 cols=1
+Bash / curl --location --request GET 'https://open.tiktokapis.com/v2/sg/shortdrama/video/transcode/batch/?byteplus_account_id=3001222279&task_id=transcode:batch:7675349785457133575' \ / --header 'Authorization: Bearer {{ACCESS_TOKEN}}' \ / --header 'client-key: {{CLIENT_KEY}}' \ / --header 'Content-Type: application/json'
+
+TABLE 83 rows=11 cols=4
+字段名 | 类型 | 描述 | 示例值
+success_count | int | 成功数量 | 3
+success_list | array(object(TaskResultItem)) | 成功明细列表 | 见 TaskResultItem
+task_status | string | 任务状态 | SUCCESS
+total_count | int | 本批次 vid 总数 | 3
+failed_count | int | 失败数量 | 0
+pending_list | array(object) | 处理中或排队中的明细列表 | []
+task_id | string | 批量任务 ID | transcode:batch:7675349785457133575
+failed_list | array(object) | 失败明细列表 | []
+pending_count | int | 排队中数量 | 0
+error | object(ErrorInfo) | 通用错误信息 | 见 ErrorInfo
+
+TABLE 84 rows=3 cols=4
+字段名 | 类型 | 描述 | 示例值
+completed_at | int | 完成时间戳（秒） | 1787125398
+vid | string | 视频 vid | v25b3bgm0018da2kklatgd646irem700
+
+TABLE 85 rows=4 cols=4
+字段名 | 类型 | 描述 | 示例值
+code | string | 错误码 | ok
+message | string | 错误信息 | 
+log_id | string | 链路追踪 ID，建议落日志用于排查 | 2026081915433941FF3DDF01A2366CD2FE
+
+TABLE 86 rows=1 cols=1
+json / { /   "data": { /     "success_count": 3, /     "success_list": [ /       { "completed_at": 1787125398, "vid": "v25b3bgm0018da2kklatgd646irem700" }, /       { "completed_at": 1787125397, "vid": "v25b3bgm0018da2kkditgd6ep5flsfs0" }, /       { "completed_at": 1787125400, "vid": "v25b3bgm0018da2kkaatgd6cle99phh0" } /     ], /     "task_status": "SUCCESS", /     "total_count": 3, /     "failed_count": 0, /     "pending_list": [], /     "task_id": "transcode:batch:7675349785457133575", /     "failed_list": [], /     "pending_count": 0 /   }, /   "error": { /     "code": "ok", /     "message": "", /     "log_id": "2026081915433941FF3DDF01A2366CD2FE" /   } / }
+
+TABLE 87 rows=3 cols=2
+HTTP URL | https://open.tiktokapis.com/v2/sg/shortdrama/video/media-info/query/
+HTTP Method | POST
+HTTP Header | Content-Type : 传固定值 application/json / Authorization : Bearer {{ACCESS_TOKEN}}
+
+TABLE 88 rows=3 cols=5
+字段名 | 类型 | 是否必填 | 描述 | 示例值
+byteplus_account_id | string | ✅ | BytePlus 账号 ID | 3001222279
+vids | array(string) | ✅ | 查询的 vid 列表，最大长度20个 | ["v25b3bgm0018da2kov2tgd6ep5flshm0"]
+
+TABLE 89 rows=1 cols=1
+Bash / curl --location --request POST 'https://open.tiktokapis.com/v2/sg/shortdrama/video/media-info/query/' \ / --header 'Authorization: Bearer {{ACCESS_TOKEN}}' \ / --header 'Content-Type: application/json' \ / --data-raw '{ /   "byteplus_account_id": "3001222279", /   "vids": ["v25b3bgm0018da2kov2tgd6ep5flshm0"] / }'
+
+TABLE 90 rows=3 cols=4
+字段名 | 类型 | 描述 | 示例值
+media_info_map | map(string, array(object(MediaInfoItem))) | key 为 vid，value 为媒体信息列表 | 见 MediaInfoItem
+partial_success | bool | 是否部分成功 | false
+
+TABLE 91 rows=3 cols=4
+字段名 | 类型 | 描述 | 示例值
+media_info | object(MediaInfo) | 媒体信息对象 | 见 MediaInfo
+status | string | 单条 vid 查询状态 | SUCCESS
+
+TABLE 92 rows=4 cols=4
+字段名 | 类型 | 描述 | 示例值
+basic_info | object(BasicInfo) | 基础信息 | 见 BasicInfo
+source_info | object(SourceInfo) | 源文件媒体信息 | 见 SourceInfo
+transcode_infos | array(object(TranscodeInfo)) | 转码产物列表 | 见 TranscodeInfo
+
+TABLE 93 rows=10 cols=4
+字段名 | 类型 | 描述 | 示例值
+create_time | string | 创建时间 | 2026-08-19T06:26:05Z
+duration | double | 时长，单位秒 | 10.079999923706055
+poster_uri | string | 封面 URI | tos-vod-bp-mya-v-fccc72944e0924f3/og1rF6LGlEdlteqzkTTsKhRUFBHi6sxYmAceIx
+publish_status | string | 发布状态 | Published
+space_name | string | 素材空间名 | travis-test
+title | string | 标题 | 423
+tos_storage_class | string | TOS 存储类型 | STANDARD
+vid | string | 视频 vid | v25b3bgm0018da2kov2tgd6ep5flshm0
+vod_upload_source | string | 上传来源 | url_upload
+
+TABLE 94 rows=18 cols=4
+字段名 | 类型 | 描述 | 示例值
+bitrate | int | 总码率 | 3494934
+codec | string | 视频编码 | h264
+create_time | string | 创建时间 | 2026-08-19T06:26:05Z
+definition | string | 清晰度定义 | unknown
+duration | double | 时长，单位秒 | 10.079999923706055
+dynamic_range | string | 动态范围 | SDR
+file_id | string | 文件 ID | v25b3bgm0018da2kov2tgd6ep5flshm0
+file_name | string | 文件名 | 304390000d594abba126f1863ad31bfc.mp4
+file_type | string | 文件类型 | video
+format | string | 封装格式 | MP4
+fps | int | 帧率 | 24
+height | int | 视频高度 | 1280
+md5 | string | 文件 md5 | c105815ac6c0d978df925d1cd73ac578
+size | int | 文件大小，单位字节 | 4403618
+store_uri | string | 存储 URI | tos-vod-bp-mya-v-fccc72944e0924f3/304390000d594abba126f1863ad31bfc.mp4
+tos_storage_class | string | TOS 存储类型 | STANDARD
+width | int | 视频宽度 | 720
+
+TABLE 95 rows=16 cols=4
+字段名 | 类型 | 描述 | 示例值
+bitrate | int | 码率 | 496999
+codec | string | 编码格式 | h264
+create_time | string | 创建时间 | 2026-08-19T06:29:42Z
+definition | string | 清晰度定义 | 480p
+duration | double | 时长，单位秒 | 10.079999923706055
+dynamic_range | string | 动态范围 | SDR
+file_id | string | 文件 ID | a301c25547d6455ea728eb6da3f3a71b
+file_type | string | 文件类型 | video
+format | string | 封装格式 | MP4
+height | int | 视频高度 | 854
+md5 | string | 文件 md5 | 24846226a6af809f05f92e937160a220
+size | int | 文件大小，单位字节 | 626219
+store_uri | string | 存储 URI | tos-vod-bp-mya-v-fccc72944e0924f3/o4z6DeIxl6imssUTuYtRdhLrixG3FBjEeJVqkF
+tos_storage_class | string | TOS 存储类型 | STANDARD
+width | int | 视频宽度 | 480
+
+TABLE 96 rows=1 cols=1
+json / { /   "data": { /     "media_info_map": { /       "v25b3bgm0018da2kov2tgd6ep5flshm0": [ /         { /           "media_info": { /             "basic_info": { /               "create_time": "2026-08-19T06:26:05Z", /               "duration": 10.079999923706055, /               "poster_uri": "tos-vod-bp-mya-v-fccc72944e0924f3/og1rF6LGlEdlteqzkTTsKhRUFBHi6sxYmAceIx", /               "publish_status": "Published", /               "space_name": "travis-test", /               "title": "423", /               "tos_storage_class": "STANDARD", /               "vid": "v25b3bgm0018da2kov2tgd6ep5flshm0", /               "vod_upload_source": "url_upload" /             }, /             "source_info": { /               "bitrate": 3494934, /               "codec": "h264", /               "create_time": "2026-08-19T06:26:05Z", /               "definition": "unknown", /               "duration": 10.079999923706055, /               "dynamic_range": "SDR", /               "file_id": "v25b3bgm0018da2kov2tgd6ep5flshm0", /               "file_name": "304390000d594abba126f1863ad31bfc.mp4", /               "file_type": "video", /               "format": "MP4", /               "fps": 24, /               "height": 1280, /               "md5": "c105815ac6c0d978df925d1cd73ac578", /               "size": 4403618, /               "store_uri": "tos-vod-bp-mya-v-fccc72944e0924f3/304390000d594abba126f1863ad31bfc.mp4", /               "tos_storage_class": "STANDARD", /               "width": 720 /             }, /             "transcode_infos": [ /               { /                 "bitrate": 496999, /                 "codec": "h264", /                 "create_time": "2026-08-19T06:29:42Z", /                 "definition": "480p", /                 "duration": 10.079999923706055, /                 "dynamic_range": "SDR", /                 "file_id": "a301c25547d6455ea728eb6da3f3a71b", /                 "file_type": "video", /                 "format": "MP4", /                 "height": 854, /                 "md5": "24846226a6af809f05f92e937160a220", /                 "size": 626219, /                 "store_uri": "tos-vod-bp-mya-v-fccc72944e0924f3/o4z6DeIxl6imssUTuYtRdhLrixG3FBjEeJVqkF", /                 "tos_storage_class": "STANDARD", /                 "width": 480 /               }, /               { /                 "bitrate": 819911, /                 "codec": "h264", /                 "create_time": "2026-08-19T06:30:09Z", /                 "definition": "720p", /                 "duration": 10.079999923706055, /                 "dynamic_range": "SDR", /                 "file_id": "7ae23306dd3b47dc8a38a9f747645c23", /                 "file_type": "video", /                 "format": "MP4", /                 "height": 1280, /                 "md5": "1d983c747debf77079778332bb5ae144", /                 "size": 1033089, /                 "store_uri": "tos-vod-bp-mya-v-fccc72944e0924f3/oQkIXaRrFGTh6leFvsmGxxEstidFPaeLzwBq4U", /                 "tos_storage_class": "STANDARD", /                 "width": 720 /               } /             ] /           }, /           "status": "SUCCESS" /         } /       ] /     }, /     "partial_success": false /   } / }

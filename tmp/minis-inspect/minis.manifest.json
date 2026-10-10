@@ -1,0 +1,31 @@
+{
+  "name": "minis.manifest.json",
+  "resource_list": [
+    {
+      "type": "folder",
+      "name": "assets",
+      "children": [
+        {
+          "type": "file",
+          "name": "index-B-Xpbx0J.js"
+        },
+        {
+          "type": "file",
+          "name": "index-tgbLt3Qm.css"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "fallback-cover.svg"
+    },
+    {
+      "type": "file",
+      "name": "index.html"
+    },
+    {
+      "type": "file",
+      "name": "minis.config.json"
+    }
+  ]
+}

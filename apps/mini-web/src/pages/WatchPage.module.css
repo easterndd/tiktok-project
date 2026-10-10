@@ -1,4 +1,4 @@
-.page { position: relative; width: 100%; min-height: 100dvh; overflow: hidden; background: #060710; overscroll-behavior-y: contain; touch-action: pan-y; }
+.page { position: relative; display: grid; grid-template-rows: minmax(0, 1fr) auto; width: 100%; height: 100dvh; min-height: 0; overflow: hidden; background: #060710; overscroll-behavior-y: contain; touch-action: pan-y; }
 .resolving { display: grid; min-height: 100dvh; place-items: center; background: radial-gradient(circle at 50% 30%, rgba(129, 112, 255, .16), transparent 42%), #060710; }
 .resolving :global(.loading-state), .resolving :global(.state) { min-height: 100dvh; }
 .watchHeader { position: absolute; z-index: 4; top: max(14px, env(safe-area-inset-top)); right: 16px; left: 16px; display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 12px; pointer-events: none; }
@@ -8,13 +8,14 @@
 .episodeLabel { display: grid; min-width: 0; gap: 2px; color: #fff; text-align: center; text-shadow: 0 2px 12px rgba(0, 0, 0, .5); }
 .episodeLabel strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .episodeLabel span { color: rgba(255, 255, 255, .74); font-size: 11px; font-weight: 700; }
-.playerMeta { position: absolute; z-index: 4; right: 16px; bottom: max(20px, env(safe-area-inset-bottom)); left: 16px; display: grid; gap: 8px; }
+.playerMeta { position: relative; z-index: 4; display: grid; gap: 8px; padding: 8px 16px max(12px, env(safe-area-inset-bottom)); background: #080a14; }
 .episodeTrigger { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; width: 100%; min-height: 64px; padding: 10px 14px; color: #fff; border: 1px solid rgba(255, 255, 255, .16); border-radius: 17px; background: linear-gradient(100deg, rgba(13, 16, 33, .86), rgba(24, 24, 51, .74)); box-shadow: 0 12px 28px rgba(0, 0, 0, .25); text-align: left; backdrop-filter: blur(16px); }
 .episodeTrigger span { grid-column: 1; color: var(--pink-soft); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .episodeTrigger strong { grid-column: 1; overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .episodeTrigger svg { grid-column: 2; grid-row: 1 / span 2; color: var(--cyan); }
-.playerNotice, .sync { display: inline-flex; align-items: center; gap: 7px; width: max-content; max-width: 100%; padding: 8px 10px; color: rgba(241, 244, 255, .82); border: 1px solid rgba(255, 255, 255, .1); border-radius: 10px; background: rgba(8, 10, 22, .58); font-size: 11px; line-height: 1.4; backdrop-filter: blur(12px); }
-.playerNotice svg, .sync { color: var(--cyan); }
+.sync { display: inline-flex; align-items: center; gap: 7px; width: max-content; max-width: 100%; padding: 8px 10px; color: var(--cyan); border: 1px solid rgba(255, 255, 255, .1); border-radius: 10px; background: rgba(8, 10, 22, .58); font-size: 11px; line-height: 1.4; backdrop-filter: blur(12px); }
+.retryButton { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: max-content; min-width: 108px; max-width: min(220px, 80vw); min-height: 44px; padding: 0 18px; color: #190b12; border: 1px solid rgba(255, 255, 255, .42); border-radius: 999px; background: linear-gradient(135deg, #ffbed0, var(--pink)); box-shadow: 0 10px 24px rgba(255, 67, 109, .26); font-size: 14px; font-weight: 800; line-height: 1; }
+.retryButton:active { transform: scale(.97); }
 .sheetLayer { position: fixed; z-index: 10; inset: 0; display: grid; align-items: end; }
 .sheetBackdrop { position: absolute; inset: 0; width: 100%; min-height: 100%; padding: 0; border: 0; background: rgba(2, 3, 10, .64); backdrop-filter: blur(3px); }
 .episodeSheet { position: relative; z-index: 1; display: grid; max-height: min(76dvh, 660px); gap: 14px; padding: 10px 16px max(20px, env(safe-area-inset-bottom)); overflow: hidden; border: 1px solid rgba(202, 211, 255, .16); border-bottom: 0; border-radius: 26px 26px 0 0; background: linear-gradient(145deg, #1d2340, #101426 52%, #0c0e1d); box-shadow: 0 -22px 60px rgba(0, 0, 0, .38), inset 0 1px rgba(255, 255, 255, .08); animation: sheet-enter 220ms ease-out; }

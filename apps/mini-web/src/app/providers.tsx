@@ -3,7 +3,16 @@ import { useEffect, type ReactNode } from 'react';
 import { EntryAdGate } from '../components/EntryAdGate';
 import { ensureAnonymousSession } from '../features/auth/anonymous-session';
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 30_000 } } });
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 3,
+      retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 4_000),
+      staleTime: 30_000,
+      refetchOnReconnect: true
+    }
+  }
+});
 
 function AnonymousSessionBootstrap() {
   useEffect(() => {
