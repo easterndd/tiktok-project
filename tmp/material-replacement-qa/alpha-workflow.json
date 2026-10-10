@@ -1,0 +1,977 @@
+{
+  "albumId": "cmugoejl9007dp9011tzztapt",
+  "actions": [
+    {
+      "id": "cmujldai100fnr3013xu06552",
+      "kind": "ALBUM_VERSION",
+      "status": "SUCCEEDED",
+      "providerRequestId": "20260927170403B91F3E61BE2514CEC10C",
+      "providerResponse": {
+        "version": 2,
+        "episode_id_map": {
+          "7689143420837660690": "7689546798171850759",
+          "7689143420837677074": "7689546798171867143",
+          "7689143420837693458": "7689546798171883527",
+          "7689143420837709842": "7689546798171899911",
+          "7689143420837726226": "7689546798171916295",
+          "7689143420837742610": "7689546798171932679",
+          "7689143420837758994": "7689546798171949063",
+          "7689143420837775378": "7689546798171965447",
+          "7689143420837791762": "7689546798171981831",
+          "7689143420837808146": "7689546798171998215",
+          "7689143420837824530": "7689546798172014599",
+          "7689143420837840914": "7689546798172030983",
+          "7689143420837857298": "7689546798172047367",
+          "7689143420837873682": "7689546798172063751",
+          "7689143420837890066": "7689546798172080135",
+          "7689143420837906450": "7689546798172096519",
+          "7689143420837922834": "7689546798172112903",
+          "7689143420837939218": "7689546798172129287",
+          "7689143420837955602": "7689546798172145671",
+          "7689143420837971986": "7689546798172162055",
+          "7689143420837988370": "7689546798172178439",
+          "7689143420838004754": "7689546798172194823",
+          "7689143420838021138": "7689546798172211207",
+          "7689143420838037522": "7689546798172227591",
+          "7689143420838053906": "7689546798172243975",
+          "7689143420838070290": "7689546798172260359",
+          "7689143420838086674": "7689546798172276743",
+          "7689143420838103058": "7689546798172293127",
+          "7689143420838119442": "7689546798172309511",
+          "7689143420838135826": "7689546798172325895"
+        },
+        "platform_album_id": "7689158321380067346"
+      },
+      "errorMessage": null
+    },
+    {
+      "id": "cmujldmzk00frr301gww1w1zp",
+      "kind": "REVIEW",
+      "status": "SUCCEEDED",
+      "providerRequestId": "202609271704337797A2765D2B53D08130",
+      "providerResponse": {
+        "version": 2,
+        "review_id": "7690028093742860306",
+        "review_status": "1",
+        "priority_score": 2
+      },
+      "errorMessage": null
+    },
+    {
+      "id": "cmujlebbw00fyr301jqnbome6",
+      "kind": "RECONCILE",
+      "status": "SUCCEEDED",
+      "providerRequestId": "2026092717050261E5E589B4A8DCCBED9B",
+      "providerResponse": {
+        "version": 2,
+        "album_id": "7689158321380067346",
+        "album_info": {
+          "desp": "《AFTER MY ALPHA ABANDONED ME, I CHOSE HIS RIVAL》",
+          "year": 2026,
+          "title": "《AFTER MY ALPHA ABANDONED ME, I CHOSE HIS RIVAL》",
+          "seq_num": 30,
+          "language": "en",
+          "tag_list": [
+            1
+          ],
+          "cover_list": [
+            "d1b345f2c5219d1fabf3575c3c7e2861"
+          ],
+          "drama_type": 2,
+          "album_status": 3,
+          "publish_status": 2
+        },
+        "review_status": 1,
+        "online_version": 1,
+        "publish_status": 2,
+        "checked_version": 2,
+        "current_version": 2,
+        "episode_failures": [],
+        "episode_info_list": [
+          {
+            "seq": 1,
+            "title": "第 1 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798171850759",
+            "byteplus_vid": "v18df9gm0018dasderitgd61flfbqqjg"
+          },
+          {
+            "seq": 2,
+            "title": "第 2 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798171867143",
+            "byteplus_vid": "v18df9gm0018dasdf7atgd6dt8ucq88g"
+          },
+          {
+            "seq": 3,
+            "title": "第 3 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798171883527",
+            "byteplus_vid": "v25df9gm0018dasdfdatgd6choeimfpg"
+          },
+          {
+            "seq": 4,
+            "title": "第 4 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798171899911",
+            "byteplus_vid": "v25df9gm0018dasdfn2tgd6be1k0m4u0"
+          },
+          {
+            "seq": 5,
+            "title": "第 5 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798171916295",
+            "byteplus_vid": "v25df9gm0018dasdfs2tgd60f0r5pv70"
+          },
+          {
+            "seq": 6,
+            "title": "第 6 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798171932679",
+            "byteplus_vid": "v18df9gm0018dasdg22tgd604lnbhl80"
+          },
+          {
+            "seq": 7,
+            "title": "第 7 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798171949063",
+            "byteplus_vid": "v18df9gm0018dasdgd2tgd604lnbhl90"
+          },
+          {
+            "seq": 8,
+            "title": "第 8 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798171965447",
+            "byteplus_vid": "v25df9gm0018dasdgk2tgd60f0r5pvb0"
+          },
+          {
+            "seq": 9,
+            "title": "第 9 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798171981831",
+            "byteplus_vid": "v25df9gm0018dasdgqatgd6fma2mf1a0"
+          },
+          {
+            "seq": 10,
+            "title": "第 10 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798171998215",
+            "byteplus_vid": "v25df9gm0018dasdh02tgd65lv9jl7ug"
+          },
+          {
+            "seq": 11,
+            "title": "第 11 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172014599",
+            "byteplus_vid": "v18df9gm0018dasdh7itgd61flfbqqn0"
+          },
+          {
+            "seq": 12,
+            "title": "第 12 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172030983",
+            "byteplus_vid": "v18df9gm0018dasdhj2tgd63bdj9m6o0"
+          },
+          {
+            "seq": 13,
+            "title": "第 13 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172047367",
+            "byteplus_vid": "v18df9gm0018dasdhoatgd65bbtghg90"
+          },
+          {
+            "seq": 14,
+            "title": "第 14 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172063751",
+            "byteplus_vid": "v18df9gm0018dasdhuatgd6b8oh7h790"
+          },
+          {
+            "seq": 15,
+            "title": "第 15 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172080135",
+            "byteplus_vid": "v25df9gm0018dasdi32tgd6596nubku0"
+          },
+          {
+            "seq": 16,
+            "title": "第 16 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172096519",
+            "byteplus_vid": "v18df9gm0018dasdi8itgd64fpa2id90"
+          },
+          {
+            "seq": 17,
+            "title": "第 17 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172112903",
+            "byteplus_vid": "v18df9gm0018dasdieatgd62ki05ck10"
+          },
+          {
+            "seq": 18,
+            "title": "第 18 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172129287",
+            "byteplus_vid": "v25df9gm0018dasdik2tgd6fma2mf1j0"
+          },
+          {
+            "seq": 19,
+            "title": "第 19 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172145671",
+            "byteplus_vid": "v18df9gm0018dasdioitgd61flfbqqrg"
+          },
+          {
+            "seq": 20,
+            "title": "第 20 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172162055",
+            "byteplus_vid": "v25df9gm0018dasdivqtgd6596nubl90"
+          },
+          {
+            "seq": 21,
+            "title": "第 21 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172178439",
+            "byteplus_vid": "v25df9gm0018dasdjbatgd6choeimgj0"
+          },
+          {
+            "seq": 22,
+            "title": "第 22 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172194823",
+            "byteplus_vid": "v25df9gm0018dasdjgitgd60f0r5pvu0"
+          },
+          {
+            "seq": 23,
+            "title": "第 23 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172211207",
+            "byteplus_vid": "v18df9gm0018dasdjnatgd65bbtghge0"
+          },
+          {
+            "seq": 24,
+            "title": "第 24 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172227591",
+            "byteplus_vid": "v25df9gm0018dasdjt2tgd6596nubm6g"
+          },
+          {
+            "seq": 25,
+            "title": "第 25 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172243975",
+            "byteplus_vid": "v25df9gm0018dasdk3itgd64ur06i9i0"
+          },
+          {
+            "seq": 26,
+            "title": "第 26 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172260359",
+            "byteplus_vid": "v25df9gm0018dasdk9atgd65lv9jl8q0"
+          },
+          {
+            "seq": 27,
+            "title": "第 27 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172276743",
+            "byteplus_vid": "v25df9gm0018dasdkeatgd6fsq6pun50"
+          },
+          {
+            "seq": 28,
+            "title": "第 28 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172293127",
+            "byteplus_vid": "v25df9gm0018dasdkjatgd6596nubmqg"
+          },
+          {
+            "seq": 29,
+            "title": "第 29 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172309511",
+            "byteplus_vid": "v25df9gm0018dasdkoatgd60f0r5q0d0"
+          },
+          {
+            "seq": 30,
+            "title": "第 30 集",
+            "cover_list": [
+              "d1b345f2c5219d1fabf3575c3c7e2861"
+            ],
+            "episode_id": "7689546798172325895",
+            "byteplus_vid": "v25df9gm0018dasdktitgd6choeimh50"
+          }
+        ],
+        "album_version_list": [
+          {
+            "version": 2,
+            "album_id": "7689158321380067346",
+            "album_info": {
+              "desp": "《AFTER MY ALPHA ABANDONED ME, I CHOSE HIS RIVAL》",
+              "year": 2026,
+              "title": "《AFTER MY ALPHA ABANDONED ME, I CHOSE HIS RIVAL》",
+              "seq_num": 30,
+              "language": "en",
+              "tag_list": [
+                1
+              ],
+              "cover_list": [
+                "d1b345f2c5219d1fabf3575c3c7e2861"
+              ],
+              "drama_type": 2,
+              "album_status": 3,
+              "publish_status": 2
+            },
+            "review_status": 1,
+            "online_version": 1,
+            "publish_status": 2,
+            "current_version": 2,
+            "episode_info_list": [
+              {
+                "seq": 1,
+                "title": "第 1 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798171850759",
+                "byteplus_vid": "v18df9gm0018dasderitgd61flfbqqjg"
+              },
+              {
+                "seq": 2,
+                "title": "第 2 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798171867143",
+                "byteplus_vid": "v18df9gm0018dasdf7atgd6dt8ucq88g"
+              },
+              {
+                "seq": 3,
+                "title": "第 3 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798171883527",
+                "byteplus_vid": "v25df9gm0018dasdfdatgd6choeimfpg"
+              },
+              {
+                "seq": 4,
+                "title": "第 4 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798171899911",
+                "byteplus_vid": "v25df9gm0018dasdfn2tgd6be1k0m4u0"
+              },
+              {
+                "seq": 5,
+                "title": "第 5 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798171916295",
+                "byteplus_vid": "v25df9gm0018dasdfs2tgd60f0r5pv70"
+              },
+              {
+                "seq": 6,
+                "title": "第 6 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798171932679",
+                "byteplus_vid": "v18df9gm0018dasdg22tgd604lnbhl80"
+              },
+              {
+                "seq": 7,
+                "title": "第 7 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798171949063",
+                "byteplus_vid": "v18df9gm0018dasdgd2tgd604lnbhl90"
+              },
+              {
+                "seq": 8,
+                "title": "第 8 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798171965447",
+                "byteplus_vid": "v25df9gm0018dasdgk2tgd60f0r5pvb0"
+              },
+              {
+                "seq": 9,
+                "title": "第 9 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798171981831",
+                "byteplus_vid": "v25df9gm0018dasdgqatgd6fma2mf1a0"
+              },
+              {
+                "seq": 10,
+                "title": "第 10 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798171998215",
+                "byteplus_vid": "v25df9gm0018dasdh02tgd65lv9jl7ug"
+              },
+              {
+                "seq": 11,
+                "title": "第 11 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172014599",
+                "byteplus_vid": "v18df9gm0018dasdh7itgd61flfbqqn0"
+              },
+              {
+                "seq": 12,
+                "title": "第 12 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172030983",
+                "byteplus_vid": "v18df9gm0018dasdhj2tgd63bdj9m6o0"
+              },
+              {
+                "seq": 13,
+                "title": "第 13 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172047367",
+                "byteplus_vid": "v18df9gm0018dasdhoatgd65bbtghg90"
+              },
+              {
+                "seq": 14,
+                "title": "第 14 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172063751",
+                "byteplus_vid": "v18df9gm0018dasdhuatgd6b8oh7h790"
+              },
+              {
+                "seq": 15,
+                "title": "第 15 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172080135",
+                "byteplus_vid": "v25df9gm0018dasdi32tgd6596nubku0"
+              },
+              {
+                "seq": 16,
+                "title": "第 16 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172096519",
+                "byteplus_vid": "v18df9gm0018dasdi8itgd64fpa2id90"
+              },
+              {
+                "seq": 17,
+                "title": "第 17 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172112903",
+                "byteplus_vid": "v18df9gm0018dasdieatgd62ki05ck10"
+              },
+              {
+                "seq": 18,
+                "title": "第 18 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172129287",
+                "byteplus_vid": "v25df9gm0018dasdik2tgd6fma2mf1j0"
+              },
+              {
+                "seq": 19,
+                "title": "第 19 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172145671",
+                "byteplus_vid": "v18df9gm0018dasdioitgd61flfbqqrg"
+              },
+              {
+                "seq": 20,
+                "title": "第 20 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172162055",
+                "byteplus_vid": "v25df9gm0018dasdivqtgd6596nubl90"
+              },
+              {
+                "seq": 21,
+                "title": "第 21 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172178439",
+                "byteplus_vid": "v25df9gm0018dasdjbatgd6choeimgj0"
+              },
+              {
+                "seq": 22,
+                "title": "第 22 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172194823",
+                "byteplus_vid": "v25df9gm0018dasdjgitgd60f0r5pvu0"
+              },
+              {
+                "seq": 23,
+                "title": "第 23 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172211207",
+                "byteplus_vid": "v18df9gm0018dasdjnatgd65bbtghge0"
+              },
+              {
+                "seq": 24,
+                "title": "第 24 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172227591",
+                "byteplus_vid": "v25df9gm0018dasdjt2tgd6596nubm6g"
+              },
+              {
+                "seq": 25,
+                "title": "第 25 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172243975",
+                "byteplus_vid": "v25df9gm0018dasdk3itgd64ur06i9i0"
+              },
+              {
+                "seq": 26,
+                "title": "第 26 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172260359",
+                "byteplus_vid": "v25df9gm0018dasdk9atgd65lv9jl8q0"
+              },
+              {
+                "seq": 27,
+                "title": "第 27 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172276743",
+                "byteplus_vid": "v25df9gm0018dasdkeatgd6fsq6pun50"
+              },
+              {
+                "seq": 28,
+                "title": "第 28 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172293127",
+                "byteplus_vid": "v25df9gm0018dasdkjatgd6596nubmqg"
+              },
+              {
+                "seq": 29,
+                "title": "第 29 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172309511",
+                "byteplus_vid": "v25df9gm0018dasdkoatgd60f0r5q0d0"
+              },
+              {
+                "seq": 30,
+                "title": "第 30 集",
+                "cover_list": [
+                  "d1b345f2c5219d1fabf3575c3c7e2861"
+                ],
+                "episode_id": "7689546798172325895",
+                "byteplus_vid": "v25df9gm0018dasdktitgd6choeimh50"
+              }
+            ]
+          },
+          {
+            "version": 1,
+            "album_id": "7689158321380067346",
+            "album_info": {
+              "desp": "《AFTER MY ALPHA ABANDONED ME, I CHOSE HIS RIVAL》",
+              "year": 2026,
+              "title": "《AFTER MY ALPHA ABANDONED ME, I CHOSE HIS RIVAL》",
+              "seq_num": 30,
+              "language": "en",
+              "tag_list": [
+                1
+              ],
+              "cover_list": [
+                "e6cd20ab7fa7c210a65e6079e0ac2f66"
+              ],
+              "drama_type": 2,
+              "album_status": 3,
+              "publish_status": 2
+            },
+            "review_status": 2,
+            "online_version": 1,
+            "publish_status": 2,
+            "current_version": 2,
+            "episode_info_list": [
+              {
+                "seq": 1,
+                "title": "第 1 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837660690",
+                "byteplus_vid": "v25df9gm0018dar2mqqtgd638n1e1sb0"
+              },
+              {
+                "seq": 2,
+                "title": "第 2 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837677074",
+                "byteplus_vid": "v25df9gm0018dar2nh2tgd6596ntkl30"
+              },
+              {
+                "seq": 3,
+                "title": "第 3 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837693458",
+                "byteplus_vid": "v18df9gm0018dar2o9qtgd6b8oh7eau0"
+              },
+              {
+                "seq": 4,
+                "title": "第 4 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837709842",
+                "byteplus_vid": "v25df9gm0018dar2p6qtgd60f0r5grgg"
+              },
+              {
+                "seq": 5,
+                "title": "第 5 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837726226",
+                "byteplus_vid": "v18df9gm0018dar2qbitgd64fpa2fij0"
+              },
+              {
+                "seq": 6,
+                "title": "第 6 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837742610",
+                "byteplus_vid": "v25df9gm0018dar2r5atgd60f0r5grrg"
+              },
+              {
+                "seq": 7,
+                "title": "第 7 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837758994",
+                "byteplus_vid": "v18df9gm0018dar2rr2tgd6dt8ucndng"
+              },
+              {
+                "seq": 8,
+                "title": "第 8 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837775378",
+                "byteplus_vid": "v25df9gm0018dar2saitgd6fma2m5tfg"
+              },
+              {
+                "seq": 9,
+                "title": "第 9 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837791762",
+                "byteplus_vid": "v25df9gm0018dar2sq2tgd6fsq6plj20"
+              },
+              {
+                "seq": 10,
+                "title": "第 10 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837808146",
+                "byteplus_vid": "v18df9gm0018dar2t7atgd65bbtgekog"
+              },
+              {
+                "seq": 11,
+                "title": "第 11 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837824530",
+                "byteplus_vid": "v25df9gm0018dar2tjqtgd6fma2m5trg"
+              },
+              {
+                "seq": 12,
+                "title": "第 12 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837840914",
+                "byteplus_vid": "v25df9gm0018dar2u1itgd6be1k0d5m0"
+              },
+              {
+                "seq": 13,
+                "title": "第 13 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837857298",
+                "byteplus_vid": "v25df9gm0018dar2uhitgd638n1e1tog"
+              },
+              {
+                "seq": 14,
+                "title": "第 14 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837873682",
+                "byteplus_vid": "v25df9gm0018dar2v0atgd64ur0696pg"
+              },
+              {
+                "seq": 15,
+                "title": "第 15 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837890066",
+                "byteplus_vid": "v18df9gm0018dar2vg2tgd62ki057pg0"
+              },
+              {
+                "seq": 16,
+                "title": "第 16 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837906450",
+                "byteplus_vid": "v25df9gm0018dar2vvitgd6choeidfng"
+              },
+              {
+                "seq": 17,
+                "title": "第 17 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837922834",
+                "byteplus_vid": "v25df9gm0018dar30dqtgd60f0r5gt40"
+              },
+              {
+                "seq": 18,
+                "title": "第 18 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837939218",
+                "byteplus_vid": "v25df9gm0018dar30u2tgd60f0r5gt60"
+              },
+              {
+                "seq": 19,
+                "title": "第 19 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837955602",
+                "byteplus_vid": "v18df9gm0018dar31iitgd64fpa2fjd0"
+              },
+              {
+                "seq": 20,
+                "title": "第 20 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837971986",
+                "byteplus_vid": "v18df9gm0018dar322qtgd6b8oh7ebrg"
+              },
+              {
+                "seq": 21,
+                "title": "第 21 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420837988370",
+                "byteplus_vid": "v25df9gm0018dar32iitgd638n1e1uqg"
+              },
+              {
+                "seq": 22,
+                "title": "第 22 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420838004754",
+                "byteplus_vid": "v25df9gm0018dar32vitgd6choeidgcg"
+              },
+              {
+                "seq": 23,
+                "title": "第 23 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420838021138",
+                "byteplus_vid": "v25df9gm0018dar33eqtgd6fsq6plkeg"
+              },
+              {
+                "seq": 24,
+                "title": "第 24 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420838037522",
+                "byteplus_vid": "v25df9gm0018dar33titgd6596ntkr4g"
+              },
+              {
+                "seq": 25,
+                "title": "第 25 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420838053906",
+                "byteplus_vid": "v25df9gm0018dar34cqtgd638n1e1v70"
+              },
+              {
+                "seq": 26,
+                "title": "第 26 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420838070290",
+                "byteplus_vid": "v25df9gm0018dar34oqtgd6fma2m5vm0"
+              },
+              {
+                "seq": 27,
+                "title": "第 27 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420838086674",
+                "byteplus_vid": "v18df9gm0018dar355qtgd6dt8ucneag"
+              },
+              {
+                "seq": 28,
+                "title": "第 28 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420838103058",
+                "byteplus_vid": "v18df9gm0018dar35oqtgd62ki057qdg"
+              },
+              {
+                "seq": 29,
+                "title": "第 29 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420838119442",
+                "byteplus_vid": "v25df9gm0018dar36c2tgd6fsq6plktg"
+              },
+              {
+                "seq": 30,
+                "title": "第 30 集",
+                "cover_list": [
+                  "e6cd20ab7fa7c210a65e6079e0ac2f66"
+                ],
+                "episode_id": "7689143420838135826",
+                "byteplus_vid": "v25df9gm0018dar3722tgd60f0r5gubg"
+              }
+            ]
+          }
+        ],
+        "review_fail_reasons": [],
+        "online_review_status": 2,
+        "repaired_episode_ids": 0,
+        "online_episode_failures": [],
+        "online_review_fail_reasons": []
+      },
+      "errorMessage": null
+    }
+  ],
+  "final": {
+    "title": "《AFTER MY ALPHA ABANDONED ME, I CHOSE HIS RIVAL》",
+    "coverUrl": "https://api.evergreenprosper.com/api/v1/assets/covers/18d4e1cd10bb98ccbb62bb777abb56144143a97e5c9777b5a0b8e4091cd68054.png",
+    "coverAssetId": "cmujl5nww0098r301bepr904e",
+    "tiktokAlbumId": "7689158321380067346",
+    "tiktokVersion": 2,
+    "onlineVersion": 1,
+    "status": "OFFLINE",
+    "reviewStatus": "1",
+    "publishStatus": "2",
+    "replacedEpisodes": 30
+  }
+}

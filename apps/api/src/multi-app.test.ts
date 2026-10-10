@@ -201,6 +201,7 @@ it('registers all new Mini routes with separate databases and app-bound admin to
   }
   assert.throws(() => miniAppEnvironment({ ...expanded, DRAMACLOUD_DATABASE_URL: expanded.STORYLAND_DATABASE_URL }, 'storyland'), /different database or PostgreSQL schema/);
   assert.throws(() => loadEnv({ DATABASE_URL: env.DATABASE_URL, JWT_SECRET: env.JWT_SECRET, BYTEPLUS_ACCOUNT_ID: env.BYTEPLUS_ACCOUNT_ID, BYTEPLUS_SPACE_NAME: env.BYTEPLUS_SPACE_NAME, BYTEPLUS_REGION: env.BYTEPLUS_REGION, STORYLAND_DATABASE_URL: 'not-a-url' }), /STORYLAND_DATABASE_URL/);
+  assert.throws(() => loadEnv({ DATABASE_URL: env.DATABASE_URL, JWT_SECRET: env.JWT_SECRET, BYTEPLUS_ACCOUNT_ID: env.BYTEPLUS_ACCOUNT_ID, BYTEPLUS_SPACE_NAME: env.BYTEPLUS_SPACE_NAME, BYTEPLUS_REGION: env.BYTEPLUS_REGION, CROWNRUSH_DATABASE_URL: 'not-a-url' }), /CROWNRUSH_DATABASE_URL/);
 });
 
 it('handles Mini bootstrap preflights for all apps and logs the actual allowlist decision before CORS', async () => {

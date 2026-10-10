@@ -5,6 +5,7 @@ This project reuses the shared implementation in `apps/mini-web/src` while build
 Before building a release, set these values in `apps/taletv/.env` and `apps/taletv/minis.config.json`:
 
 - `VITE_API_BASE_URL`: the shared API URL with the `/api/taletv/v1` path.
+- `VITE_MINI_RELEASE_ID`: a unique immutable release key, set to `taletv-v6` for the current candidate. The existing v5 package has no key and continues using `default`.
 - `VITE_TIKTOK_CLIENT_KEY`: the TaleTV TikTok Client Key.
 - ad placement IDs created for TaleTV.
 - `minis.config.json.appId`: the numeric App ID issued by TikTok for TaleTV.
@@ -19,6 +20,8 @@ pnpm --filter taletv export:legal
 ```
 
 The API uses the same server process as the original app. Set `TALETV_DATABASE_URL` to a separate PostgreSQL schema or database and set `TALETV_TIKTOK_CLIENT_KEY` and `TALETV_TIKTOK_CLIENT_SECRET` on the server. BytePlus credentials can remain shared when both TikTok apps are bound to the same BytePlus account and VOD space.
+
+In the admin console, select TaleTV and load the matching release key under entry-ad policy. Keep `taletv-v6` disabled during review; after approval, enable that policy without changing the `default` policy used by v5.
 
 Before TikTok review, verify the privacy policy and terms in `apps/mini-web/src/pages/legal-docs.ts` against the actual operator, contact details, hosting, and governing law for TaleTV. The displayed product name is changed to TaleTV by this build; the legal facts are not changed automatically.
 

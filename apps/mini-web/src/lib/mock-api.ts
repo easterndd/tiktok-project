@@ -83,7 +83,7 @@ export async function mockApiRequest<T>({ method, path, body }: MockRequest): Pr
     const album = getMockAlbum(albumId, locale);
     if (!episode || !album) throw new Error('Episode not found.');
     if (episode.access !== 'PLAYABLE') throw new Error('Watch a rewarded ad to unlock this episode.');
-    return { albumId: `mock-${albumId}`, localEpisodeId: episodeId, episodeId: `mock-${episodeId}`, vid: `mock-vid-${episodeId}`, playAuthToken: null, title: episode.title, coverUrl: album.backdropUrl ?? album.coverUrl, durationMs: episode.durationMs, resumePositionMs: episode.resumePositionMs ?? 0 } as T;
+    return { playbackMode: 'LOCAL', albumId: `mock-${albumId}`, localEpisodeId: episodeId, episodeId: `mock-${episodeId}`, vid: `mock-vid-${episodeId}`, playAuthToken: null, sourceUrl: `/local-test-media/while-my-fiance-knocked-episode-${episode.episodeNo > 3 ? 1 : episode.episodeNo}.mp4`, title: episode.title, coverUrl: album.backdropUrl ?? album.coverUrl, durationMs: episode.durationMs, resumePositionMs: episode.resumePositionMs ?? 0 } as T;
   }
   if (method === 'GET' && pathname === '/me') return { id: 'mock-user', displayName: 'Drama fan', avatarUrl: null, locale: readPreferences().locale, createdAt: '2026-08-18T00:00:00.000Z' } satisfies UserProfile as T;
   if (method === 'GET' && (pathname === '/me/history' || pathname === '/me/watch-progress')) return { items: getMockHistory(locale) } as T;

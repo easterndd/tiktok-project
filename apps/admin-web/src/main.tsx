@@ -11,7 +11,7 @@ import { DramaMaterials } from './drama-materials';
 import { AlbumMetadataDialog, type EditableAlbumMetadata } from './album-metadata-dialog';
 import './styles.css';
 
-const miniAppNames = { main: 'QuicK ReeLS', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks' } as const;
+const miniAppNames = { main: 'QuicK ReeLS', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks', crownrush: 'CrownRush', sugarreel: 'SugarReel', crimsonshorts: 'CrimsonShorts', sweetreel: 'SweetReel', dramablaze: 'DramaBlaze', heartreel: 'HeartReel', dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama' } as const;
 type MiniApp = keyof typeof miniAppNames;
 const miniAppPaths = Object.fromEntries(Object.keys(miniAppNames).filter((key) => key !== 'main').map((key) => [key, key])) as Record<Exclude<MiniApp, 'main'>, string>;
 const miniAppEnvPrefixes = Object.fromEntries(Object.keys(miniAppNames).filter((key) => key !== 'main').map((key) => [key, key.toUpperCase()])) as Record<Exclude<MiniApp, 'main'>, string>;
@@ -110,6 +110,7 @@ type PlatformProviderResponse = {
   status?: string | number;
 };
 type PlatformSyncJob = { id: string; albumId?: string | null; kind: string; status: string; errorMessage?: string | null; providerJobId?: string | null; providerRequestId?: string | null; createdAt: string; completedAt?: string | null; attemptCount?: number; snapshotJson?: { priorityScore?: number; version?: number; uploadMode?: string } | null; providerResponse?: PlatformProviderResponse | null; album?: { title: string } | null; episode?: { title: string; episodeNo?: number } | null };
+type PlatformSubmission = { id: string; albumTitle: string; action: string; message: string; failed: boolean; createdAt: string };
 type SharedPlaybackOperation = { id: string; kind: string; status: string; createdAt: string; completedAt?: string | null; providerRequestId?: string | null; errorMessage?: string | null; providerResponse?: { platformAuthorized?: boolean; mappedEpisodeCount?: number; onlineVersion?: number; online_review_status?: number; publish_status?: number } | null };
 type SharedPlaybackStatus = { miniAppKey: MiniApp; status: string; albumId?: string; tiktokAlbumId?: string; onlineVersion?: number; reviewStatus?: string; publishStatus?: string; localStatus?: string; episodeCount?: number; mappedEpisodeCount?: number; error?: string; requestId?: string; lastReconciledAt?: string; operations?: SharedPlaybackOperation[] };
 type SharedPlaybackAction = 'AUTHORIZE' | 'RECONCILE';
@@ -174,13 +175,14 @@ function platformBusinessDetails(job: PlatformSyncJob) {
 type Overview = { albums: number; episodes: number; users: number; likes: number; favorites: number; shares: number; searches: number; rewardedUnlocks: number };
 type Audience = { from: string; to: string; timezone: string; periodDays: number; activeUsers: number; dau: number; wau: number; mau: number; newUsers: number; watchSessions: number; completedEpisodes: number; favorites: number; shares: number; searches: number; dailyNewUsers: { date: string; count: number }[]; dailyActiveUsers: { date: string; count: number }[] };
 type Playback = { from: string; to: string; timezone: string; periodDays: number; totalEvents: number; firstFrames: number; errorCount: number; errorRate: number; averageStartupMs: number | null; totalBufferMs: number; eventTypes: { eventType: string; count: number }[]; definitions: { definition: string; count: number }[]; networks: { networkType: string; count: number }[]; recentErrors: { episodeTitle: string; errorCode?: string | null; createdAt: string }[] };
-type AppEntryAdPolicy = { enabled: boolean; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; requiredCount: number; countMode: 'COMPLETED' | 'SHOWN'; onUnavailable: 'ALLOW' | 'BLOCK'; version: number };
+type AppEntryAdPolicy = { releaseId: string; enabled: boolean; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; requiredCount: number; countMode: 'COMPLETED' | 'SHOWN'; onUnavailable: 'ALLOW' | 'BLOCK'; version: number };
 type AdminRole = 'OWNER' | 'EDITOR' | 'ANALYST' | 'SUPPORT';
 type AdminPermission = 'content.write' | 'content.sync' | 'content.review' | 'content.publish' | 'ads.write';
 type AdminProfile = { id: string; email: string; role: AdminRole; status: string; lastLoginAt?: string | null; passwordChangedAt?: string | null };
 type Tab = 'overview' | 'create' | 'albums' | 'ads' | 'audience' | 'playback' | 'security';
 const contentDraftStorageKey = activeApp === 'main' ? 'quickreels_content_draft' : `quickreels_${activeApp}_content_draft`;
 const contentTemplateStorageKey = activeApp === 'main' ? 'quickreels_content_templates' : `quickreels_${activeApp}_content_templates`;
+const platformSubmissionStorageKey = activeApp === 'main' ? 'quickreels_platform_submissions' : `quickreels_${activeApp}_platform_submissions`;
 
 const rolePermissions: Record<AdminRole, readonly AdminPermission[]> = {
   OWNER: ['content.write', 'content.sync', 'content.review', 'content.publish', 'ads.write'],
@@ -224,11 +226,13 @@ async function api<T>(path: string, options: RequestInit = {}) {
     throw new Error('无法连接后台 API，请检查 API 服务、域名和网络连接。');
   }
   if (!response.ok) {
-    const message = (await response.json().catch(() => null))?.error?.message ?? '请求失败';
+    const failure = (await response.json().catch(() => null))?.error;
+    const message = `${failure?.message ?? '请求失败'}${failure?.requestId ? `（请求 ID：${failure.requestId}）` : ''}`;
     // The login endpoint deliberately returns 401 for incorrect credentials. Every
     // other 401 means the active administrator session can no longer be used.
     if (response.status === 401 && path !== '/admin/auth/login') {
       sessionStorage.removeItem(adminTokenStorageKey);
+      sessionStorage.removeItem(platformSubmissionStorageKey);
       if (!adminSessionRecoveryStarted) {
         adminSessionRecoveryStarted = true;
         window.location.reload();
@@ -309,6 +313,9 @@ function AdminApp() {
   const [currentAdmin, setCurrentAdmin] = useState<AdminProfile | null>(null);
   const [jobs, setJobs] = useState<UploadJob[]>([]);
   const [platformJobs, setPlatformJobs] = useState<PlatformSyncJob[]>([]);
+  const [platformSubmissions, setPlatformSubmissions] = useState<PlatformSubmission[]>(() => {
+    try { const saved = JSON.parse(sessionStorage.getItem(platformSubmissionStorageKey) ?? '[]'); return Array.isArray(saved) ? saved.slice(0, 10) : []; } catch { return []; }
+  });
   const [releaseAlbumId, setReleaseAlbumId] = useState('');
   const [releaseTargets, setReleaseTargets] = useState<MiniApp[]>([]);
   const [releaseStatuses, setReleaseStatuses] = useState<SharedPlaybackStatus[]>([]);
@@ -319,7 +326,8 @@ function AdminApp() {
   const [overview, setOverview] = useState<Overview>({ albums: 0, episodes: 0, users: 0, likes: 0, favorites: 0, shares: 0, searches: 0, rewardedUnlocks: 0 });
   const [audience, setAudience] = useState<Audience | null>(null);
   const [playback, setPlayback] = useState<Playback | null>(null);
-  const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ enabled: false, mode: 'REWARDED_GATED', placementId: defaultEntryPlacementId, requiredCount: 1, countMode: 'COMPLETED', onUnavailable: 'ALLOW', version: 1 });
+  const [entryAdReleaseId, setEntryAdReleaseId] = useState('default');
+  const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ releaseId: 'default', enabled: false, mode: 'REWARDED_GATED', placementId: defaultEntryPlacementId, requiredCount: 1, countMode: 'COMPLETED', onUnavailable: 'ALLOW', version: 1 });
   const [analyticsFrom, setAnalyticsFrom] = useState(() => rangeStart(30));
   const [analyticsTo, setAnalyticsTo] = useState(() => inputDate(new Date()));
   const [analyticsTimezone, setAnalyticsTimezone] = useState('Asia/Shanghai');
@@ -354,7 +362,7 @@ function AdminApp() {
   const [savingAlbumId, setSavingAlbumId] = useState<string | null>(null);
   const [savingTitleId, setSavingTitleId] = useState<string | null>(null);
   const [titleDrafts, setTitleDrafts] = useState<Record<string, string>>({});
-  const [editingAlbumMetadata, setEditingAlbumMetadata] = useState<Album | null>(null);
+  const [editingAlbumMetadata, setEditingAlbumMetadata] = useState<EditableAlbumMetadata | null>(null);
   const [deletingAlbumId, setDeletingAlbumId] = useState<string | null>(null);
   const [dirtyAccessAlbumIds, setDirtyAccessAlbumIds] = useState<Set<string>>(() => new Set());
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
@@ -367,10 +375,17 @@ function AdminApp() {
   const [vodMedia, setVodMedia] = useState<VodMedia[]>([]);
   const [loadingVodMedia, setLoadingVodMedia] = useState(false);
 
-  const loadEntryAdPolicy = async () => {
+  const recordPlatformSubmission = (album: Album, action: string, message: string, failed: boolean) => {
+    const next = [{ id: `${Date.now()}-${platformSubmissions.length}`, albumTitle: album.title, action, message, failed, createdAt: new Date().toISOString() }, ...platformSubmissions].slice(0, 10);
+    sessionStorage.setItem(platformSubmissionStorageKey, JSON.stringify(next));
+    setPlatformSubmissions(next);
+  };
+
+  const loadEntryAdPolicy = async (releaseId = 'default') => {
     try {
-      const policy = await api<AppEntryAdPolicy>('/admin/app-entry-ad-policy');
+      const policy = await api<AppEntryAdPolicy>(`/admin/app-entry-ad-policy?releaseId=${encodeURIComponent(releaseId)}`);
       setEntryAdPolicy(policy);
+      setEntryAdReleaseId(policy.releaseId);
       return true;
     } catch (error) {
       return false;
@@ -379,7 +394,7 @@ function AdminApp() {
 
   const loadData = async () => {
     setLoading(true);
-    const entryAdPolicyRequest = loadEntryAdPolicy();
+    const entryAdPolicyRequest = loadEntryAdPolicy(entryAdReleaseId);
     const failures: string[] = [];
     try {
       const results = await Promise.allSettled([
@@ -897,6 +912,8 @@ function AdminApp() {
     try {
       await api('/admin/me/password', { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) });
       sessionStorage.removeItem(adminTokenStorageKey);
+      sessionStorage.removeItem(platformSubmissionStorageKey);
+      setPlatformSubmissions([]);
       setCurrentPassword('');
       setNewPassword('');
       setLoggedIn(false);
@@ -909,9 +926,13 @@ function AdminApp() {
   };
   const saveEntryAdPolicy = async (event: FormEvent) => {
     event.preventDefault();
+    if (entryAdPolicy.releaseId !== entryAdReleaseId) {
+      setMessage('请先加载所选版本的策略，再进行修改。');
+      return;
+    }
     setSavingEntryAdPolicy(true);
     try {
-      const next = await api<AppEntryAdPolicy>('/admin/app-entry-ad-policy', { method: 'PUT', body: JSON.stringify(entryAdPolicy) });
+      const next = await api<AppEntryAdPolicy>('/admin/app-entry-ad-policy', { method: 'PUT', body: JSON.stringify({ ...entryAdPolicy, releaseId: entryAdReleaseId }) });
       setEntryAdPolicy(next);
       setMessage(`进入广告策略已保存（版本 ${next.version}），将在新的小程序启动会话生效。`);
     } catch (error) {
@@ -988,7 +1009,9 @@ function AdminApp() {
         ? `“${album.title}”${actionName}处理完成：${platformBusinessResult(completed)}。${platformBusinessDetails(completed).filter((detail) => detail.startsWith('审核原因') || detail.includes('异常')).join(' ')}`
         : `“${album.title}”的${actionName}已入队，暂未返回最终结果；请稍后刷新查看平台业务结果。`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '平台操作提交失败');
+      const detail = error instanceof Error ? error.message : '平台操作提交失败';
+      recordPlatformSubmission(album, platformJobLabels[action === 'sync-version' ? 'ALBUM_VERSION' : action === 'review-submit' ? 'REVIEW' : action === 'reconcile' ? 'RECONCILE' : action === 'online-version' ? 'SET_ONLINE_VERSION' : action === 'online' ? 'PUBLISH' : 'UNPUBLISH'], detail, true);
+      setMessage(detail);
     } finally {
       setPlatformWorking(null);
     }
@@ -999,10 +1022,17 @@ function AdminApp() {
     if (title === album.title) return;
     setSavingTitleId(album.id);
     try {
-      const updated = await api<Album>(`/admin/albums/${album.id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
+      const scope = await api<EditableAlbumMetadata>(`/admin/albums/${album.id}/display-metadata`);
+      if (scope.shared) {
+        setEditingAlbumMetadata({ ...album, initialTitle: title });
+        return;
+      }
+      const updated = await api<EditableAlbumMetadata>(`/admin/albums/${album.id}/display-metadata`, { method: 'PATCH', body: JSON.stringify({
+        title, description: scope.description ?? '', translations: scope.translations ?? [], expectedVersion: scope.version ?? 0
+      }) });
       setAlbums((items) => items.map((item) => item.id === album.id ? { ...item, ...updated, episodeCount: item.episodeCount } : item));
       setTitleDrafts((drafts) => { const next = { ...drafts }; delete next[album.id]; return next; });
-      setMessage(`“${title}”已保存并同步到当前小程序。`);
+      setMessage(`“${title}”已保存到当前小程序。`);
     } catch (error) {
       setMessage(error instanceof Error ? `剧集名称同步失败：${error.message}` : '剧集名称同步失败');
     } finally {
@@ -1012,19 +1042,31 @@ function AdminApp() {
   const albumMetadataSaved = (updated: EditableAlbumMetadata) => {
     setAlbums((items) => items.map((item) => item.id === updated.id ? { ...item, ...updated, episodeCount: item.episodeCount } : item));
     setTitleDrafts((drafts) => { const next = { ...drafts }; delete next[updated.id]; return next; });
-    setMessage(`“${updated.title}”的剧名和简介已保存并同步到当前小程序。`);
+    setMessage(updated.shared ? `“${updated.title}”的统一资料已保存，正在同步到 ${updated.targets?.length ?? 0} 个关联小程序。` : `“${updated.title}”的剧名和简介已保存到当前小程序。`);
   };
   const syncTikTokMedia = async (album: Album) => {
     setPlatformWorking(`${album.id}:media`);
     try {
-      if (album.coverAssetId) await api(`/admin/cover-assets/${album.coverAssetId}/sync`, { method: 'POST' });
-      const videoEpisodes = episodes.filter((episode) => episode.albumId === album.id && episode.byteplusVid);
-      const results = await Promise.all(videoEpisodes.map((episode) => api<{ alreadySynced: boolean }>(`/admin/episodes/${episode.id}/sync-tiktok-video`, { method: 'POST' })));
-      const queuedVideos = results.filter((result) => !result.alreadySynced).length;
+      const albumEpisodes = episodes.filter((episode) => episode.albumId === album.id);
+      const videoEpisodes = albumEpisodes.filter((episode) => episode.byteplusVid);
+      const requests = [
+        ...(album.coverAssetId ? [{ label: '封面', request: api<{ alreadySynced: boolean }>(`/admin/cover-assets/${album.coverAssetId}/sync`, { method: 'POST' }) }] : []),
+        ...videoEpisodes.map((episode) => ({ label: `第 ${episode.episodeNo} 集`, request: api<{ alreadySynced: boolean }>(`/admin/episodes/${episode.id}/sync-tiktok-video`, { method: 'POST' }) }))
+      ];
+      const results = await Promise.allSettled(requests.map((item) => item.request));
+      const queuedVideos = results.filter((result, index) => index >= (album.coverAssetId ? 1 : 0) && result.status === 'fulfilled' && !result.value.alreadySynced).length;
+      const failures = results.flatMap((result, index) => result.status === 'rejected' ? [`${requests[index].label}：${result.reason instanceof Error ? result.reason.message : '提交失败'}`] : []);
+      const missing = albumEpisodes.filter((episode) => !episode.byteplusVid).map((episode) => `第 ${episode.episodeNo} 集`).join('、');
+      if (missing) failures.push(`${missing}缺少 BytePlus VID，尚不能登记`);
+      if (!album.coverAssetId) failures.push('专辑缺少封面，尚不能同步版本');
       await loadData();
-      setMessage(`“${album.title}”新增 ${queuedVideos} 集视频同步任务；已就绪的旧分集已跳过。`);
+      const detail = `新增 ${queuedVideos} 集视频同步任务${failures.length ? `；未完成：${failures.join('；')}` : '；已就绪的旧分集已跳过'}。`;
+      recordPlatformSubmission(album, '同步媒资', detail, failures.length > 0);
+      setMessage(`“${album.title}”${detail}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'TikTok 媒资同步提交失败');
+      const detail = error instanceof Error ? error.message : 'TikTok 媒资同步提交失败';
+      recordPlatformSubmission(album, '同步媒资', detail, true);
+      setMessage(detail);
     } finally {
       setPlatformWorking(null);
     }
@@ -1045,7 +1087,7 @@ function AdminApp() {
   return <div className="admin-layout"><aside className="sidebar"><div className="brand"><span><Film size={17} /></span>QuicK <span>ReeLS</span></div><MiniAppSelect /><p className="workspace-label">运营工作区</p><nav>
     {navItems.map(([key, Icon, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}><Icon size={17} />{label}</button>)}
   </nav><div className="sidebar-bottom"><button className={tab === 'security' ? 'active' : ''} onClick={() => setTab('security')}><Settings2 size={17} />账号安全</button><div className="account"><span className="account-avatar">{currentAdmin?.email.slice(0, 2).toUpperCase() ?? 'OP'}</span><span><strong>{currentAdmin?.email ?? '运营管理员'}</strong><small>{currentAdmin?.role ?? 'TK小程序管理后台'}</small></span><MoreHorizontal size={16} /></div></div></aside>
-    <main className="main"><header className="page-header"><div><p className="eyebrow">{miniAppNames[activeApp]} / {tabLabels[tab]}</p><h1>{title}</h1><p className="subhead">当前展示 {miniAppNames[activeApp]} 的内容和数据。</p></div><div className="header-actions"><button className="secondary" onClick={() => void loadData()} title="刷新数据"><RefreshCw size={15} className={loading ? 'spin' : ''} />刷新</button><button className="secondary" onClick={() => { sessionStorage.removeItem(adminTokenStorageKey); setLoggedIn(false); }}>退出登录</button></div></header>{message && <div className="notice"><CheckCircle2 size={16} />{message}</div>}
+    <main className="main"><header className="page-header"><div><p className="eyebrow">{miniAppNames[activeApp]} / {tabLabels[tab]}</p><h1>{title}</h1><p className="subhead">当前展示 {miniAppNames[activeApp]} 的内容和数据。</p></div><div className="header-actions"><button className="secondary" onClick={() => void loadData()} title="刷新数据"><RefreshCw size={15} className={loading ? 'spin' : ''} />刷新</button><button className="secondary" onClick={() => { sessionStorage.removeItem(adminTokenStorageKey); sessionStorage.removeItem(platformSubmissionStorageKey); setPlatformSubmissions([]); setLoggedIn(false); }}>退出登录</button></div></header>{message && <div className="notice"><CheckCircle2 size={16} />{message}</div>}
       {(tab === 'audience' || tab === 'playback') && <div className="toolbar"><span><CalendarDays size={15} />统计周期</span><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(7)}>近 7 天</button><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(30)}>近 30 天</button><button className="secondary" type="button" onClick={() => selectAnalyticsPreset(90)}>近 90 天</button><label>开始<input type="date" value={analyticsFrom} max={analyticsTo} onChange={(event) => setAnalyticsFrom(event.target.value)} /></label><label>结束<input type="date" value={analyticsTo} min={analyticsFrom} max={inputDate(new Date())} onChange={(event) => setAnalyticsTo(event.target.value)} /></label><label>时区<select value={analyticsTimezone} onChange={(event) => setAnalyticsTimezone(event.target.value)}><option value="Asia/Shanghai">Asia/Shanghai</option><option value="UTC">UTC</option></select></label></div>}
       {tab === 'overview' && <><section className="metrics"><Metric label="在线剧集" value={String(overview.albums)} change="实时数据" icon={Film} tone="pink" /><Metric label="在线集数" value={String(overview.episodes)} change="已通过发布条件" icon={ListVideo} tone="cyan" /><Metric label="用户数" value={String(overview.users)} change="累计注册" icon={Users} tone="green" /><Metric label="广告解锁" value={String(overview.rewardedUnlocks)} change="累计完成" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="运营健康度" description="关键业务数据当前状态"><div className="readiness-list"><div><span className="ready-dot done"><CheckCircle2 size={15} /></span><span><strong>剧集元数据与访问策略</strong><small>{overview.albums} 部在线剧集 · {overview.episodes} 集可见</small></span><em>正常</em></div><div><span className="ready-dot done"><Database size={15} /></span><span><strong>观众行为采集</strong><small>{overview.likes} 次点赞 · {overview.favorites} 次收藏 · {overview.searches} 次搜索</small></span><em>正常</em></div><div><span className="ready-dot done"><Gauge size={15} /></span><span><strong>播放质量采集</strong><small>{playback?.totalEvents ?? 0} 条播放器事件已入库</small></span><em>正常</em></div></div></Panel><Panel title="最近上传" description="BytePlus 媒体处理任务"><div className="compact-list">{jobs.slice(0, 5).map((job) => <div className="compact-row" key={job.id}><FileVideo size={17} /><span><strong>{job.episode?.title ?? job.episodeId}</strong><small>{job.sourceName ?? job.sourceType ?? '链接'}</small></span><Status value={job.status} /></div>)}{!jobs.length && <p className="empty-copy">还没有上传任务</p>}</div></Panel></div></>}
       {tab === 'create' && <>
@@ -1136,7 +1178,7 @@ function AdminApp() {
           </ol>
           <p>送审前可按剧目选择普通或加急。加急适用于近期上线、投放或已有消费的剧目；官方参考时效为 1–3 个工作日，每机构每天最多 35 部，并非保证通过或准时完成。已送审的版本不能靠重复点击改为加急；需要调整请带平台剧目 ID、版本号和业务理由联系 TikTok 平台支持。</p>
         </div>
-        <div className="table-wrap"><table><thead><tr><th>剧集</th><th>平台版本</th><th>审核 / 上架</th><th>同步操作</th></tr></thead><tbody>{albums.map((album) => {
+        <div className="table-wrap"><table className="platform-release-table"><colgroup><col className="platform-release-album-column" /><col className="platform-release-version-column" /><col className="platform-release-status-column" /><col className="platform-release-actions-column" /></colgroup><thead><tr><th>剧集</th><th>平台版本</th><th>审核 / 上架</th><th>同步操作</th></tr></thead><tbody>{albums.map((album) => {
           const reviewing = album.reviewStatus === 'REVIEWING' || album.reviewStatus === '1';
           return <tr key={`platform-${album.id}`}>
             <td><strong>{album.title}</strong><small>{album.tiktokAlbumId ?? '尚未创建平台剧目'}</small></td>
@@ -1163,6 +1205,7 @@ function AdminApp() {
             </td>
           </tr>;
         })}</tbody></table></div>
+        {platformSubmissions.length > 0 && <div className="platform-submissions" aria-live="polite"><h3>最近提交结果</h3>{platformSubmissions.map((item) => <div className={`platform-submission ${item.failed ? 'failed' : ''}`} key={item.id}><span>{item.failed ? <CircleAlert size={15} /> : <CheckCircle2 size={15} />}</span><div><strong>{item.albumTitle} · {item.action}</strong><p>{item.message}</p><small>{new Date(item.createdAt).toLocaleString('zh-CN')}{item.failed ? ' · 请处理后重试；未入队的操作不会出现在下方任务中' : ''}</small></div></div>)}</div>}
         <div className="platform-jobs-heading"><h3>最近 50 条平台任务</h3><button className="secondary" type="button" disabled={loading} onClick={() => void loadData()}>刷新状态</button></div>
         <div className="table-wrap"><table className="platform-jobs-table"><colgroup><col className="platform-job-target-column" /><col className="platform-job-action-column" /><col className="platform-job-status-column" /><col className="platform-job-business-column" /><col className="platform-job-detail-column" /></colgroup><thead><tr><th>剧目 / 分集</th><th>操作</th><th>任务状态</th><th>平台业务结果</th><th>时间 / 详情</th></tr></thead><tbody>{platformJobs.map((job) => { const details = platformBusinessDetails(job); return <tr key={job.id}><td><span className="platform-job-target" title={job.album?.title ?? job.episode?.title ?? job.albumId ?? '-'}>{job.album?.title ?? job.episode?.title ?? job.albumId ?? '-'}</span>{job.episode?.episodeNo && <small>第 {job.episode.episodeNo} 集 · {job.episode.title}</small>}</td><td>{platformJobLabels[job.kind] ?? job.kind}{job.kind === 'REVIEW' ? `（${job.snapshotJson?.priorityScore === 1 ? '加急' : job.snapshotJson?.priorityScore === 2 ? '普通' : '优先级未记录'}）` : ''}{(job.snapshotJson?.version ?? job.providerResponse?.version) ? ` · 版本 ${job.snapshotJson?.version ?? job.providerResponse?.version}` : ''}</td><td><Status value={job.status} /></td><td><strong className="platform-business-result">{platformBusinessResult(job)}</strong></td><td><small>{new Date(job.completedAt ?? job.createdAt).toLocaleString('zh-CN')}</small>{details.map((detail, index) => <small key={`${job.id}-detail-${index}`} className={detail.startsWith('审核原因') || detail.includes('异常') || detail.startsWith('任务错误') ? 'table-error' : 'platform-job-detail'}>{detail}</small>)}</td></tr>; })}</tbody></table>{!platformJobs.length && <p className="empty-copy table-empty">暂无平台同步任务</p>}</div>
       </Panel>}
@@ -1193,7 +1236,11 @@ function AdminApp() {
           <td><small>{new Date(job.completedAt ?? job.createdAt).toLocaleString('zh-CN')}</small>{job.errorMessage && <small className="table-error">{job.errorMessage}</small>}{job.providerRequestId && <small className="platform-job-detail">TikTok 请求 ID：{job.providerRequestId}</small>}</td>
         </tr>)}</tbody></table>{!releaseJobRows.length && <p className="empty-copy table-empty">暂无授权播放任务</p>}</div>
       </Panel>}
-      {tab === 'ads' && <Panel title="进入广告策略" description="配置将在新的小程序启动会话生效。激励门槛模式须先在 TikTok 平台确认可用。"><form className="policy-form" onSubmit={saveEntryAdPolicy}><label className="check-row"><input type="checkbox" checked={entryAdPolicy.enabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, enabled: event.target.checked }))} />启用进入广告</label><div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, mode: event.target.value as AppEntryAdPolicy['mode'] }))}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>广告位 ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required={entryAdPolicy.enabled} /></label><label>所需广告次数<input type="number" min="1" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>计数规则<select value={entryAdPolicy.countMode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, countMode: event.target.value as AppEntryAdPolicy['countMode'] }))}><option value="COMPLETED">完成激励后计数</option><option value="SHOWN">成功弹出即计数</option></select></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入</option></select></label></div><p className="form-help">当前策略版本：{entryAdPolicy.version}。关闭广告时，完成模式会重新弹出当前广告，弹出模式会直接进入下一条。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存进入广告策略</>}</button></form></Panel>}
+      {tab === 'ads' && <Panel title="进入广告策略" description="每个代码版本独立生效。旧包不传版本标识时使用 default。"><form className="policy-form" onSubmit={saveEntryAdPolicy}>
+        <div className="form-grid"><label>代码版本标识<input value={entryAdReleaseId} maxLength={64} pattern="[A-Za-z0-9._-]+" required onChange={(event) => setEntryAdReleaseId(event.target.value)} /></label><button className="secondary" type="button" onClick={() => void loadEntryAdPolicy(entryAdReleaseId)}>加载版本策略</button></div>
+        <label className="check-row"><input type="checkbox" checked={entryAdPolicy.enabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, enabled: event.target.checked }))} />启用进入广告</label>
+        <div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, mode: event.target.value as AppEntryAdPolicy['mode'] }))}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>广告位 ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required={entryAdPolicy.enabled} /></label><label>所需广告次数<input type="number" min="1" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>计数规则<select value={entryAdPolicy.countMode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, countMode: event.target.value as AppEntryAdPolicy['countMode'] }))}><option value="COMPLETED">完成激励后计数</option><option value="SHOWN">成功弹出即计数</option></select></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入</option></select></label></div>
+        <p className="form-help">正在编辑：{entryAdPolicy.releaseId} · 策略版本 {entryAdPolicy.version}。关闭广告时，用户可直接进入应用。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy || entryAdPolicy.releaseId !== entryAdReleaseId}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存进入广告策略</>}</button></form></Panel>}
       {tab === 'audience' && audience && <><section className="metrics"><Metric label="活跃观众" value={String(audience.activeUsers)} change={`${audience.from} 至 ${audience.to}`} icon={Users} tone="green" /><Metric label="新增观众" value={String(audience.newUsers)} change={`日活 ${audience.dau} · 周活 ${audience.wau} · 月活 ${audience.mau}`} icon={Database} tone="cyan" /><Metric label="观看会话" value={String(audience.watchSessions)} change="播放器会话开始次数" icon={Film} tone="pink" /><Metric label="完播集数" value={String(audience.completedEpisodes)} change="每用户每集首次完播" icon={CheckCircle2} tone="yellow" /></section><div className="content-grid"><Panel title="观众趋势" description="按天统计新增和活跃用户"><DailyBars title="新增观众" items={audience.dailyNewUsers} /><DailyBars title="日活用户" items={audience.dailyActiveUsers} /></Panel><Panel title="互动概览" description="帮助判断内容和运营活动表现"><BarList title="互动指标" items={[{ label: '收藏', value: audience.favorites }, { label: '分享', value: audience.shares }, { label: '搜索', value: audience.searches }]} color="cyan" /></Panel></div></>}
       {tab === 'playback' && playback && <><section className="metrics"><Metric label="播放器事件" value={String(playback.totalEvents)} change={`近 ${playback.periodDays} 天`} icon={Activity} tone="cyan" /><Metric label="首帧事件" value={String(playback.firstFrames)} change="成功启动" icon={Gauge} tone="green" /><Metric label="错误率" value={`${playback.errorRate}%`} change={`${playback.errorCount} 次错误`} icon={CircleAlert} tone="pink" /><Metric label="平均首帧" value={playback.averageStartupMs === null ? '-' : `${playback.averageStartupMs} 毫秒`} change="启动耗时" icon={Wifi} tone="yellow" /></section><div className="content-grid"><Panel title="播放事件分布" description="根据小程序播放器上报聚合"><BarList title="事件类型" items={playback.eventTypes.map((item) => ({ label: item.eventType, value: item.count }))} /><BarList title="清晰度" items={playback.definitions.map((item) => ({ label: item.definition, value: item.count }))} color="cyan" /><BarList title="网络类型" items={playback.networks.map((item) => ({ label: item.networkType, value: item.count }))} color="green" /></Panel><Panel title="最近播放错误" description="优先定位实际影响用户的剧集"><div className="compact-list">{playback.recentErrors.map((error, index) => <div className="compact-row" key={`${error.createdAt}-${index}`}><CircleAlert size={17} /><span><strong>{error.episodeTitle}</strong><small>{error.errorCode ?? '未知错误'} · {new Date(error.createdAt).toLocaleString('zh-CN')}</small></span></div>)}{!playback.recentErrors.length && <p className="empty-copy">暂无播放错误</p>}</div></Panel></div></>}
       {tab === 'security' && <div className="content-grid"><Panel title="当前管理员" description="角色和账号状态由服务端实时校验"><div className="readiness-list"><div><span className="ready-dot done"><CheckCircle2 size={15} /></span><span><strong>{currentAdmin?.email ?? '-'}</strong><small>角色：{currentAdmin?.role ?? '-'} · 状态：{currentAdmin?.status ?? '-'}</small></span></div><div><span className="ready-dot done"><CalendarDays size={15} /></span><span><strong>最近登录</strong><small>{currentAdmin?.lastLoginAt ? new Date(currentAdmin.lastLoginAt).toLocaleString('zh-CN') : '暂无记录'}</small></span></div></div></Panel><Panel title="修改密码" description="更新后当前登录令牌会立即失效"><form className="policy-form" onSubmit={changePassword}><label>当前密码<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label><label>新密码<input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label><button className="primary" type="submit" disabled={changingPassword}><Save size={17} />{changingPassword ? '更新中...' : '更新密码'}</button></form></Panel></div>}

@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Terms of Service</title>
+  <meta name="description" content="Terms of Service for TikTok Minis short-drama services, operated by Breeze and Azure Sky Culture Limited.">
+  <link rel="canonical" href="https://xuyins.com/static/terms-of-service.html">
+  <style>
+    :root {
+      color-scheme: light;
+      --text: #111827;
+      --muted: #4b5563;
+      --faint: #6b7280;
+      --line: #d9dee8;
+      --surface: #ffffff;
+      --soft: #f6f8fb;
+      --accent: #c9184a;
+      --accent-soft: #fff1f5;
+      --link: #075985;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background: #f3f5f8;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.65;
+    }
+    a { color: var(--link); }
+    .page { max-width: 1160px; margin: 0 auto; padding: 32px 20px 48px; }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 18px;
+      padding: 32px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    .brand { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .brand a { min-width: 0; overflow-wrap: anywhere; }
+    .brand a, .actions a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      background: var(--surface);
+      font-size: 13px;
+      font-weight: 750;
+      text-decoration: none;
+    }
+    .mark {
+      display: grid;
+      flex: 0 0 40px;
+      width: 40px;
+      height: 40px;
+      place-items: center;
+      border-radius: 8px;
+      color: #ffffff;
+      background: var(--accent);
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .eyebrow {
+      margin: 0;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 850;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    h1 { max-width: 860px; margin: 0; font-size: clamp(34px, 6vw, 64px); line-height: 1.04; letter-spacing: 0; }
+    .hero-layout { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 24px; align-items: start; }
+    .intro { min-width: 0; max-width: 760px; color: var(--muted); font-size: 16px; }
+    .intro, .document, .meta-panel, .detail-list { overflow-wrap: anywhere; }
+    .intro p { margin: 0 0 14px; }
+    .meta-panel, .detail-list {
+      display: grid;
+      min-width: 0;
+      margin: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--soft);
+    }
+    .meta-panel div, .detail-list div {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 12px;
+      padding: 13px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .meta-panel div:last-child, .detail-list div:last-child { border-bottom: 0; }
+    dt { color: var(--faint); font-size: 11px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    dd { min-width: 0; margin: 0; word-break: break-word; }
+    .actions, .markets { display: flex; flex-wrap: wrap; gap: 10px; }
+    .actions .primary { color: #ffffff; border-color: var(--accent); background: var(--accent); }
+    .market-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid #fbcfe8;
+      border-radius: 999px;
+      color: #9f1239;
+      background: var(--accent-soft);
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .reader { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 24px; align-items: start; margin-top: 26px; }
+    .toc {
+      position: sticky;
+      top: 24px;
+      max-height: calc(100dvh - 48px);
+      overflow: auto;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+    .toc-title { margin-bottom: 10px; color: var(--faint); font-size: 11px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+    .toc nav { display: grid; gap: 2px; }
+    .toc a { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 8px; padding: 8px; color: var(--muted); border-radius: 8px; font-size: 13px; line-height: 1.35; text-decoration: none; }
+    .toc a:hover { color: var(--text); background: var(--soft); }
+    .toc span { color: var(--accent); font-weight: 850; }
+    .document { min-width: 0; padding: 30px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 15.5px; }
+    .policy-section { scroll-margin-top: 24px; padding: 4px 0 30px; border-bottom: 1px solid var(--line); }
+    .policy-section:last-child { border-bottom: 0; }
+    .policy-subsection { scroll-margin-top: 24px; margin-top: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
+    h2, h3 { margin: 0 0 12px; color: var(--text); letter-spacing: 0; }
+    h2 { display: flex; gap: 10px; align-items: baseline; font-size: 24px; line-height: 1.25; }
+    h3 { display: flex; gap: 9px; align-items: baseline; font-size: 18px; line-height: 1.35; }
+    h2 span, h3 span { flex: 0 0 auto; color: var(--accent); font-size: .72em; font-weight: 850; }
+    p { margin: 0 0 13px; }
+    .policy-list { margin: 8px 0 16px; padding-left: 22px; }
+    .policy-list li { margin: 6px 0; padding-left: 4px; }
+    @media (max-width: 900px) {
+      .hero-layout, .reader { grid-template-columns: minmax(0, 1fr); }
+      .toc { position: static; max-height: none; }
+    }
+    @media (max-width: 560px) {
+      .page { padding: 18px 14px 34px; }
+      .hero, .document { padding: 20px; }
+      h1 { font-size: 34px; }
+      .meta-panel div, .detail-list div { grid-template-columns: 1fr; gap: 4px; }
+      .toc { display: none; }
+      .document { font-size: 14px; }
+      h2 { font-size: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div class="brand">
+        <a href="https://xuyins.com/">Breeze and Azure Sky Culture Limited</a>
+        <span class="mark">BA</span>
+      </div>
+      <p class="eyebrow">Terms of Service</p>
+      <h1>Terms of Service</h1>
+      <div class="hero-layout">
+        <div class="intro"><p>These Terms of Service govern your use of short-drama TikTok Minis operated by Breeze and Azure Sky Culture Limited (the "Service"). By using the Service, you agree to these Terms and our Privacy Policy. If you do not agree, do not use the Service.</p></div>
+        <dl class="meta-panel"><div><dt>Last Updated</dt><dd>October 8, 2026</dd></div><div><dt>Effective Date</dt><dd>October 8, 2026</dd></div><div><dt>Operator</dt><dd>Breeze and Azure Sky Culture Limited</dd></div><div><dt>Governing Law</dt><dd>Hong Kong, subject to mandatory local law</dd></div></dl>
+      </div>
+      <div class="actions">
+        <a href="https://xuyins.com/static/privacy-policy.html">Privacy Policy</a>
+        <a class="primary" href="mailto:caijiarong@xuyins.com">Contact</a>
+      </div>
+      <div class="markets" aria-label="Supported regional sections"><span class="market-chip">TikTok Minis</span><span class="market-chip">Ad-supported access</span></div>
+    </header>
+    <div class="reader">
+      <aside class="toc" aria-label="Terms of Service contents">
+        <div class="toc-title">Contents</div>
+        <nav><a href="#section-1"><span>1</span> The Service</a><a href="#section-2"><span>2</span> Eligibility</a><a href="#section-3"><span>3</span> Advertising and Access</a><a href="#section-4"><span>4</span> Content and Conduct</a><a href="#section-5"><span>5</span> Availability</a><a href="#section-6"><span>6</span> Third Parties</a><a href="#section-7"><span>7</span> Liability</a><a href="#section-8"><span>8</span> Privacy and Changes</a><a href="#section-9"><span>9</span> Law and Contact</a></nav>
+      </aside>
+      <section class="document"><section id="section-1" class="policy-section"><h2><span>1</span> The Service</h2><p class="policy-copy">We offer short-drama discovery and playback through TikTok Minis. Available titles and features can vary by region, platform and licensing arrangements. These Terms apply to each Mini operated by Breeze and Azure Sky Culture Limited.</p></section>
+<section id="section-2" class="policy-section"><h2><span>2</span> Eligibility</h2><p class="policy-copy">You must comply with TikTok's applicable terms, age requirements and local law. Do not use the Service where your use is prohibited.</p></section>
+<section id="section-3" class="policy-section"><h2><span>3</span> Advertising and Access</h2><p class="policy-copy">Some episodes may require completion of a rewarded advertisement to unlock access. Ad availability and eligibility may vary. Watching an ad does not transfer ownership of any content and does not guarantee permanent access if content is withdrawn or rights change.</p></section>
+<section id="section-4" class="policy-section"><h2><span>4</span> Content and Conduct</h2><p class="policy-copy">Content and the Service are protected by applicable intellectual-property rights. You receive a limited, personal, non-commercial right to use the Service as intended. Do not copy, redistribute, reverse engineer, interfere with security or ad verification, automate abuse, or infringe others' rights.</p></section>
+<section id="section-5" class="policy-section"><h2><span>5</span> Availability</h2><p class="policy-copy">We may change, restrict or discontinue content or functionality for licensing, operational, security, legal or platform reasons. We may restrict access where reasonably necessary to address misuse or comply with law. Where required by law, we will provide appropriate notice.</p></section>
+<section id="section-6" class="policy-section"><h2><span>6</span> Third Parties</h2><p class="policy-copy">The Service depends on TikTok and other third-party infrastructure, video and advertising services. Their separate terms may apply. We are not responsible for changes to third-party services outside our reasonable control.</p></section>
+<section id="section-7" class="policy-section"><h2><span>7</span> Liability</h2><p class="policy-copy">We use reasonable care to operate the Service, but cannot guarantee uninterrupted availability or that every advertisement or title will be available. Nothing in these Terms excludes or limits any consumer right, remedy or liability that cannot lawfully be excluded or limited.</p></section>
+<section id="section-8" class="policy-section"><h2><span>8</span> Privacy and Changes</h2><p class="policy-copy">Our Privacy Policy explains our processing of personal information. We may update these Terms and will publish the current version and effective date here. Material changes will be handled as required by applicable law.</p></section>
+<section id="section-9" class="policy-section"><h2><span>9</span> Law and Contact</h2><p class="policy-copy">These Terms are governed by the laws of Hong Kong, subject to mandatory consumer and other protections in your place of residence. Before starting a dispute, please contact us so we can try to resolve it. Nothing here removes a right to bring a claim in a competent local forum where applicable law grants that right.</p><dl class="detail-list">
+<div><dt>Operator</dt><dd>Breeze and Azure Sky Culture Limited</dd></div>
+<div><dt>Chinese legal name</dt><dd>長風碧雲文化傳媒有限公司</dd></div>
+<div><dt>Registered address</dt><dd>Unit 903, 9/F., Cameron Commercial Centre, 458-468 Hennessy Road, Causeway Bay, Hong Kong</dd></div>
+<div><dt>Contact email</dt><dd><a href="mailto:caijiarong@xuyins.com">caijiarong@xuyins.com</a></dd></div>
+</dl></section></section>
+    </div>
+  </main>
+</body>
+</html>

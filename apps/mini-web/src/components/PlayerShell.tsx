@@ -26,13 +26,14 @@ function errorCodeFromEvent(event: unknown) {
 
 const createPlaybackSessionId = () => typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `play-${Date.now()}`;
 
-export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [], onEpisodeEnded, immersive = false }: {
+export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [], onEpisodeEnded, onRetry, immersive = false }: {
   message?: string;
   coverUrl?: string | null;
   title?: string;
   playInfo?: PlayInfo;
   playlist?: PlayInfo[];
   onEpisodeEnded?: () => void;
+  onRetry?: () => void;
   immersive?: boolean;
 }) {
   const locale = useLocale();
@@ -42,6 +43,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
   const playlistRef = useRef(playlist);
   const endedHandlerRef = useRef(onEpisodeEnded);
   const [playerError, setPlayerError] = useState('');
+  const [playbackAttempt, setPlaybackAttempt] = useState(0);
   const isLocalPlayback = playInfo?.playbackMode === 'LOCAL' && Boolean(playInfo.sourceUrl);
   playlistRef.current = playlist;
   endedHandlerRef.current = onEpisodeEnded;
@@ -190,17 +192,24 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       else detach();
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [playInfo?.localEpisodeId, isLocalPlayback]);
+  }, [playInfo?.localEpisodeId, isLocalPlayback, playbackAttempt]);
 
   useEffect(() => () => controller.current?.destroy(), []);
 
   const visibleMessage = playerError || message;
+  const retryPlayback = () => {
+    controller.current?.destroy();
+    controller.current = undefined;
+    setPlayerError('');
+    setPlaybackAttempt((attempt) => attempt + 1);
+    onRetry?.();
+  };
   return <section className={`${styles.shell} ${immersive ? styles.immersive : ''}`} aria-label={t(locale, 'watchEpisode')}>
     {coverUrl && <img src={coverUrl} alt="" className={styles.poster} onError={(event) => { event.currentTarget.src = '/fallback-cover.svg'; }} />}
     <div className={styles.scrim} />
     {playInfo && !visibleMessage && (isLocalPlayback
       ? <video ref={localVideo} className={styles.localVideo} src={playInfo.sourceUrl ?? undefined} poster={coverUrl ?? undefined} controls playsInline autoPlay preload="auto" />
       : <div className={styles.playerMount} ref={mount} />)}
-    {visibleMessage ? <div className={styles.message}><AlertCircle size={20} aria-hidden="true" /><strong>{title}</strong><span>{visibleMessage}</span></div> : !playInfo ? <div className={styles.message}><Play size={24} aria-hidden="true" /><strong>{title}</strong><span>{t(locale, 'preparingPlayer')}</span></div> : null}
+    {visibleMessage ? <div className={styles.message}><AlertCircle size={20} aria-hidden="true" /><strong>{title}</strong><span>{visibleMessage}</span>{(playerError || onRetry) && <button className={styles.retryButton} onClick={retryPlayback}>{t(locale, 'retry')}</button>}</div> : !playInfo ? <div className={styles.message}><Play size={24} aria-hidden="true" /><strong>{title}</strong><span>{t(locale, 'preparingPlayer')}</span></div> : null}
   </section>;
 }

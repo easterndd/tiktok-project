@@ -12,8 +12,11 @@ h1, h2, h3 { font-family: Manrope, 'DM Sans', sans-serif; letter-spacing: -.035e
 img { display: block; max-width: 100%; }
 ::selection { color: #090a13; background: var(--cyan); }
 .eyebrow { margin: 0; color: var(--pink); font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
-.state, .loading-state { display: grid; justify-items: center; gap: 14px; min-height: 260px; padding: 48px 20px; color: var(--muted); text-align: center; }
-.state button, .state a { color: #0a0d14; background: var(--pink); border: 0; border-radius: 10px; padding: 0 16px; text-decoration: none; font-weight: 800; }
+.state, .loading-state { display: grid; align-content: center; justify-items: center; gap: 14px; min-height: 260px; padding: 48px 20px; color: var(--muted); text-align: center; }
+.state button, .state a { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: auto; min-width: 108px; max-width: min(220px, 80vw); min-height: 44px; padding: 0 18px; border-radius: 999px; text-decoration: none; font-size: 14px; font-weight: 800; line-height: 1; }
+.state button { color: #190b12; border: 1px solid rgba(255, 255, 255, .42); background: linear-gradient(135deg, #ffbed0, var(--pink)); box-shadow: 0 10px 24px rgba(255, 67, 109, .26); }
+.state a { color: var(--text); border: 1px solid rgba(255, 255, 255, .14); background: rgba(255, 255, 255, .07); box-shadow: inset 0 1px rgba(255, 255, 255, .08); }
+.state button:active, .state a:active { transform: scale(.97); }
 .loading-state { position: relative; }
 .loading-state::after { content: ''; width: 24px; height: 24px; border: 2px solid var(--line); border-top-color: var(--pink); border-radius: 50%; animation: spin .8s linear infinite; }
 .legal { max-width: 660px; color: var(--muted); line-height: 1.7; }

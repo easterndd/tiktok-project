@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ImagePlus, RefreshCw, Save } from 'lucide-react';
 import './drama-materials.css';
+import type { EditableAlbumMetadata } from './album-metadata-dialog';
 
 type Api = <T>(path: string, options?: RequestInit) => Promise<T>;
 type Cover = { id: string; publicUrl: string };
 type Media = { vid: string; title: string };
 type Episode = { id: string; episodeNo: number; title: string; isFree?: boolean; byteplusVid?: string | null; byteplusCoverUrl?: string | null; coverUrl?: string | null; coverAssetId?: string | null };
 type Translation = { locale: string; title: string; description?: string; coverUrl?: string | null };
-type Drama = { id: string; title: string; description?: string; language?: string; coverUrl?: string; coverAssetId?: string | null; reviewStatus?: string | null; episodes: Episode[]; translations?: Translation[] };
+type Drama = { id: string; title: string; description?: string; language?: string; coverUrl?: string; coverAssetId?: string | null; reviewStatus?: string | null; episodes: Episode[]; translations?: Translation[]; metadata?: EditableAlbumMetadata };
 type AlbumOption = { id: string; title: string; sharedPlayback?: boolean; reviewStatus?: string | null };
 
 function useCoverPreview(file: File | null, savedUrl?: string | null) {
@@ -106,39 +107,55 @@ function DramaMaterialEditor({ drama, api, media, onSaved }: { drama: Drama; api
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const locked = ['REVIEWING', '1'].includes(drama.reviewStatus ?? '');
+  const [scope, setScope] = useState(drama.metadata);
+  const [confirmed, setConfirmed] = useState(false);
+  const needsConfirmation = scope?.canEdit !== false && scope?.shared && scope.version === 0 && scope.targets?.some((target) => target.differs);
   async function save(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError('');
     setMessage('');
+    let textSaved = false;
     try {
+      if (needsConfirmation && !confirmed) throw new Error('请先确认统一资料的同步范围。');
+      const metadata = scope?.canEdit === false ? scope : await api<EditableAlbumMetadata>(`/admin/albums/${drama.id}/display-metadata`, { method: 'PATCH', body: JSON.stringify({
+        title: title.trim(), description: description.trim(), expectedVersion: scope?.version ?? 0,
+        translations: translations.map((item) => ({ locale: item.locale, title: item.title.trim(), description: (item.description ?? '').trim() }))
+      }) });
+      textSaved = scope?.canEdit !== false;
+      setScope(metadata);
+      setTitle(metadata.title);
+      setDescription(metadata.description ?? '');
       const uploaded = coverFile ? await uploadCover(api, coverFile) : null;
-      const result = await api<Drama>(`/admin/albums/${drama.id}`, { method: 'PATCH', body: JSON.stringify({ title: title.trim(), description: description.trim(), language: drama.language, ...(uploaded ? { coverAssetId: uploaded.id } : {}) }) });
+      const result = await api<Drama>(`/admin/albums/${drama.id}`, { method: 'PATCH', body: JSON.stringify({ language: drama.language, ...(uploaded ? { coverAssetId: uploaded.id } : {}) }) });
       setCover(result.coverUrl);
       setCoverFile(null);
       if (coverInput.current) coverInput.current.value = '';
       // Localized images override the primary cover in the mini app.
-      const nextTranslations = uploaded ? translations.map((item) => ({ ...item, coverUrl: null })) : translations;
+      const nextTranslations = (metadata.translations ?? []).map((item) => ({ ...item,
+        coverUrl: uploaded ? null : translations.find((draft) => draft.locale === item.locale)?.coverUrl }));
       setTranslations(nextTranslations);
       for (const translation of nextTranslations) {
-        await api('/admin/translations', { method: 'POST', body: JSON.stringify({ kind: 'album', contentId: drama.id, ...translation, title: translation.title.trim() }) });
+        await api('/admin/translations', { method: 'POST', body: JSON.stringify({ kind: 'album', contentId: drama.id, ...translation, title: translation.title.trim(), coverOnly: true }) });
       }
-      setMessage('剧目已保存，待同步新版本。');
+      setMessage(metadata.canEdit === false ? '当前应用的封面已保存。统一文案由主小程序 OWNER 管理。' : metadata.shared ? `统一文案已保存，正在同步到 ${metadata.targets?.length ?? 0} 个小程序。封面保存在当前应用；TikTok 平台素材需发布新版本。` : '剧目展示资料已保存。TikTok 平台素材需发布新版本。');
       await onSaved();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : '保存失败'); }
+    } catch (cause) { setError(`${textSaved ? '文案已保存，后续素材保存失败：' : ''}${cause instanceof Error ? cause.message : '保存失败'}`); }
     finally { setBusy(false); }
   }
   return <>
     {locked && <p className="material-message" role="status">当前版本审核中，暂不可编辑素材。</p>}
+    {scope?.canEdit === false && <p className="material-message" role="status">统一文案由主小程序 OWNER 管理，当前可编辑本应用封面。</p>}
+    {scope?.shared && <div className="material-message"><p>剧名、简介及多语言文案将同步到：{scope.targets?.map((target) => `${target.miniAppKey}${!scope.version && target.differs ? '（存在差异）' : ''}`).join('、')}。可在剧目列表的“编辑剧名与简介”查看同步结果及重试。</p>{needsConfirmation && <label className="material-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />确认统一以上小程序的文案</label>}</div>}
     <form className="material-album" onSubmit={save}>
       <fieldset disabled={busy || locked}>
         <div className="material-meta">
-          <label>剧名<input required value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} /></label>
-          <label>剧情简介<textarea rows={4} maxLength={20_000} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+          <label>剧名<input disabled={scope?.canEdit === false} required value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} /></label>
+          <label>剧情简介<textarea disabled={scope?.canEdit === false} rows={4} maxLength={20_000} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
         </div>
         <div className="material-cover">{coverPreview && <img src={coverPreview} alt="剧目封面" />}<label><span><ImagePlus size={16} />剧目封面</span><input ref={coverInput} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setCoverFile(event.target.files?.[0] ?? null)} />{coverFile && <small>{coverFile.name}</small>}</label></div>
-        {translations.length > 0 && <details className="material-translations"><summary>多语言标题与简介 · {translations.length}</summary>{translations.map((item, index) => <div key={item.locale} className="material-translation"><strong>{item.locale}</strong><label>标题<input required maxLength={160} value={item.title} onChange={(event) => setTranslations((items) => items.map((value, i) => i === index ? { ...value, title: event.target.value } : value))} /></label><label>简介<textarea rows={2} maxLength={20_000} value={item.description ?? ''} onChange={(event) => setTranslations((items) => items.map((value, i) => i === index ? { ...value, description: event.target.value } : value))} /></label><label>独立封面地址<input type="url" value={item.coverUrl ?? ''} onChange={(event) => setTranslations((items) => items.map((value, i) => i === index ? { ...value, coverUrl: event.target.value || null } : value))} /></label></div>)}</details>}
-        <button className="primary" type="submit"><Save size={15} />{busy ? '保存中...' : '保存剧目信息'}</button>
+        {translations.length > 0 && <details className="material-translations"><summary>多语言标题与简介 · {translations.length}</summary>{translations.map((item, index) => <div key={item.locale} className="material-translation"><strong>{item.locale}</strong><label>标题<input required disabled={scope?.canEdit === false} maxLength={160} value={item.title} onChange={(event) => setTranslations((items) => items.map((value, i) => i === index ? { ...value, title: event.target.value } : value))} /></label><label>简介<textarea rows={2} disabled={scope?.canEdit === false} maxLength={20_000} value={item.description ?? ''} onChange={(event) => setTranslations((items) => items.map((value, i) => i === index ? { ...value, description: event.target.value } : value))} /></label><label>独立封面地址<input type="url" value={item.coverUrl ?? ''} onChange={(event) => setTranslations((items) => items.map((value, i) => i === index ? { ...value, coverUrl: event.target.value || null } : value))} /></label></div>)}</details>}
+        <button className="primary" type="submit" disabled={Boolean(needsConfirmation && !confirmed)}><Save size={15} />{busy ? '保存中...' : scope?.canEdit === false ? '保存当前应用封面' : scope?.shared ? '保存并同步统一文案' : '保存剧目信息'}</button>
       </fieldset>
       {message && <p className="material-success" role="status">{message}</p>}{error && <p className="form-error" role="alert">{error}</p>}
     </form>
@@ -160,7 +177,10 @@ export function DramaMaterials({ albums, api, onSaved }: { albums: AlbumOption[]
     setError('');
     if (!albumId) return;
     setLoading(true);
-    api<Drama>(`/admin/albums/${albumId}`).then((result) => { if (!cancelled) setDrama(result); }).catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : '加载失败'); }).finally(() => { if (!cancelled) setLoading(false); });
+    Promise.all([api<Drama>(`/admin/albums/${albumId}`), api<EditableAlbumMetadata>(`/admin/albums/${albumId}/display-metadata`)]).then(([result, metadata]) => {
+      if (!cancelled) setDrama({ ...result, title: metadata.title, description: metadata.description, metadata,
+        translations: (metadata.translations ?? []).map((item) => ({ ...item, coverUrl: result.translations?.find((local) => local.locale === item.locale)?.coverUrl })) });
+    }).catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : '加载失败'); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [albumId, retry, api]);
   async function loadMedia() {

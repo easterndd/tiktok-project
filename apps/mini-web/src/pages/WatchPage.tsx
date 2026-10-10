@@ -1,6 +1,6 @@
 import type { AlbumDetail, EpisodeSummary, PlayInfo } from '@quickreels/shared-types';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ChevronDown, Info, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, RefreshCw, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { EpisodeList } from '../components/EpisodeList';
@@ -55,7 +55,7 @@ export function WatchPage() {
     navigate(`/watch/${albumId}/${defaultEpisode.id}`, { replace: true });
   }, [albumId, defaultEpisode, episodeId, navigate]);
 
-  if (album.isError || episodes.isError) return <section className={styles.resolving}><div className="state"><p>{t(locale, 'unavailable')}</p><Link to="/">{t(locale, 'back')}</Link></div></section>;
+  if (album.isError || episodes.isError) return <section className={styles.resolving}><div className="state"><p>{t(locale, 'unavailable')}</p><button className={styles.retryButton} onClick={() => { void Promise.all([album.refetch(), episodes.refetch()]); }}>{t(locale, 'retry')}</button><Link to="/">{t(locale, 'back')}</Link></div></section>;
   if (album.isLoading || episodes.isLoading) return <section className={styles.resolving}><LoadingState label={t(locale, 'preparingEpisode')} /></section>;
   if (!album.data || !defaultEpisode) return <section className={styles.resolving}><div className="state"><p>{t(locale, 'unavailable')}</p><Link to="/">{t(locale, 'back')}</Link></div></section>;
   if (!episodeId || playInfo.isLoading) return <section className={styles.resolving}><LoadingState label={t(locale, 'preparingEpisode')} /></section>;
@@ -63,8 +63,9 @@ export function WatchPage() {
   const detail = album.data;
   const currentEpisode = episodeItems.find((episode) => episode.id === episodeId);
   const localPlayback = playInfo.data?.playbackMode === 'LOCAL' && Boolean(playInfo.data.sourceUrl);
+  const byteplusPlayback = playInfo.data?.playbackMode === 'BYTEPLUS';
   const platformReady = hasTikTokMinis() && Boolean(window.TTMinis?.getPlayer);
-  const message = playInfo.isError ? t(locale, 'episodeLocked') : !localPlayback && !platformReady ? t(locale, 'platformCopy') : undefined;
+  const message = playInfo.isError ? t(locale, 'episodeLocked') : byteplusPlayback && !platformReady ? t(locale, 'platformCopy') : undefined;
   const goBack = () => window.history.length > 1 ? navigate(-1) : navigate('/');
   const previousEpisode = currentIndex > 0 ? episodeItems[currentIndex - 1] : undefined;
   const requestEpisode = (episode: EpisodeSummary | undefined) => {
@@ -99,6 +100,7 @@ export function WatchPage() {
   return <section className={styles.page} onTouchStartCapture={handleTouchStart} onTouchEndCapture={handleTouchEnd} onTouchCancelCapture={() => { touchStart.current = null; }}>
     <PlayerShell
       message={message}
+      onRetry={playInfo.isError ? () => { void playInfo.refetch(); } : undefined}
       playInfo={playInfo.data}
       playlist={playerPlaylist}
       onEpisodeEnded={() => requestEpisode(nextEpisode)}
@@ -113,7 +115,6 @@ export function WatchPage() {
     </header>
     <div className={styles.playerMeta}>
       <button className={styles.episodeTrigger} onClick={() => setEpisodePickerOpen(true)}><span>{currentEpisode ? `${t(locale, 'episode')} ${currentEpisode.episodeNo}` : t(locale, 'episodes')}</span><strong>{currentEpisode?.title ?? detail.title}</strong><ChevronDown size={16} aria-hidden="true" /></button>
-      {!localPlayback && <div className={styles.playerNotice}><Info size={15} aria-hidden="true" /><span>{!hasTikTokMinis() ? t(locale, 'openInTikTok') : t(locale, 'qualificationRequired')}</span></div>}
       {playInfo.isFetching && <div className={styles.sync}><RefreshCw size={14} aria-hidden="true" /> {t(locale, 'updatingPlayback')}</div>}
     </div>
     {episodePickerOpen && <div className={styles.sheetLayer} role="presentation">
@@ -123,6 +124,7 @@ export function WatchPage() {
         <header className={styles.sheetHeader}><div><span className="eyebrow">{detail.title}</span><h2>{t(locale, 'episodes')}</h2><p>{episodeItems.length} {t(locale, 'episodes')}</p></div><button className={styles.closeSheet} onClick={() => setEpisodePickerOpen(false)} aria-label="Close episode picker"><X size={19} /></button></header>
         {unlock.isPending && <p className={styles.sheetStatus}><RefreshCw size={14} aria-hidden="true" /> {t(locale, 'syncing')} · {unlockTarget?.title}</p>}
         {unlock.isError && <p className={styles.sheetError}>{t(locale, 'unlockFailed')}</p>}
+        {unlock.isError && unlockTarget && <button className={styles.retryButton} onClick={() => unlock.mutate(unlockTarget)}>{t(locale, 'retry')}</button>}
         <div className={styles.sheetList}><EpisodeList albumId={albumId} episodes={episodeItems} activeEpisodeId={episodeId} onEpisodeSelected={() => setEpisodePickerOpen(false)} onLocked={requestEpisode} /></div>
       </section>
     </div>}

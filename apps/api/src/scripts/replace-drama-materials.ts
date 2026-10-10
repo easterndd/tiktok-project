@@ -59,8 +59,8 @@ async function main() {
     return;
   }
   const credentials = values['credentials-file'] ? parseEnv(await readFile(resolve(required('credentials-file')), 'utf8')) : {};
-  const adminEmail = credentials.TALETV_ADMIN_EMAIL ?? credentials.ADMIN_EMAIL ?? credentials.ADMIN_BOOTSTRAP_EMAIL;
-  const adminPassword = credentials.TALETV_ADMIN_PASSWORD ?? credentials.ADMIN_PASSWORD ?? credentials.ADMIN_BOOTSTRAP_PASSWORD;
+  const adminEmail = process.env.TALETV_ADMIN_EMAIL ?? credentials.TALETV_ADMIN_EMAIL ?? credentials.ADMIN_EMAIL ?? credentials.ADMIN_BOOTSTRAP_EMAIL;
+  const adminPassword = process.env.TALETV_ADMIN_PASSWORD ?? credentials.TALETV_ADMIN_PASSWORD ?? credentials.ADMIN_PASSWORD ?? credentials.ADMIN_BOOTSTRAP_PASSWORD;
   if (!values['upload-only'] && (!adminEmail || !adminPassword)) throw new Error('Credentials file requires an administrator email and password for the target app.');
   const apiBase = required('api-base').replace(/\/$/, '');
   if (new URL(apiBase).protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(new URL(apiBase).hostname)) throw new Error('Remote API must use HTTPS.');

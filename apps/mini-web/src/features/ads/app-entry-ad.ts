@@ -24,7 +24,8 @@ function eventId() {
 }
 
 export function getLaunchId() {
-  const key = `${storagePrefix}_launch_id`;
+  const releaseId = import.meta.env.VITE_MINI_RELEASE_ID || 'default';
+  const key = releaseId === 'default' ? `${storagePrefix}_launch_id` : `${storagePrefix}_${releaseId}_launch_id`;
   const existing = sessionStorage.getItem(key);
   if (existing) return existing;
   const launchId = eventId();
@@ -34,7 +35,10 @@ export function getLaunchId() {
 
 export async function startAppEntryAdSession(): Promise<AppEntryAdSession> {
   if (isDemoMode()) return { required: false };
-  return apiClient.post<AppEntryAdSession>('/app-entry-ad-sessions', { launchId: getLaunchId() });
+  return apiClient.post<AppEntryAdSession>('/app-entry-ad-sessions', {
+    launchId: getLaunchId(),
+    releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default'
+  });
 }
 
 type EntryAdProgress = { shouldContinue: boolean; completedCount: number; requiredCount: number };

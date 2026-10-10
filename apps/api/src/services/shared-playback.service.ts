@@ -5,6 +5,7 @@ import { miniAppAdConfig, miniAppPlatformConfig, type MiniAppKey } from '../conf
 import { readAccessConfig } from '../lib/content-access';
 import { registerSharedPlaybackSnapshot, enqueueSharedAlbumAuthorization, enqueueSharedAlbumReconcile } from './shared-platform.service';
 import { TikTokShortDramaApiService } from './tiktok-short-drama-api.service';
+import { displayMetadataInput, enqueueDisplayMetadata, saveSharedDisplayMetadata } from './display-metadata.service';
 
 type Db = PrismaClient & { [key: string]: any };
 const conflict = (message: string) => Object.assign(new Error(message), { statusCode: 409 });
@@ -94,7 +95,14 @@ type PlaybackInput = { sharedDb: Db; sourceDb: Db; dbByApp: Record<string, Db>; 
 export async function authorizeSharedPlayback(input: PlaybackInput) {
   const api = input.sourceApi ?? new TikTokShortDramaApiService({ ...input.env, TIKTOK_CLIENT_KEY: miniAppPlatformConfig(input.env, input.sourceApp).clientKey, TIKTOK_CLIENT_SECRET: miniAppPlatformConfig(input.env, input.sourceApp).clientSecret });
   const source = await verifyPlaybackSource(input.sourceDb, api, input.sourceAlbumId);
-  const shared = await registerSharedPlaybackSnapshot(input.sharedDb, input.env, input.sourceApp, source);
+  let shared = await registerSharedPlaybackSnapshot(input.sharedDb, input.env, input.sourceApp, source);
+  // Explicit display edits made before the first grant must survive the platform snapshot.
+  if (!shared.displayMetadata) {
+    const local = await input.sourceDb.album.findUnique({ where: { id: input.sourceAlbumId }, include: { translations: true } });
+    if (local && (local.displayMetadataVersion ?? 0) > 0) shared = await saveSharedDisplayMetadata(input.sharedDb, shared,
+      displayMetadataInput.parse({ title: local.title, description: local.description ?? '', translations: (local.translations ?? []).map((item: any) => ({ locale: item.locale, title: item.title, description: item.description ?? '' })) }),
+      shared.displayMetadataVersion, `${input.sourceApp}:${input.operatorEmail}`);
+  }
   const items = [];
   for (const target of [...new Set(input.targetApps)]) {
     try {
@@ -104,8 +112,11 @@ export async function authorizeSharedPlayback(input: PlaybackInput) {
       if (!db || !config.clientKey || !config.clientSecret) throw conflict('目标小程序数据库或 TikTok 凭据未配置。');
       const targetOwnerId = await targetPlaybackOwner(db, input.operatorEmail, input.authorizedAdminIds?.[target]);
       const previous = shared.authorizations.find((entry: any) => entry.miniAppKey === target);
-      const albumId = await preparePlaybackTarget(db, input.env, input.sourceApp, target, source, previous?.targetLocalAlbumId);
+      const displaySource = shared.displayMetadata ? { ...source, ...displayMetadataInput.parse(shared.displayMetadata) } : source;
+      const albumId = await preparePlaybackTarget(db, input.env, input.sourceApp, target, displaySource, previous?.targetLocalAlbumId);
       const result = await enqueueSharedAlbumAuthorization(input.sharedDb, input.env, shared.id, target, albumId, targetOwnerId);
+      const latest = await input.sharedDb.sharedTikTokAlbum.findUnique({ where: { id: shared.id }, include: { authorizations: true } });
+      if (latest) await enqueueDisplayMetadata(input.sharedDb, latest, latest.authorizations.filter((entry: any) => entry.miniAppKey === target));
       items.push({ miniAppKey: target, accepted: true, albumId, operationId: result.operation?.id ?? null });
       if (!result.operation) await enqueueSharedAlbumReconcile(input.sharedDb, shared.id);
     } catch (error) { items.push({ miniAppKey: target, accepted: false, error: error instanceof Error ? error.message : '授权准备失败。' }); }

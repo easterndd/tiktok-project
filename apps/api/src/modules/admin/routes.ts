@@ -29,8 +29,24 @@ import {
 } from '../../services/shared-platform.service';
 import { authorizeSharedPlayback, sharedPlaybackStatus } from '../../services/shared-playback.service';
 import { miniAppKeys, type MiniAppKey } from '../../config/mini-apps';
+import { assertDisplayMetadataOwner, carryBaseTextChanges, displayMetadataInput, findDisplayMetadataAlbum, readDisplayMetadata, retryDisplayMetadata, saveLocalDisplayMetadata, saveSharedDisplayMetadata } from '../../services/display-metadata.service';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
+async function checkDisplayMetadataOwner(app: FastifyInstance, request: FastifyRequest, shared: any) {
+  const operator = await app.prisma.adminUser.findUniqueOrThrow({ where: { id: request.user.sub } });
+  const sourceIds = await playbackAdminIds(app, request, [shared.ownerMiniAppKey as MiniAppKey]);
+  await assertDisplayMetadataOwner(shared, app.miniAppPrisma as any, app.config.MINI_APP_KEY, request.user.role, operator.email, sourceIds[shared.ownerMiniAppKey as MiniAppKey]);
+  return `${app.config.MINI_APP_KEY}:${operator.id}`;
+}
+async function saveAlbumTranslationCover(app: FastifyInstance, albumId: string, locale: string, coverUrl: string | null | undefined) {
+  const existing = await app.prisma.albumTranslation.findUnique({ where: { albumId_locale: { albumId, locale } } });
+  if (existing) return app.prisma.albumTranslation.update({ where: { id: existing.id }, data: { coverUrl } });
+  const view = await readDisplayMetadata(app.sharedPrisma as any, app.miniAppPrisma as any, app.config.MINI_APP_KEY, albumId);
+  const text = view.translations.find((item) => item.locale === locale) ?? { title: view.title, description: view.description };
+  // The text worker may not have created a new locale yet. Never use client text in this path.
+  return app.prisma.albumTranslation.upsert({ where: { albumId_locale: { albumId, locale } },
+    create: { albumId, locale, title: text.title, description: text.description, coverUrl }, update: { coverUrl } });
+}
 async function assertPlatformOwner(app: FastifyInstance, albumId: string) {
   const shared = await app.sharedPrisma.miniAppAlbumAuthorization.findFirst({ where: {
     miniAppKey: app.config.MINI_APP_KEY, targetLocalAlbumId: albumId,
@@ -170,6 +186,7 @@ const analyticsQuery = z.object({
   days: z.coerce.number().int().min(1).max(90).optional()
 }).refine((value) => Boolean(value.from) === Boolean(value.to), { message: '开始日期和结束日期必须同时填写。' });
 const appEntryAdPolicyInput = z.object({
+  releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default'),
   enabled: z.boolean(),
   mode: z.enum(['INTERSTITIAL', 'REWARDED_GATED']),
   placementId: z.string().trim().max(128),
@@ -495,13 +512,16 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return { items: visible, nextCursor: hasMore ? visible.at(-1)?.id ?? null : null };
   });
 
-  app.get('/admin/app-entry-ad-policy', { preHandler: requireAdmin }, async () => readAppEntryAdPolicy(app));
+  app.get('/admin/app-entry-ad-policy', { preHandler: requireAdmin }, async (request) => {
+    const { releaseId } = z.object({ releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default') }).parse(request.query);
+    return readAppEntryAdPolicy(app, releaseId);
+  });
   app.put('/admin/app-entry-ad-policy', { preHandler: requireAdmin }, async (request) => {
     const input = appEntryAdPolicyInput.parse(request.body);
-    const current = await readAppEntryAdPolicy(app);
+    const current = await readAppEntryAdPolicy(app, input.releaseId);
     const policy = await app.prisma.appEntryAdPolicy.upsert({
-      where: { id: 'default' },
-      create: { id: 'default', ...input, version: 1, updatedBy: request.user.sub },
+      where: { releaseId: input.releaseId },
+      create: { id: input.releaseId === 'default' ? 'default' : `release:${input.releaseId}`, ...input, version: 1, updatedBy: request.user.sub },
       update: { ...input, version: current.version + 1, updatedBy: request.user.sub }
     });
     await audit(app, request.user.sub, 'UPDATE', 'AppEntryAdPolicy', policy.id, input);
@@ -729,13 +749,66 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return album;
   });
 
+  app.get('/admin/albums/:albumId/display-metadata', { preHandler: requireAdmin }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    const { sharedAlbum, ...view } = await readDisplayMetadata(app.sharedPrisma as any, app.miniAppPrisma as any, app.config.MINI_APP_KEY, albumId);
+    let canEdit = true;
+    if (sharedAlbum) {
+      try { await checkDisplayMetadataOwner(app, request, sharedAlbum); } catch (error) {
+        if ((error as { statusCode?: number }).statusCode !== 403) throw error;
+        canEdit = false;
+      }
+    } else canEdit = ['OWNER', 'EDITOR'].includes(request.user.role ?? '');
+    return { ...view, canEdit };
+  });
+
+  app.patch('/admin/albums/:albumId/display-metadata', { preHandler: requirePermission('content.write') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    const input = displayMetadataInput.extend({ expectedVersion: z.number().int().nonnegative() }).parse(request.body);
+    const previous = await readDisplayMetadata(app.sharedPrisma as any, app.miniAppPrisma as any, app.config.MINI_APP_KEY, albumId);
+    const metadata = carryBaseTextChanges(displayMetadataInput.parse(input), previous);
+    const shared = previous.sharedAlbum;
+    if (shared) {
+      const operator = await checkDisplayMetadataOwner(app, request, shared);
+      await saveSharedDisplayMetadata(app.sharedPrisma as any, shared, metadata, input.expectedVersion, operator);
+    } else await saveLocalDisplayMetadata(app.prisma as any, albumId, metadata);
+    await audit(app, request.user.sub, 'UPDATE_DISPLAY_METADATA', 'Album', albumId, { ...input, sharedAlbumId: shared?.id });
+    const { sharedAlbum, ...view } = await readDisplayMetadata(app.sharedPrisma as any, app.miniAppPrisma as any, app.config.MINI_APP_KEY, albumId);
+    return { ...view, canEdit: true };
+  });
+
+  app.post('/admin/albums/:albumId/display-metadata/retry', { preHandler: requirePermission('content.write') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    const { miniAppKey } = z.object({ miniAppKey: z.enum(miniAppKeys) }).parse(request.body);
+    const shared = await findDisplayMetadataAlbum(app.sharedPrisma as any, app.config.MINI_APP_KEY, albumId);
+    if (!shared) throw Object.assign(new Error('剧目没有共享资料。'), { statusCode: 409 });
+    await checkDisplayMetadataOwner(app, request, shared);
+    await retryDisplayMetadata(app.sharedPrisma as any, shared, miniAppKey);
+    await audit(app, request.user.sub, 'RETRY_DISPLAY_METADATA', 'Album', albumId, { miniAppKey, version: shared.displayMetadataVersion });
+    return { accepted: true };
+  });
+
   app.patch('/admin/albums/:albumId', { preHandler: requireAdmin }, async (request) => {
     const { albumId } = albumParams.parse(request.params);
     const input = albumPatch.parse(request.body);
     const cover = await validateReadyCover(app, input.coverAssetId);
-    const album = await app.prisma.album.update({ where: { id: albumId }, data: { ...albumDataWithAccess(app, input), coverUrl: cover?.publicUrl ?? input.coverUrl, coverAssetId: input.coverAssetId === undefined ? undefined : cover?.id ?? null } });
+    let metadataSync: { shared: boolean; version: number } | undefined;
+    const shared = (input.title !== undefined || input.description !== undefined)
+      ? await findDisplayMetadataAlbum(app.sharedPrisma as any, app.config.MINI_APP_KEY, albumId) : null;
+    if (shared) {
+      const current = await app.prisma.album.findUniqueOrThrow({ where: { id: albumId } });
+      if ((input.title !== undefined && input.title !== current.title) || (input.description !== undefined && input.description !== current.description)) {
+        const operator = await checkDisplayMetadataOwner(app, request, shared);
+        const view = await readDisplayMetadata(app.sharedPrisma as any, app.miniAppPrisma as any, app.config.MINI_APP_KEY, albumId);
+        const latest = await saveSharedDisplayMetadata(app.sharedPrisma as any, shared, carryBaseTextChanges(displayMetadataInput.parse({ ...view,
+          title: input.title ?? view.title, description: input.description ?? view.description }), view), view.version, operator);
+        metadataSync = { shared: true, version: latest.displayMetadataVersion };
+      }
+    }
+    const album = await app.prisma.album.update({ where: { id: albumId }, data: { ...albumDataWithAccess(app, input),
+      ...(shared ? { title: undefined, description: undefined } : input.title !== undefined || input.description !== undefined ? { displayMetadataVersion: { increment: 1 } } : {}), coverUrl: cover?.publicUrl ?? input.coverUrl, coverAssetId: input.coverAssetId === undefined ? undefined : cover?.id ?? null } });
     await audit(app, request.user.sub, 'UPDATE', 'Album', album.id, input);
-    return album;
+    return { ...album, ...(metadataSync ? { title: input.title ?? album.title, description: input.description ?? album.description, metadataSync } : {}) };
   });
 
   app.delete('/admin/albums/:albumId', { preHandler: requirePermission('content.write') }, async (request, reply) => {
@@ -1352,8 +1425,27 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return genre;
   });
   app.post('/admin/translations', { preHandler: requireAdmin }, async (request) => {
-    const input = z.object({ kind: z.enum(['album', 'episode']), contentId: z.string().min(1).max(128), locale: publicLocaleSchema, title: z.string().trim().min(1).max(160), description: z.string().trim().max(20_000).optional(), coverUrl: z.string().url().nullable().optional(), subtitleRef: z.string().max(512).nullable().optional() }).parse(request.body);
+    const input = z.object({ kind: z.enum(['album', 'episode']), contentId: z.string().min(1).max(128), locale: publicLocaleSchema, title: z.string().trim().min(1).max(160), description: z.string().trim().max(20_000).optional(), coverUrl: z.string().url().nullable().optional(), coverOnly: z.boolean().optional(), subtitleRef: z.string().max(512).nullable().optional() }).parse(request.body);
     if (input.kind === 'album') {
+      if (input.coverOnly) {
+        const translation = await saveAlbumTranslationCover(app, input.contentId, input.locale, input.coverUrl);
+        await audit(app, request.user.sub, 'UPDATE_TRANSLATION_COVER', 'AlbumTranslation', translation.id, { coverUrl: input.coverUrl });
+        return translation;
+      }
+      const shared = await findDisplayMetadataAlbum(app.sharedPrisma as any, app.config.MINI_APP_KEY, input.contentId);
+      if (shared) {
+        const current = await app.prisma.albumTranslation.findUnique({ where: { albumId_locale: { albumId: input.contentId, locale: input.locale } } });
+        if (!current || current.title !== input.title || current.description !== (input.description ?? '')) {
+          const operator = await checkDisplayMetadataOwner(app, request, shared);
+          const view = await readDisplayMetadata(app.sharedPrisma as any, app.miniAppPrisma as any, app.config.MINI_APP_KEY, input.contentId);
+          const text = { locale: input.locale, title: input.title, description: input.description ?? '' };
+          await saveSharedDisplayMetadata(app.sharedPrisma as any, shared, displayMetadataInput.parse({ ...view,
+            translations: [...view.translations.filter((item) => item.locale !== input.locale), text] }), view.version, operator);
+        }
+        if (input.coverUrl !== undefined) await saveAlbumTranslationCover(app, input.contentId, input.locale, input.coverUrl);
+        await audit(app, request.user.sub, 'UPSERT_SHARED_TRANSLATION', 'Album', input.contentId, input);
+        return { ...input, metadataSync: { shared: true } };
+      }
       const translation = await app.prisma.albumTranslation.upsert({ where: { albumId_locale: { albumId: input.contentId, locale: input.locale } }, create: { albumId: input.contentId, locale: input.locale, title: input.title, description: input.description ?? '', coverUrl: input.coverUrl }, update: { title: input.title, description: input.description ?? '', coverUrl: input.coverUrl } });
       await audit(app, request.user.sub, 'UPSERT', 'AlbumTranslation', translation.id, input);
       return translation;

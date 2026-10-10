@@ -1,0 +1,14 @@
+{
+  "appId": "7694100516736927765",
+  "dev": {
+    "name": "LuxeReel",
+    "host": "localhost",
+    "port": 5188,
+    "iconUrl": "",
+    "desc": "LuxeReel is a TikTok Minis short-drama app for discovering series, watching episodes, and resuming playback. Content availability varies by region.",
+    "ppLink": "https://xuyins.com/static/privacy-policy.html",
+    "tosLink": "https://xuyins.com/static/terms-of-service.html"
+  },
+  "navbar": { "bgColorLight": "#0f172a", "bgColorDark": "#0f172a" },
+  "build": { "htmlEntry": "index.html", "outputDir": "dist" }
+}
