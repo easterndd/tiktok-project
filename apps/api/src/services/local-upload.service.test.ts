@@ -106,6 +106,22 @@ describe('local upload recovery', () => {
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
+  it('releases a legacy parameter rejection after checking that no task VID exists', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-legacy-invalid-'));
+    try {
+      const path = join(directory, 'episode.mp4');
+      await writeFile(path, 'video');
+      const db = database(path, { status: 'PROCESSING', remoteStartedAt: new Date(instant.getTime() - 11 * 60_000),
+        errorMessage: '上传结果待确认：Upload Media Error: Error: {"ResponseMetadata":{"Error":{"Code":"InvalidParameter.InvalidParamErro' });
+      const provider = vod();
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, { ...env, LOCAL_UPLOAD_STORAGE_DIR: directory }, { now: () => instant });
+      assert.equal(provider.uploadCount(), 0);
+      assert.equal(db.job.status, 'FAILED');
+      assert.equal(db.job.remoteStartedAt, null);
+      assert.equal(db.job.localFilePath, path);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   it('releases a legacy task whose temporary file was lost', async () => {
     const db = database(null, { status: 'PROCESSING', uploadScope: null, startedAt: new Date(instant.getTime() - 60 * 60_000) });
     const provider = vod();
@@ -165,6 +181,33 @@ describe('local upload recovery', () => {
       assert.equal(attempts, 2);
       assert.equal(db.job.status, 'SUCCEEDED');
       assert.equal(db.episode.byteplusVid, 'vid-1');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('fails a provider parameter rejection and can retry the retained file directly', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-invalid-commit-'));
+    try {
+      const path = join(directory, 'episode.mp4');
+      await writeFile(path, 'video');
+      const db = database(path);
+      let attempts = 0;
+      const provider = vod({ known: [mediaFor()], upload: async () => {
+        attempts++;
+        if (attempts === 1) throw new BytePlusVodError('InvalidParameter.InvalidParamError: invalid Tags', false);
+        return { byteplusVid: 'vid-1' };
+      } });
+      provider.service.listMedia = async () => { throw new Error('Definite rejection must not query VOD on retry'); };
+      const config = { ...env, LOCAL_UPLOAD_STORAGE_DIR: directory };
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, config, { now: () => instant });
+      assert.equal(db.job.status, 'FAILED');
+      assert.equal(db.job.remoteStartedAt, null);
+      assert.equal(db.job.localFilePath, path);
+      assert.match(db.job.errorMessage, /InvalidParameter/);
+      db.job.status = 'PENDING';
+      db.job.retryCount = 0;
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, config, { now: () => instant });
+      assert.equal(attempts, 2);
+      assert.equal(db.job.status, 'SUCCEEDED');
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 

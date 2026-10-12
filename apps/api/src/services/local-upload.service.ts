@@ -91,8 +91,8 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
         .then((result) => { if (!result.count) lostLease = true; })
         .catch(() => { lostLease = true; });
     }, 30_000);
-    const fail = async (message: string) => prisma.$transaction(async (tx) => {
-      const changed = await tx.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { status: 'FAILED', errorMessage: message, leaseToken: null, leaseExpiresAt: null, nextAttemptAt: null, completedAt: now() } });
+    const fail = async (message: string, definite = false) => prisma.$transaction(async (tx) => {
+      const changed = await tx.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { status: 'FAILED', errorMessage: message, ...(definite ? { remoteStartedAt: null } : {}), leaseToken: null, leaseExpiresAt: null, nextAttemptAt: null, completedAt: now() } });
       if (changed.count) await tx.episode.updateMany({ where: { id: job.episodeId, byteplusVid: null, uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } }, data: { status: 'ERROR', byteplusUploadStatus: 'FAILED' } });
     });
     try {
@@ -113,6 +113,10 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
       }
       if (!media && remoteStartedAt && now().getTime() - remoteStartedAt.getTime() < recoveryWindowMs) {
         await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs), errorMessage: `BytePlus 上传结果待确认，正在核查任务 VID。${job.errorMessage ? `上次错误：${job.errorMessage}` : ''}`.slice(0, 500) } });
+        continue;
+      }
+      if (!media && remoteStartedAt && /InvalidParameter\.InvalidParamErro/i.test(job.errorMessage ?? '')) {
+        await fail('BytePlus 已拒绝上次上传请求（InvalidParameter.InvalidParamError）。旧版错误详情已截断；请检查上传参数后重试保留的文件。', true);
         continue;
       }
       if (!media) {
@@ -173,7 +177,7 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
       const attempts = job.retryCount + (attemptedUpload ? 1 : 0);
       if (retryable && attempts < (options.maxRetries ?? env.UPLOAD_MAX_RETRIES)) {
         await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { ...(!attemptedUpload ? { retryCount: { increment: 1 } } : {}), ...(!uncertain && !job.providerJobId ? { remoteStartedAt: null } : {}), leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs), errorMessage: `${uncertain ? '上传结果待确认' : '上传失败，稍后重试'}：${message}` } });
-      } else await fail(message);
+      } else await fail(message, error instanceof BytePlusVodError && !error.retryable && !error.uncertain);
       options.log?.('Local upload recovery.', { jobId: job.id, error: message });
     } finally { clearInterval(renew); }
   }

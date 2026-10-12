@@ -232,6 +232,51 @@ describe('BytePlusVodService', () => {
     }
   });
 
+  it('preserves a rejected commit error and does not treat it as an uncertain upload', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'byteplus-invalid-commit-'));
+    try {
+      const filePath = join(directory, 'episode.mp4');
+      await writeFile(filePath, Buffer.from('video-data'));
+      const response = { ResponseMetadata: { RequestId: '202610120818195FA476160CF69C4B0CE4', Action: 'CommitUploadInfo',
+        Error: { Code: 'InvalidParameter.InvalidParamError', Message: 'invalid Functions.Tags Authorization=private-value' } } };
+      const service = new BytePlusVodService(env, { vodService: {
+        UploadMedia: async () => { throw new Error(`Upload Media Error: Error: ${JSON.stringify(response)}`); }
+      } as never });
+      await assert.rejects(
+        () => service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: 'Episode 1', spaceName: 'space', byteplusAccountId: 'account' }),
+        (error: unknown) => {
+          assert.equal((error as { retryable?: boolean }).retryable, false);
+          assert.equal((error as { uncertain?: boolean }).uncertain, false);
+          assert.match((error as Error).message, /InvalidParameter\.InvalidParamError: invalid Functions\.Tags/);
+          assert.match((error as Error).message, /202610120818195FA476160CF69C4B0CE4/);
+          assert.doesNotMatch((error as Error).message, /private-value/);
+          return true;
+        }
+      );
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('keeps a transient commit rejection in reconciliation', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'byteplus-transient-commit-'));
+    try {
+      const filePath = join(directory, 'episode.mp4');
+      await writeFile(filePath, Buffer.from('video-data'));
+      const response = { ResponseMetadata: { Action: 'CommitUploadInfo',
+        Error: { Code: 'ServiceUnavailable', Message: 'Try again later' } } };
+      const service = new BytePlusVodService(env, { vodService: {
+        UploadMedia: async () => { throw new Error(`Upload Media Error: Error: ${JSON.stringify(response)}`); }
+      } as never });
+      await assert.rejects(
+        () => service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: 'Episode 1', spaceName: 'space', byteplusAccountId: 'account' }),
+        (error: unknown) => {
+          assert.equal((error as { retryable?: boolean }).retryable, true);
+          assert.equal((error as { uncertain?: boolean }).uncertain, true);
+          return true;
+        }
+      );
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   it('identifies multipart initialization errors from the upload host', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'byteplus-init-'));
     try {
