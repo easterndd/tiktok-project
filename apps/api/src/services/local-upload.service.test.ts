@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import type { PrismaClient } from '@prisma/client';
 import type { Env } from '../config/env';
 import { assertMediaScope, findUploadMedia, processLocalUploadJobs, uploadScope, uploadTags } from './local-upload.service';
-import type { BytePlusMedia, BytePlusVodService } from './byteplus-vod.service';
+import { BytePlusVodError, type BytePlusMedia, type BytePlusVodService } from './byteplus-vod.service';
 
 const env = {
   MINI_APP_KEY: 'storyland', TIKTOK_CLIENT_KEY: 'storyland-client', TIKTOK_CLIENT_SECRET: undefined,
@@ -115,8 +115,8 @@ describe('local upload recovery', () => {
     assert.equal(db.episode.byteplusUploadStatus, 'FAILED');
   });
 
-  it('does not upload while VOD lookup is unavailable', async () => {
-    const db = database(null);
+  it('does not upload an uncertain prior attempt while VOD lookup is unavailable', async () => {
+    const db = database(null, { remoteStartedAt: new Date(instant.getTime() - 60_000) });
     const provider = vod();
     provider.service.listMedia = async () => { throw new Error('network down'); };
     await processLocalUploadJobs(db.prisma, db.prisma, provider.service, env, { now: () => instant });
@@ -124,6 +124,48 @@ describe('local upload recovery', () => {
     assert.equal(db.job.status, 'PROCESSING');
     assert.equal(db.job.retryCount, 0);
     assert.match(db.job.errorMessage, /VOD 查询暂不可用/);
+  });
+
+  it('uploads a new server file without querying VOD before the upload', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-first-upload-'));
+    try {
+      const path = join(directory, 'episode.mp4');
+      await writeFile(path, 'video');
+      const db = database(path);
+      const provider = vod({ known: [mediaFor()] });
+      provider.service.listMedia = async () => { throw new Error('VOD list should not run before a first upload'); };
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, { ...env, LOCAL_UPLOAD_STORAGE_DIR: directory }, { now: () => instant });
+      assert.equal(provider.uploadCount(), 1);
+      assert.equal(db.job.status, 'SUCCEEDED');
+      assert.equal(db.job.providerJobId, 'vid-1');
+      assert.equal(db.episode.byteplusVid, 'vid-1');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('retries a definite upload failure without waiting for VOD discovery', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-definite-failure-'));
+    try {
+      const path = join(directory, 'episode.mp4');
+      await writeFile(path, 'video');
+      const db = database(path);
+      let attempts = 0;
+      const provider = vod({ known: [mediaFor()], upload: async () => {
+        attempts++;
+        if (attempts === 1) throw new BytePlusVodError('网络连接失败', true, false);
+        return { byteplusVid: 'vid-1' };
+      } });
+      provider.service.listMedia = async () => { throw new Error('Definite failure should retry the file directly'); };
+      const options = { now: () => instant };
+      const config = { ...env, LOCAL_UPLOAD_STORAGE_DIR: directory };
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, config, options);
+      assert.equal(db.job.status, 'PROCESSING');
+      assert.equal(db.job.remoteStartedAt, null);
+      assert.match(db.job.errorMessage, /网络连接失败/);
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, config, options);
+      assert.equal(attempts, 2);
+      assert.equal(db.job.status, 'SUCCEEDED');
+      assert.equal(db.episode.byteplusVid, 'vid-1');
+    } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
   it('does not bind a VID until VOD exposes the task ownership tags', async () => {

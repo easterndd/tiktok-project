@@ -93,23 +93,26 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
     }, 30_000);
     const fail = async (message: string) => prisma.$transaction(async (tx) => {
       const changed = await tx.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { status: 'FAILED', errorMessage: message, leaseToken: null, leaseExpiresAt: null, nextAttemptAt: null, completedAt: now() } });
-      if (changed.count) await tx.episode.updateMany({ where: { id: job.episodeId, byteplusVid: null }, data: { status: 'ERROR', byteplusUploadStatus: 'FAILED' } });
+      if (changed.count) await tx.episode.updateMany({ where: { id: job.episodeId, byteplusVid: null, uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } }, data: { status: 'ERROR', byteplusUploadStatus: 'FAILED' } });
     });
     try {
-      let media: BytePlusMedia | null;
-      try {
-        media = await findUploadMedia(service, env, job);
-      } catch (error) {
-        if ((error as { statusCode?: number }).statusCode) throw error;
-        const message = error instanceof Error ? error.message.slice(0, 400) : 'VOD 查询失败。';
-        await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: {
-          leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs),
-          errorMessage: `VOD 查询暂不可用，稍后自动重试：${message}`
-        } });
-        continue;
+      if (job.uploadScope && job.uploadScope !== uploadScope(env)) throw conflict('上传任务的小程序或 Client Key 已改变，不能继续上传。');
+      let media: BytePlusMedia | null = null;
+      if (job.providerJobId || remoteStartedAt) {
+        try {
+          media = await findUploadMedia(service, env, job);
+        } catch (error) {
+          if ((error as { statusCode?: number }).statusCode) throw error;
+          const message = error instanceof Error ? error.message.slice(0, 400) : 'VOD 查询失败。';
+          await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: {
+            leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs),
+            errorMessage: `上传结果待确认，VOD 查询暂不可用，稍后自动重试：${message}`
+          } });
+          continue;
+        }
       }
       if (!media && remoteStartedAt && now().getTime() - remoteStartedAt.getTime() < recoveryWindowMs) {
-        await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs), errorMessage: '上传结果确认中，正在自动查询当前小程序的 VOD 媒资。' } });
+        await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs), errorMessage: `BytePlus 上传结果待确认，正在核查任务 VID。${job.errorMessage ? `上次错误：${job.errorMessage}` : ''}`.slice(0, 500) } });
         continue;
       }
       if (!media) {
@@ -119,7 +122,7 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
         }
         if (job.providerJobId) { await fail('已记录的 VID 在 BytePlus 中不存在，请重新上传。'); continue; }
         if (job.episode.byteplusVid) { await fail('分集已绑定其他视频，已停止旧上传任务。'); continue; }
-        if (job.retryCount >= (options.maxRetries ?? env.UPLOAD_MAX_RETRIES)) { await fail('自动上传重试次数已耗尽，请重试原任务或重新选择文件上传。'); continue; }
+        if (job.retryCount >= (options.maxRetries ?? env.UPLOAD_MAX_RETRIES)) { await fail(job.errorMessage ?? '自动上传重试次数已耗尽，请重试原任务或重新选择文件上传。'); continue; }
         const directory = localUploadDirectory(env);
         const path = relative(directory, resolve(job.localFilePath));
         if (!path || path.startsWith('..') || isAbsolute(path)) throw conflict('上传文件不在配置的持久化目录中。');
@@ -166,8 +169,10 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
     } catch (error) {
       const message = error instanceof Error ? error.message.slice(0, 500) : '视频上传失败。';
       const retryable = error instanceof BytePlusVodError ? error.retryable : (error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error as { statusCode?: number }).statusCode;
-      if (retryable && job.retryCount < (options.maxRetries ?? env.UPLOAD_MAX_RETRIES)) {
-        await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { ...(!attemptedUpload ? { retryCount: { increment: 1 } } : {}), leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs), errorMessage: `自动恢复中：${message}` } });
+      const uncertain = error instanceof BytePlusVodError && error.uncertain;
+      const attempts = job.retryCount + (attemptedUpload ? 1 : 0);
+      if (retryable && attempts < (options.maxRetries ?? env.UPLOAD_MAX_RETRIES)) {
+        await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { ...(!attemptedUpload ? { retryCount: { increment: 1 } } : {}), ...(!uncertain && !job.providerJobId ? { remoteStartedAt: null } : {}), leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs), errorMessage: `${uncertain ? '上传结果待确认' : '上传失败，稍后重试'}：${message}` } });
       } else await fail(message);
       options.log?.('Local upload recovery.', { jobId: job.id, error: message });
     } finally { clearInterval(renew); }

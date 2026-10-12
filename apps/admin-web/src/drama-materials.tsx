@@ -198,7 +198,7 @@ function DramaMaterialEditor({ drama, api, media, onSaved }: { drama: Drama; api
   </>;
 }
 
-export function DramaMaterials({ albums, api, onSaved }: { albums: AlbumOption[]; api: Api; onSaved: () => Promise<void> }) {
+export function DramaMaterials({ albums, api, onSaved, selection }: { albums: AlbumOption[]; api: Api; onSaved: () => Promise<void>; selection?: { albumId: string; request: number } | null }) {
   const [albumId, setAlbumId] = useState('');
   const [drama, setDrama] = useState<Drama | null>(null);
   const [media, setMedia] = useState<Media[]>([]);
@@ -206,6 +206,11 @@ export function DramaMaterials({ albums, api, onSaved }: { albums: AlbumOption[]
   const [loading, setLoading] = useState(false);
   const [loadingMedia, setLoadingMedia] = useState(false);
   const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (!selection || !albums.some((item) => item.id === selection.albumId && !item.sharedPlayback)) return;
+    if (drama && !window.confirm('切换剧目将关闭当前编辑，未保存的修改会丢失。继续吗？')) return;
+    setAlbumId(selection.albumId);
+  }, [selection?.request]);
   useEffect(() => {
     let cancelled = false;
     setDrama(null);
@@ -232,7 +237,7 @@ export function DramaMaterials({ albums, api, onSaved }: { albums: AlbumOption[]
     } catch (cause) { setError(cause instanceof Error ? cause.message : '读取媒资失败'); }
     finally { setLoadingMedia(false); }
   }
-  return <section className="drama-materials" aria-labelledby="material-heading">
+  return <section id="drama-materials" className="drama-materials" aria-labelledby="material-heading">
     <header><h2 id="material-heading">剧目素材</h2><button type="button" className="secondary" disabled={loadingMedia} onClick={() => void loadMedia()}><RefreshCw size={15} />{loadingMedia ? '读取中...' : '刷新 VOD 媒资'}</button></header>
     <label className="material-picker">剧目<select value={albumId} onChange={(event) => { if (!drama || window.confirm('切换剧目将关闭当前编辑，未保存的修改会丢失。继续吗？')) setAlbumId(event.target.value); }}><option value="">请选择剧目</option>{albums.filter((item) => !item.sharedPlayback).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
     {loading && <p role="status">正在加载剧目...</p>}

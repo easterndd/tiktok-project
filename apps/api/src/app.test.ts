@@ -14,6 +14,7 @@ const env: Env = {
   DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
   MINI_APP_KEY: 'main',
   API_CORS_ORIGIN: 'http://localhost:5173',
+  TRUSTED_PROXY_CIDRS: '',
   TRUST_GEO_COUNTRY_HEADER: true,
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters',
   USER_JWT_EXPIRES_IN: 3_600,
@@ -299,7 +300,7 @@ async function createPrismaStub() {
 
 async function createTestApp(envOverrides: Partial<Env> = {}) {
   const prisma = await createPrismaStub();
-  const app = await buildApp({ ...env, ...envOverrides }, { prisma: prisma as unknown as PrismaClient });
+  const app = await buildApp({ ...env, ...envOverrides }, { prisma: prisma as unknown as PrismaClient, ...(envOverrides.TALETV_DATABASE_URL ? { taletvPrisma: prisma as unknown as PrismaClient } : {}) });
   await app.ready();
   return app;
 }
@@ -315,6 +316,56 @@ describe('QuicK ReeLS API', () => {
   afterEach(async () => {
     globalThis.fetch = originalFetch;
     while (apps.length) await apps.pop()!.close();
+  });
+
+  it('uses a forwarded client IP only when the immediate proxy is trusted', async () => {
+    const trusted = await createTestApp({ TRUSTED_PROXY_CIDRS: '172.20.0.2/32' });
+    apps.push(trusted);
+    for (let index = 0; index < 120; index += 1) {
+      const response = await trusted.inject({ method: 'GET', url: '/ready', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '198.51.100.1' } });
+      assert.equal(response.statusCode, 200);
+    }
+    const limited = await trusted.inject({ method: 'GET', url: '/ready', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '198.51.100.1' } });
+    assert.equal(limited.statusCode, 429);
+    assert.ok(Number(limited.headers['retry-after']) > 0);
+    const spoofedFirstHop = await trusted.inject({ method: 'GET', url: '/ready', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '203.0.113.99, 198.51.100.1' } });
+    assert.equal(spoofedFirstHop.statusCode, 429);
+    const otherClient = await trusted.inject({ method: 'GET', url: '/ready', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '198.51.100.2' } });
+    assert.equal(otherClient.statusCode, 200);
+
+    const untrusted = await createTestApp({ TRUSTED_PROXY_CIDRS: '172.20.0.2/32' });
+    apps.push(untrusted);
+    for (let index = 0; index < 120; index += 1) {
+      const response = await untrusted.inject({ method: 'GET', url: '/ready', remoteAddress: '198.51.100.10', headers: { 'x-forwarded-for': `198.51.100.${index + 20}` } });
+      assert.equal(response.statusCode, 200);
+    }
+    const spoofed = await untrusted.inject({ method: 'GET', url: '/ready', remoteAddress: '198.51.100.10', headers: { 'x-forwarded-for': '203.0.113.99' } });
+    assert.equal(spoofed.statusCode, 429);
+  });
+
+  it('separates an administrator from anonymous traffic and keeps login strict', async () => {
+    const app = await createTestApp({ TALETV_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=taletv' });
+    apps.push(app);
+    for (let index = 0; index < 120; index += 1) {
+      assert.equal((await app.inject({ method: 'GET', url: '/ready' })).statusCode, 200);
+    }
+    assert.equal((await app.inject({ method: 'GET', url: '/ready' })).statusCode, 429);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/taletv/v1/albums' })).statusCode, 200);
+    const authorization = `Bearer ${await token(app, 'admin')}`;
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/admin/me', headers: { authorization } })).statusCode, 200);
+    for (let index = 0; index < 119; index += 1) {
+      assert.equal((await app.inject({ method: 'GET', url: '/api/v1/albums', headers: { authorization } })).statusCode, 200);
+    }
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/albums', headers: { authorization } })).statusCode, 429);
+    const secondAdmin = `Bearer ${await app.jwt.sign({ sub: 'admin-2', kind: 'admin', appKey: 'main', role: 'OWNER', tokenVersion: 0 })}`;
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/albums', headers: { authorization: secondAdmin } })).statusCode, 200);
+
+    const loginApp = await createTestApp();
+    apps.push(loginApp);
+    for (let index = 0; index < 10; index += 1) {
+      assert.equal((await loginApp.inject({ method: 'POST', url: '/api/v1/admin/auth/login', payload: {} })).statusCode, 400);
+    }
+    assert.equal((await loginApp.inject({ method: 'POST', url: '/api/v1/admin/auth/login', payload: {} })).statusCode, 429);
   });
 
   it('replaces an episode VID and clears its old independent cover without deleting shared media', async () => {
@@ -381,11 +432,13 @@ describe('QuicK ReeLS API', () => {
     prisma.episode.updateMany = async (args: any) => { Object.assign(episode, args.data); return { count: 1 }; };
     prisma.episode.findUniqueOrThrow = async () => episode;
     prisma.platformSyncJob = { findFirst: async () => null };
-    prisma.uploadJob.findFirst = async () => null;
+    let uploadJobSelect: unknown;
+    prisma.uploadJob.findFirst = async (args: any) => { uploadJobSelect = args.select; return null; };
     const app = await buildApp(env, { prisma });
     apps.push(app);
     const response = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/reset-byteplus', headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: { confirmation: 'RESET_VIDEO_BINDING' } });
     assert.equal(response.statusCode, 200, response.body);
+    assert.deepEqual(uploadJobSelect, { id: true });
     assert.equal(episode.byteplusVid, null);
     assert.equal(episode.byteplusUploadStatus, 'PENDING');
     assert.equal(episode.status, 'DRAFT');

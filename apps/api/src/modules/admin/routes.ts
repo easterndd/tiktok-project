@@ -886,7 +886,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     await assertPlatformOwner(app, episode.albumId);
     const updated = await app.prisma.$transaction(async (tx) => {
       const active = await tx.platformSyncJob.findFirst({ where: { OR: [{ episodeId }, { albumId: episode.albumId }], status: { in: ['PENDING', 'PROCESSING', 'CONFLICT'] } } });
-      const uploading = await tx.uploadJob.findFirst({ where: { episodeId, status: { in: ['PENDING', 'PROCESSING'] } } });
+      const uploading = await tx.uploadJob.findFirst({
+        where: { episodeId, status: { in: ['PENDING', 'PROCESSING'] } },
+        select: { id: true }
+      });
       if (active || uploading || episode.tiktokEpisodeId || episode.tiktokVideoStatus === 'PROCESSING' || episode.status === 'ONLINE' || ['REVIEWING', '1'].includes(episode.album.reviewStatus ?? '')) {
         throw Object.assign(new Error('该集已有平台分集、平台任务、审核或线上状态，不能解除绑定；请先完成平台对账。'), { statusCode: 409 });
       }

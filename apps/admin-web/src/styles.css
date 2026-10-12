@@ -57,7 +57,7 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { padding: 11px 22px; color: #95a0b2; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 10px; font-weight: 800; text-align: left; text-transform: uppercase; letter-spacing: .08em; }
 td { padding: 14px 22px; color: var(--muted); border-bottom: 1px solid #edf0f4; white-space: nowrap; }
 tbody tr:last-child td { border-bottom: 0; }
-td:first-child { display: flex; align-items: center; gap: 9px; color: var(--ink); }
+td:first-child { color: var(--ink); }
 td:first-child strong { font-size: 12px; }
 .drama-thumb { display: inline-block; width: 30px; height: 38px; border-radius: 5px; background: linear-gradient(145deg, #fa7d96, #513e65); }
 tbody tr:nth-child(2) .drama-thumb { background: linear-gradient(145deg, #8ed9df, #40567f); }
@@ -150,11 +150,11 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .table-error { display: block; max-width: 260px; margin-top: 4px; overflow: hidden; color: #c5344d; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .draft-upload-state { display: grid; gap: 4px; min-width: 130px; }
 .upload-meter-wrap { display: grid; gap: 5px; width: min(100%, 180px); }
-.upload-meter-wrap small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.upload-meter-wrap small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: normal; }
 .upload-meter { position: relative; height: 6px; overflow: hidden; border-radius: 3px; background: #e3e8f0; }
 .upload-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--cyan); transition: width 180ms ease; }
 .upload-meter.processing > span { position: absolute; width: 38%; animation: upload-processing 1.3s ease-in-out infinite; background: var(--yellow); }
-.upload-meter.complete > span { background: var(--green); }
+.upload-meter.server-stored > span { background: var(--cyan); }
 @keyframes upload-processing { from { transform: translateX(-100%); } to { transform: translateX(265%); } }
 @media (prefers-reduced-motion: reduce) { .upload-meter > span { transition: none; } .upload-meter.processing > span { animation: none; width: 100%; } }
 .retry-button { min-height: 30px; margin: 0; padding: 0 9px; font-size: 10px; }
@@ -242,6 +242,16 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .platform-submission p { margin: 3px 0; color: inherit; line-height: 1.5; overflow-wrap: anywhere; }
 .platform-submission small { color: var(--muted); }
 .platform-jobs-table { min-width: 760px; table-layout: fixed; }
+.upload-jobs-table { min-width: 900px; table-layout: fixed; }
+.upload-jobs-table th:nth-child(1) { width: 12%; }
+.upload-jobs-table th:nth-child(2) { width: 15%; }
+.upload-jobs-table th:nth-child(3) { width: 11%; }
+.upload-jobs-table th:nth-child(4) { width: 36%; }
+.upload-jobs-table th:nth-child(5) { width: 16%; }
+.upload-jobs-table th:nth-child(6) { width: 10%; }
+.upload-jobs-table td { overflow-wrap: anywhere; white-space: normal; vertical-align: middle; }
+.upload-jobs-table .table-error { max-width: 100%; white-space: normal; }
+.upload-jobs-table .access-actions { min-width: 0; flex-wrap: wrap; }
 .platform-job-target-column { width: 22%; }
 .platform-job-action-column { width: 14%; }
 .platform-job-status-column { width: 12%; }

@@ -219,7 +219,7 @@ async function api<T>(path: string, options: RequestInit = {}) {
   const isFormData = options.body instanceof FormData;
   let response: Response;
   try {
-    response = await fetch(`${API}${path}`, {
+    const requestOptions: RequestInit = {
       ...options,
       headers: {
         Accept: 'application/json',
@@ -227,7 +227,16 @@ async function api<T>(path: string, options: RequestInit = {}) {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...options.headers
       }
-    });
+    };
+    response = await fetch(`${API}${path}`, requestOptions);
+    if (response.status === 429 && (options.method ?? 'GET').toUpperCase() === 'GET') {
+      const retryAfter = response.headers.get('Retry-After');
+      const seconds = Number(retryAfter);
+      if (retryAfter !== null && Number.isFinite(seconds) && seconds >= 0 && seconds <= 15) {
+        await new Promise((resolve) => window.setTimeout(resolve, Math.max(1, seconds) * 1_000));
+        response = await fetch(`${API}${path}`, requestOptions);
+      }
+    }
   } catch {
     throw new Error('无法连接后台 API，请检查 API 服务、域名和网络连接。');
   }
@@ -294,11 +303,11 @@ function Status({ value }: { value: string }) {
   return <span className={`status ${tone}`}><i />{labels[value] ?? value}</span>;
 }
 
-type DraftUploadProgress = UploadProgress | { phase: 'complete' };
+type DraftUploadProgress = UploadProgress | { phase: 'server-stored' };
 
 function UploadMeter({ episodeNo, progress }: { episodeNo: number; progress: DraftUploadProgress }) {
-  const percent = progress.phase === 'sending' ? progress.percent : progress.phase === 'complete' ? 100 : undefined;
-  const label = progress.phase === 'sending' ? `传至服务器 ${percent}%` : progress.phase === 'processing' ? 'BytePlus 处理中' : '上传完成';
+  const percent = progress.phase === 'sending' ? progress.percent : progress.phase === 'server-stored' ? 100 : undefined;
+  const label = progress.phase === 'sending' ? `传至服务器 ${percent}%` : progress.phase === 'processing' ? 'BytePlus 处理中' : '服务器已收文件，等待 BytePlus VID';
   return <div className="upload-meter-wrap">
     <div className={`upload-meter ${progress.phase}`} role="progressbar" aria-label={`第 ${episodeNo} 集上传进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-valuetext={label}>
       <span style={percent === undefined ? undefined : { width: `${percent}%` }} />
@@ -326,6 +335,11 @@ function AdminApp() {
   const [releaseTargets, setReleaseTargets] = useState<MiniApp[]>([]);
   const [releaseStatuses, setReleaseStatuses] = useState<SharedPlaybackStatus[]>([]);
   const playbackStatusRequest = useRef(0);
+  const loadingData = useRef(false);
+  const queuedDataLoad = useRef(false);
+  const latestLoadData = useRef<() => Promise<void>>(async () => {});
+  const materialSelectionRequest = useRef(0);
+  const [materialSelection, setMaterialSelection] = useState<{ albumId: string; request: number } | null>(null);
   const [releaseActionErrors, setReleaseActionErrors] = useState<Partial<Record<MiniApp, string>>>({});
   const [releaseWorking, setReleaseWorking] = useState<SharedPlaybackAction | null>(null);
   const [releaseError, setReleaseError] = useState('');
@@ -399,6 +413,8 @@ function AdminApp() {
   };
 
   const loadData = async () => {
+    if (loadingData.current) { queuedDataLoad.current = true; return; }
+    loadingData.current = true;
     setLoading(true);
     const entryAdPolicyRequest = loadEntryAdPolicy(entryAdReleaseId);
     const failures: string[] = [];
@@ -439,8 +455,14 @@ function AdminApp() {
       if (!(await entryAdPolicyRequest)) failures.push('进入广告策略');
       setMessage(failures.length ? `部分数据加载失败：${failures.join('、')}。请点击刷新重试。` : '');
       setLoading(false);
+      loadingData.current = false;
+      if (queuedDataLoad.current) {
+        queuedDataLoad.current = false;
+        queueMicrotask(() => void latestLoadData.current());
+      }
     }
   };
+  latestLoadData.current = loadData;
   const loadVodMedia = async () => {
     setLoadingVodMedia(true);
     try {
@@ -497,7 +519,7 @@ function AdminApp() {
     let cancelled = false;
     let polling = false;
     const timer = window.setInterval(() => {
-      if (polling) return;
+      if (polling || loadingData.current || document.visibilityState !== 'visible') return;
       polling = true;
       void Promise.all([api<{ items: UploadJob[] }>('/admin/upload-jobs'), api<{ items: EpisodeOption[] }>('/admin/episodes')])
         .then(([uploads, videos]) => { if (!cancelled) { setJobs(uploads.items); setEpisodes(videos.items); } })
@@ -510,13 +532,19 @@ function AdminApp() {
       if (!draft.savedEpisodeId || draft.uploadStatus === '上传中') return draft;
       const job = jobs.find((item) => item.episodeId === draft.savedEpisodeId);
       if (!job) return draft;
-      return { ...draft, uploadStatus: job.status === 'SUCCEEDED' ? '已上传' : job.status === 'FAILED' ? '上传失败' : job.status === 'PENDING' ? '已入队' : '自动恢复中', uploadError: job.errorMessage ?? undefined };
+      return { ...draft, uploadStatus: job.status === 'SUCCEEDED' ? '已上传' : job.status === 'FAILED' ? '上传失败' : job.status === 'PENDING' ? '待传至 BytePlus' : 'BytePlus 处理中', uploadError: job.errorMessage ?? undefined };
     }));
   }, [jobs]);
   useEffect(() => {
     if (!loggedIn || tab !== 'albums' || !releaseAlbumId || !releaseTargets.length) return;
-    void loadReleaseStatuses();
-    const timer = window.setInterval(() => void loadReleaseStatuses(), 10_000);
+    let polling = false;
+    const poll = () => {
+      if (polling || loadingData.current || document.visibilityState !== 'visible') return;
+      polling = true;
+      void loadReleaseStatuses().finally(() => { polling = false; });
+    };
+    poll();
+    const timer = window.setInterval(poll, 10_000);
     return () => { window.clearInterval(timer); playbackStatusRequest.current += 1; };
   }, [loggedIn, tab, releaseAlbumId, releaseTargets.join(',')]);
   useEffect(() => {
@@ -563,7 +591,7 @@ function AdminApp() {
         setCreateRewardedCount(saved.rewardedCount ?? 1);
         if (saved.episodes?.length) setDraftEpisodes(saved.episodes.map((episode) => ({
           ...episode, file: null, coverFile: null, coverPreviewUrl: '',
-          ...(episode.uploadStatus === '上传中' ? { uploadStatus: '待对账', uploadError: '上传页面曾中断，正在查询服务器任务。' } : {})
+          ...(episode.uploadStatus === '上传中' ? { uploadStatus: '待确认', uploadError: '上传页面曾中断，正在查询服务器任务。' } : {})
         })));
         setMessage('已恢复本地草稿；本地文件需重新选择后再上传。');
       }
@@ -748,9 +776,9 @@ function AdminApp() {
       form.append('file', draft.file);
       const result = await uploadMultipart<{ job: UploadJob }>(`${API}/admin/upload-jobs/local`, form, sessionStorage.getItem(adminTokenStorageKey),
         (progress) => setUploadProgress((current) => ({ ...current, [draft.localId]: progress })));
-      setUploadProgress((current) => ({ ...current, [draft.localId]: { phase: 'complete' } }));
+      setUploadProgress((current) => ({ ...current, [draft.localId]: { phase: 'server-stored' } }));
       setJobs((items) => [result.job, ...items.filter((job) => job.id !== result.job.id)]);
-      patchDraftEpisode(draft.localId, { uploadStatus: result.job.status === 'SUCCEEDED' ? '已上传' : '已入队', uploadError: undefined });
+      patchDraftEpisode(draft.localId, { uploadStatus: result.job.status === 'SUCCEEDED' ? '已上传' : '待传至 BytePlus', uploadError: undefined });
     } catch (error) {
       setUploadProgress((current) => {
         const next = { ...current };
@@ -772,7 +800,7 @@ function AdminApp() {
         setJobs(latest.items);
         needsReconciliation = latest.items.some((job) => job.episodeId === draft.savedEpisodeId && job.sourceType === 'FILE' && ['PENDING', 'PROCESSING'].includes(job.status));
       } catch { /* The original upload error remains actionable if the status refresh also fails. */ }
-      patchDraftEpisode(draft.localId, { uploadStatus: needsReconciliation ? '自动恢复中' : '上传失败', uploadError: needsReconciliation ? '服务器已接收任务，正在自动处理。' : uploadError });
+      patchDraftEpisode(draft.localId, { uploadStatus: needsReconciliation ? 'BytePlus 处理中' : '上传失败', uploadError: needsReconciliation ? '服务器已接收文件，BytePlus 上传尚未完成。' : uploadError });
       throw error;
     }
   };
@@ -804,10 +832,10 @@ function AdminApp() {
           setMessage(`已识别未完成的原有分集，将直接补传：${draftsToUpload.filter((episode, index) => episode.savedEpisodeId && !draftEpisodes[index]?.savedEpisodeId).map((episode) => `第${episode.episodeNo}集`).join('、')}。`);
         }
       }
-      const missingVideos = draftsToUpload.filter((episode) => !episode.file && !episode.byteplusVid && !['已上传', '已入队', '自动恢复中'].includes(episode.uploadStatus ?? ''));
+      const missingVideos = draftsToUpload.filter((episode) => !episode.file && !episode.byteplusVid && !['已上传', '待传至 BytePlus', 'BytePlus 处理中'].includes(episode.uploadStatus ?? ''));
       if (missingVideos.length) throw new Error(`请先为第 ${missingVideos.map((episode) => episode.episodeNo).join('、')} 集选择视频。`);
-      const pendingReconciliation = draftsToUpload.filter((episode) => episode.uploadStatus === '待对账');
-      if (pendingReconciliation.length) throw new Error(`第 ${pendingReconciliation.map((episode) => episode.episodeNo).join('、')} 集正在确认任务状态，请刷新上传任务。`);
+      const pendingConfirmation = draftsToUpload.filter((episode) => episode.uploadStatus === '待确认');
+      if (pendingConfirmation.length) throw new Error(`第 ${pendingConfirmation.map((episode) => episode.episodeNo).join('、')} 集正在确认任务状态，请刷新上传任务。`);
       const unsaved = draftsToUpload.filter((episode) => !episode.savedEpisodeId);
       if (unsaved.length) {
         const draftsWithCovers = await Promise.all(unsaved.map(async (episode) => ({ ...episode, coverAsset: await uploadEpisodeCover(episode) })));
@@ -858,7 +886,7 @@ function AdminApp() {
       }
       const failedUploads: DraftEpisode[] = [];
       for (const draft of draftsToUpload) {
-        if (!draft.file || draft.byteplusVid || ['已上传', '已入队', '自动恢复中'].includes(draft.uploadStatus ?? '')) continue;
+        if (!draft.file || draft.byteplusVid || ['已上传', '待传至 BytePlus', 'BytePlus 处理中'].includes(draft.uploadStatus ?? '')) continue;
         try {
           await uploadDraftVideo(draft);
         } catch {
@@ -910,6 +938,10 @@ function AdminApp() {
   const updateAccessDraft = (albumId: string, patch: NonNullable<Album['accessConfig']>) => {
     setAlbums((items) => items.map((item) => item.id === albumId ? { ...item, accessConfig: { ...item.accessConfig, ...patch } } : item));
     setDirtyAccessAlbumIds((current) => new Set(current).add(albumId));
+  };
+  const openDramaMaterials = (albumId: string) => {
+    setMaterialSelection({ albumId, request: ++materialSelectionRequest.current });
+    window.requestAnimationFrame(() => document.getElementById('drama-materials')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   };
   const deleteDraftAlbum = async (album: Album) => {
     const confirmation = album.sharedPlayback
@@ -990,7 +1022,7 @@ function AdminApp() {
     try {
       await api(`/admin/upload-jobs/${job.id}/reconcile`, { method: 'POST', body: JSON.stringify({}) });
       await loadData();
-      setMessage(`已请求自动核查“${job.episode?.title ?? job.episodeId}”的上传结果。`);
+      setMessage(`已请求继续处理“${job.episode?.title ?? job.episodeId}”的上传任务。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '上传任务对账失败');
     } finally {
@@ -1157,7 +1189,7 @@ function AdminApp() {
               <td><input type="checkbox" aria-label="单集免费" checked={episode.isFree} disabled={Boolean(episode.savedEpisodeId)} onChange={(event) => patchDraftEpisode(episode.localId, { isFree: event.target.checked })} /></td>
               <td><div className="episode-cover-cell"><label className="file-cell">{episode.coverFile?.name ?? (episode.coverAsset ? '已保存封面' : '使用专辑封面')}<input type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" disabled={Boolean(episode.savedEpisodeId)} onChange={(event) => selectEpisodeCover(episode, event.target.files?.[0] ?? null)} /></label>{(episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl) && <img className="episode-cover-preview" src={episode.coverAsset?.publicUrl ?? episode.coverPreviewUrl} alt={`${episode.title} 封面预览`} />}</div></td>
               <td><label className="file-cell">{episode.file?.name ?? (episode.byteplusVid ? '已有 BytePlus VID' : '选择视频')}<input type="file" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v" onChange={(event) => patchDraftEpisode(episode.localId, { file: event.target.files?.[0] ?? null, byteplusVid: '', uploadError: undefined })} /></label><select value={episode.byteplusVid ?? ''} onChange={(event) => patchDraftEpisode(episode.localId, { byteplusVid: event.target.value, file: null, uploadError: undefined })}><option value="">选择已有 VOD 媒资</option>{vodMedia.map((media) => <option key={media.vid} value={media.vid}>{media.title} · {media.vid}</option>)}</select><input className="table-input" placeholder="或粘贴已有 BytePlus VID" value={episode.byteplusVid ?? ''} onChange={(event) => patchDraftEpisode(episode.localId, { byteplusVid: event.target.value, file: null, uploadError: undefined })} /></td>
-              <td><div className="draft-upload-state"><span>{episode.byteplusVid ? '待从 VOD 导入' : episode.uploadStatus ?? (episode.file ? '待保存' : '缺少视频')}</span>{uploadProgress[episode.localId] && (episode.uploadStatus === '上传中' || episode.uploadStatus === '已上传') && <UploadMeter episodeNo={episode.episodeNo} progress={uploadProgress[episode.localId]} />}{episode.uploadError && <small className="table-error" title={episode.uploadError}>{episode.uploadError}</small>}{episode.uploadStatus === '上传失败' && episode.file && episode.savedEpisodeId && <button className="text-button retry-button" type="button" onClick={() => void uploadDraftVideo(episode).catch((error) => setMessage(error instanceof Error ? error.message : '上传失败'))}>重试上传</button>}</div></td>
+              <td><div className="draft-upload-state"><span>{episode.byteplusVid ? '待从 VOD 导入' : episode.uploadStatus ?? (episode.file ? '待保存' : '缺少视频')}</span>{uploadProgress[episode.localId] && (episode.uploadStatus === '上传中' || episode.uploadStatus === '待传至 BytePlus') && <UploadMeter episodeNo={episode.episodeNo} progress={uploadProgress[episode.localId]} />}{episode.uploadError && <small className="table-error" title={episode.uploadError}>{episode.uploadError}</small>}{episode.uploadStatus === '上传失败' && episode.file && episode.savedEpisodeId && <button className="text-button retry-button" type="button" onClick={() => void uploadDraftVideo(episode).catch((error) => setMessage(error instanceof Error ? error.message : '上传失败'))}>重试上传</button>}</div></td>
               <td><button className="more" type="button" disabled={Boolean(episode.savedEpisodeId)} onClick={() => setDraftEpisodes((items) => items.filter((item) => item.localId !== episode.localId))} title={episode.savedEpisodeId ? '已保存分集不能从当前表单删除' : '删除'}><Trash2 size={15} /></button></td>
             </tr>)}</tbody></table></div>
             <button className="secondary" type="button" onClick={() => setDraftEpisodes((items) => {
@@ -1170,9 +1202,10 @@ function AdminApp() {
             <button className="primary" type="submit" disabled={creating || (createMode === 'append' && !targetAlbumId) || !draftEpisodes.length}><Save size={17} />{creating ? '处理中...' : createMode === 'append' ? '保存并上传视频' : draftEpisodes.some((episode) => episode.savedEpisodeId) ? '保存新增分集并上传视频' : '保存草稿并上传视频'}</button>
           </form>
         </Panel>
-        <Panel title="上传处理状态"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>来源</th><th>状态</th><th>处理信息</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{jobs.map((job) => {
+        <Panel title="上传处理状态"><div className="table-wrap"><table className="upload-jobs-table"><thead><tr><th>剧集</th><th>来源</th><th>状态</th><th>处理信息</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{jobs.map((job) => {
           const legacyStale = job.status === 'PROCESSING' && job.sourceType === 'FILE' && !job.uploadScope && !job.providerJobId && job.startedAt && Date.now() - new Date(job.startedAt).getTime() >= 2 * 60 * 60_000;
-          return <tr key={job.id}><td><strong>{job.episode?.title ?? job.episodeId}</strong></td><td>{job.sourceName ?? job.sourceType ?? '链接'}</td><td><Status value={job.status} /></td><td>{job.errorMessage ? <small className="table-error" title={job.errorMessage}>{job.errorMessage}</small> : job.providerJobId ?? (job.status === 'PENDING' ? '等待上传' : job.status === 'PROCESSING' ? '正在上传或自动确认结果' : job.status === 'FAILED' ? '上传失败，可重新选择文件' : '任务已完成')}</td><td>{new Date(job.createdAt).toLocaleString('zh-CN')}</td><td>{job.status === 'PROCESSING' && job.sourceType === 'FILE' ? <span className="access-actions"><button className="secondary retry-button" type="button" disabled={reconcilingJobId === job.id} onClick={() => void reconcileUploadJob(job)}><RefreshCw size={14} />自动核查</button>{legacyStale && <button className="text-button retry-button" type="button" disabled={reconcilingJobId === job.id} onClick={() => void releaseUploadJob(job)}>释放旧任务</button>}</span> : job.status === 'FAILED' && (job.sourceType !== 'FILE' || job.localFilePath) ? <button className="secondary retry-button" type="button" disabled={retryingJobId === job.id} onClick={() => void retryUploadJob(job)}><RefreshCw size={14} />重新排队</button> : '—'}</td></tr>;
+          const activeSibling = jobs.some((other) => other.id !== job.id && other.episodeId === job.episodeId && ['PENDING', 'PROCESSING'].includes(other.status));
+          return <tr key={job.id}><td><strong>{job.episode?.title ?? job.episodeId}</strong></td><td>{job.sourceName ?? job.sourceType ?? '链接'}</td><td><Status value={job.status} /></td><td>{job.errorMessage ? <small className="table-error" title={job.errorMessage}>{job.errorMessage}</small> : job.providerJobId ?? (job.status === 'PENDING' ? '服务器已收文件，等待传至 BytePlus' : job.status === 'PROCESSING' ? '正在传至 BytePlus 或确认 VID' : job.status === 'FAILED' ? '上传失败，可重新选择文件' : '任务已完成')}</td><td>{new Date(job.createdAt).toLocaleString('zh-CN')}</td><td>{job.status === 'PROCESSING' && job.sourceType === 'FILE' ? <span className="access-actions"><button className="secondary retry-button" type="button" disabled={reconcilingJobId === job.id} onClick={() => void reconcileUploadJob(job)}><RefreshCw size={14} />继续处理</button>{legacyStale && <button className="text-button retry-button" type="button" disabled={reconcilingJobId === job.id} onClick={() => void releaseUploadJob(job)}>释放旧任务</button>}</span> : job.status === 'FAILED' && activeSibling ? '已有进行中任务' : job.status === 'FAILED' && (job.sourceType !== 'FILE' || job.localFilePath) ? <button className="secondary retry-button" type="button" disabled={retryingJobId === job.id} onClick={() => void retryUploadJob(job)}><RefreshCw size={14} />重新排队</button> : '—'}</td></tr>;
         })}</tbody></table>{!jobs.length && <p className="empty-copy table-empty">暂无上传记录</p>}</div></Panel>
       </>}
       {tab === 'albums' && <Panel title="剧集访问策略" description="免费集号上限和广告解锁配置会立即影响小程序访问"><div className="table-wrap"><table><thead><tr><th>剧集</th><th>发布状态</th><th>解锁配置</th><th>集数</th><th>免费集号上限</th><th>广告解锁</th><th>每集解锁所需广告观看次数</th><th>操作</th></tr></thead><tbody>{albums.map((album) => {
@@ -1192,12 +1225,13 @@ function AdminApp() {
           <td><div className="access-actions title-actions">
             {titleDirty && <button className="save-button" type="button" disabled={renaming || savingAlbumId === album.id} onClick={() => void saveAlbumTitle(album)}><Save size={14} />{renaming ? '同步中...' : '保存并同步到小程序'}</button>}
             {canWriteContent && <button className="secondary metadata-edit-button" type="button" disabled={renaming || savingAlbumId === album.id} onClick={() => setEditingAlbumMetadata({ ...album, title })}><Pencil size={14} />编辑简介</button>}
+            {canWriteContent && !album.sharedPlayback && <button className="secondary metadata-edit-button" type="button" onClick={() => openDramaMaterials(album.id)}><FileVideo size={14} />管理素材</button>}
             <button className="save-button" disabled={savingAlbumId === album.id || deletingAlbumId === album.id || !accessDirty} onClick={() => void updateAccess(album)}><Save size={15} />{savingAlbumId === album.id ? '保存中...' : '保存配置'}</button>
             {canDelete && <button className="delete-button" type="button" disabled={deletingAlbumId === album.id || savingAlbumId === album.id} onClick={() => void deleteDraftAlbum(album)} title={`删除${album.sharedPlayback ? '共享副本' : '草稿剧集'} ${album.title}`}><Trash2 size={15} />{deletingAlbumId === album.id ? '删除中...' : album.sharedPlayback ? '删除共享副本' : '删除'}</button>}
           </div></td>
         </tr>;
       })}</tbody></table></div></Panel>}
-      {tab === 'albums' && canWriteContent && <DramaMaterials albums={albums} api={api} onSaved={loadData} />}
+      {tab === 'albums' && canWriteContent && <DramaMaterials albums={albums} api={api} onSaved={loadData} selection={materialSelection} />}
       {tab === 'albums' && <Panel title="TikTok 媒资库发布链路" description="按顺序完成每部剧的媒资、版本、审核和上架；点击按钮仅表示加入异步队列。">
         <div className="platform-guide">
           <h3>每部剧的操作顺序</h3>

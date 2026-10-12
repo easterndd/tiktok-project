@@ -75,7 +75,8 @@ function isMiniBootstrapRequest(url: string) {
 
 export async function buildApp(env: Env, options: { prisma?: PrismaClient; taletvPrisma?: PrismaClient; miniPrisma?: Partial<Record<MiniAppKey, PrismaClient>>; sharedPrisma?: PrismaClient } = {}) {
   const mainEnv: Env = { ...env, MINI_APP_KEY: 'main' };
-  const app = Fastify({ logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' } });
+  const trustedProxies = env.TRUSTED_PROXY_CIDRS.split(',').map((value) => value.trim()).filter(Boolean);
+  const app = Fastify({ logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' }, trustProxy: trustedProxies.length ? trustedProxies : false });
   registerErrorHandler(app);
   const configuredCorsOrigins = env.API_CORS_ORIGIN.split(',');
   // Log before CORS can finish an OPTIONS request, including every Mini App prefix.
@@ -95,6 +96,7 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
   await app.register(cors, {
     origin: (origin, callback) => callback(null, isAllowedCorsOrigin(origin, configuredCorsOrigins)),
     credentials: true,
+    exposedHeaders: ['Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
   });
   app.addHook('onSend', async (_request, reply) => {
@@ -118,7 +120,26 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
   });
   await app.register(multipart, { limits: { files: 1, fileSize: 2 * 1024 * 1024 * 1024 } });
   await app.register(jwt, { secret: env.JWT_SECRET });
-  await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
+  await app.register(rateLimit, {
+    max: (request) => request.url.split('?', 1)[0].includes('/admin/') ? 240 : 120,
+    timeWindow: '1 minute',
+    keyGenerator: (request) => {
+      const parts = request.url.split('?', 1)[0].split('/');
+      const appKey = parts[1] === 'api' && parts[2] === 'v1' ? 'main' : parts[1] === 'api' && parts[3] === 'v1' ? parts[2] : 'system';
+      const ipKey = `ip:${appKey}:${request.ip}`;
+      if (request.url.split('?', 1)[0].endsWith('/auth/login') || request.url.split('?', 1)[0].endsWith('/auth/anonymous/session')) return ipKey;
+      const authorization = request.headers.authorization;
+      if (authorization?.startsWith('Bearer ')) {
+        try {
+          const claims = app.jwt.verify<{ sub?: string; kind?: string; appKey?: string }>(authorization.slice(7));
+          if (claims.sub && claims.appKey === appKey && (claims.kind === 'admin' || claims.kind === 'user')) {
+            return `${claims.kind}:${appKey}:${claims.sub}`;
+          }
+        } catch { /* Invalid tokens retain an IP based limit and fail authorization normally. */ }
+      }
+      return ipKey;
+    }
+  });
   await registerPrisma(app, options.prisma);
   const sharedDatabaseUrl = env.SHARED_PLATFORM_DATABASE_URL ?? mainEnv.DATABASE_URL;
   const sharedPrisma = options.sharedPrisma
