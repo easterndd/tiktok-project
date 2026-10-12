@@ -93,6 +93,7 @@ function uploadHostError(body: string, headers: Headers) {
 type BytePlusError = {
   ResponseMetadata?: {
     RequestId?: string;
+    Action?: string;
     Error?: {
       Code?: string;
       Message?: string;
@@ -216,6 +217,28 @@ function safeProviderMessage(body: BytePlusError | null, fallback: string) {
   return `${error.Code ?? 'BytePlusError'}: ${error.Message ?? fallback}`;
 }
 
+function sdkProviderError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error);
+  const start = raw.indexOf('{"ResponseMetadata"');
+  if (start < 0) return null;
+  try {
+    const body = JSON.parse(raw.slice(start)) as BytePlusError;
+    const provider = body.ResponseMetadata?.Error;
+    if (!provider?.Code) return null;
+    const code = provider.Code.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 100);
+    const message = (provider.Message ?? '').replace(/[\r\n\t]/g, ' ')
+      .replace(/https?:\/\/\S+/gi, '[url]')
+      .replace(/(?:Authorization|Auth|Token|Signature|Secret|SessionKey)\s*[:=]\s*\S+/gi, '[redacted]')
+      .replace(/[a-zA-Z0-9_+=/-]{40,}/g, '[id]').slice(0, 250);
+    const requestId = body.ResponseMetadata?.RequestId?.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+    const retryable = !/^(?:InvalidParameter|MissingParameter|Unauthorized|Forbidden|AccessDenied|Signature|InvalidAccessKey|ResourceNotFound)/i.test(code);
+    return { message: `${code}${message ? `: ${message}` : ''}${requestId ? ` (BytePlus 请求 ID：${requestId})` : ''}`,
+      retryable, uncertain: retryable && body.ResponseMetadata?.Action === 'CommitUploadInfo' };
+  } catch {
+    return null;
+  }
+}
+
 function isRetryableStatus(status: number) {
   return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 }
@@ -337,6 +360,8 @@ export class BytePlusVodService implements TikTokShortDramaService {
       }
     } catch (error) {
       if (error instanceof BytePlusVodError) throw error;
+      const provider = sdkProviderError(error);
+      if (provider) throw Object.assign(new BytePlusVodError(`BytePlus ${stage}失败：${provider.message}`, provider.retryable, provider.uncertain), { cause: error });
       const detail = error instanceof Error ? error.message.replace(/[\r\n\t]/g, ' ').slice(0, 240) : String(error).slice(0, 240);
       throw Object.assign(new BytePlusVodError(
         `BytePlus ${stage}失败：${detail}`,
