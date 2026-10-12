@@ -14,6 +14,7 @@ const env: Env = {
   MINI_APP_KEY: 'main',
   API_CORS_ORIGIN: 'http://localhost:5173',
   TRUST_GEO_COUNTRY_HEADER: false,
+  TRUSTED_PROXY_CIDRS: '',
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters',
   USER_JWT_EXPIRES_IN: 3_600,
   ADMIN_JWT_EXPIRES_IN: 28_800,

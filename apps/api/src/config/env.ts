@@ -24,6 +24,8 @@ const environment = z.object({
   CINEREELS_DATABASE_URL: z.string().url().optional(),
   TALEREELS_DATABASE_URL: z.string().url().optional(),
   API_CORS_ORIGIN: z.string().default('http://localhost:5173,http://localhost:5174,http://localhost:5175'),
+  // Only the reverse proxy's Docker IP or private subnet belongs here.
+  TRUSTED_PROXY_CIDRS: z.string().default(''),
   // Enable only when the public API is behind a proxy that removes client
   // supplied X-Geo-Country and writes a verified ISO 3166-1 alpha-2 value.
   TRUST_GEO_COUNTRY_HEADER: z.coerce.boolean().default(false),
@@ -78,6 +80,9 @@ export function loadEnv(source = process.env): Env {
   if (!parsed.success) {
     const keys = parsed.error.issues.map((issue) => issue.path.join('.')).join(', ');
     throw new Error(`Invalid environment configuration: ${keys}`);
+  }
+  if (parsed.data.TRUSTED_PROXY_CIDRS.split(',').some((value) => ['0.0.0.0/0', '::/0', '*'].includes(value.trim()))) {
+    throw new Error('TRUSTED_PROXY_CIDRS must not trust the public internet');
   }
   for (const key of miniAppKeys.slice(4)) {
     const databaseUrl = parsed.data[`${key.toUpperCase()}_DATABASE_URL`];
