@@ -1,0 +1,20 @@
+{
+  "appId": "7694875729137534996",
+  "dev": {
+    "name": "FluxPlay",
+    "host": "localhost",
+    "port": 5196,
+    "iconUrl": "",
+    "desc": "FluxPlay is a TikTok Minis short-drama app for discovering series, watching episodes, and resuming playback. Content availability varies by region.",
+    "ppLink": "https://xuyins.com/static/newbeat/privacy-policy.html",
+    "tosLink": "https://xuyins.com/static/newbeat/terms-of-service.html"
+  },
+  "navbar": {
+    "bgColorLight": "#0f172a",
+    "bgColorDark": "#0f172a"
+  },
+  "build": {
+    "htmlEntry": "index.html",
+    "outputDir": "dist"
+  }
+}

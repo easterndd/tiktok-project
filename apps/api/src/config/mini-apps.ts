@@ -1,12 +1,13 @@
 import type { Env } from './env';
 
-export const miniAppKeys = ['main', 'taletv', 'cinereels', 'talereels', 'storyland', 'dramacloud', 'dailyreel', 'dramaone', 'dramaup', 'dramavault', 'talehub', 'talebox', 'storyworld', 'storyhub', 'dramaroom', 'dramazone', 'taleflick', 'dramashort', 'storyshort', 'storyflicks', 'dramaflicks', 'crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama'] as const;
+export const miniAppKeys = ['main', 'taletv', 'cinereels', 'talereels', 'storyland', 'dramacloud', 'dailyreel', 'dramaone', 'dramaup', 'dramavault', 'talehub', 'talebox', 'storyworld', 'storyhub', 'dramaroom', 'dramazone', 'taleflick', 'dramashort', 'storyshort', 'storyflicks', 'dramaflicks', 'crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama', 'lucidreel', 'astraclip', 'lumoreel', 'orbitplay', 'zenclip', 'auraclip', 'fluxplay', 'driftreel', 'novaclip', 'lumishort'] as const;
 export type MiniAppKey = typeof miniAppKeys[number];
 
 export const miniAppOrganizations = {
   quickreels: { label: 'Quick Reels 组织', miniApps: ['main'] },
   taletv: { label: 'TaleTV / StoryLand 组织', miniApps: ['storyland', 'dramacloud', 'dailyreel', 'dramaone', 'dramaup', 'dramavault', 'talehub', 'talebox', 'storyworld', 'storyhub', 'dramaroom', 'dramazone', 'taleflick', 'dramashort', 'storyshort', 'storyflicks', 'dramaflicks', 'cinereels', 'taletv', 'talereels'] },
-  crownrush: { label: 'CrownRush 组织', miniApps: ['crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama'] }
+  crownrush: { label: 'CrownRush 组织', miniApps: ['crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama'] },
+  newbeat: { label: 'NEWBEAT DIGITAL MARKETING LIMITED', miniApps: ['lucidreel', 'astraclip', 'lumoreel', 'orbitplay', 'zenclip', 'auraclip', 'fluxplay', 'driftreel', 'novaclip', 'lumishort'] }
 } as const satisfies Record<string, { label: string; miniApps: readonly MiniAppKey[] }>;
 
 const miniAppOrganizationByKey = Object.fromEntries(Object.entries(miniAppOrganizations).flatMap(([organization, group]) => group.miniApps.map((key) => [key, organization]))) as Record<MiniAppKey, keyof typeof miniAppOrganizations>;
@@ -85,7 +86,12 @@ const secondaryMiniApps: Record<SecondaryMiniAppKey, {
   crownrush: definition('CROWNRUSH'), sugarreel: definition('SUGARREEL'), crimsonshorts: definition('CRIMSONSHORTS'),
   sweetreel: definition('SWEETREEL'), dramablaze: definition('DRAMABLAZE'), heartreel: definition('HEARTREEL'),
   dramahit: definition('DRAMAHIT'), crownreel: definition('CROWNREEL'), luxereel: definition('LUXEREEL'),
-  elitedrama: definition('ELITEDRAMA')
+  elitedrama: definition('ELITEDRAMA'),
+  lucidreel: definition('LUCIDREEL'), astraclip: definition('ASTRACLIP'),
+  lumoreel: definition('LUMOREEL'), orbitplay: definition('ORBITPLAY'),
+  zenclip: definition('ZENCLIP'), auraclip: definition('AURACLIP'),
+  fluxplay: definition('FLUXPLAY'), driftreel: definition('DRIFTREEL'),
+  novaclip: definition('NOVACLIP'), lumishort: definition('LUMISHORT')
 };
 
 function valueOf(env: Env, key: keyof Env) {

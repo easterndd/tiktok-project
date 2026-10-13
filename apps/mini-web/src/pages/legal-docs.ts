@@ -14,6 +14,7 @@ export const legalContactEmail = 'caixuwen@xuyins.com';
 export const taletvLegalContactEmail = 'SAGATHIYA@voisky.com';
 export const newMiniAppLegalContactEmail = 'caijiarong2@xuyins.com';
 export const breezeLegalContactEmail = 'caijiarong@xuyins.com';
+export const newbeatLegalContactEmail = 'caijiarong2@xuyins.com';
 const newMiniAppNames = {
   cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel',
   dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox',
@@ -21,13 +22,17 @@ const newMiniAppNames = {
   dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks',
   crownrush: 'CrownRush', sugarreel: 'SugarReel', crimsonshorts: 'CrimsonShorts',
   sweetreel: 'SweetReel', dramablaze: 'DramaBlaze', heartreel: 'HeartReel',
-  dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama'
+  dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama',
+  lucidreel: 'LucidReel', astraclip: 'AstraClip', lumoreel: 'LumoReel', orbitplay: 'OrbitPlay',
+  zenclip: 'ZenClip', auraclip: 'AuraClip', fluxplay: 'FluxPlay', driftreel: 'DriftReel',
+  novaclip: 'NovaClip', lumishort: 'LumiShort'
 } as const;
 export const breezeApps = ['crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama'] as const;
+export const newbeatApps = ['lucidreel', 'astraclip', 'lumoreel', 'orbitplay', 'zenclip', 'auraclip', 'fluxplay', 'driftreel', 'novaclip', 'lumishort'] as const;
 type LegalApp = 'quickreels' | 'taletv' | keyof typeof newMiniAppNames;
 
 export function legalContactForApp(app: LegalApp) {
-  return app === 'taletv' ? taletvLegalContactEmail : app === 'quickreels' ? legalContactEmail : breezeApps.includes(app as typeof breezeApps[number]) ? breezeLegalContactEmail : newMiniAppLegalContactEmail;
+  return app === 'taletv' ? taletvLegalContactEmail : app === 'quickreels' ? legalContactEmail : breezeApps.includes(app as typeof breezeApps[number]) ? breezeLegalContactEmail : newbeatApps.includes(app as typeof newbeatApps[number]) ? newbeatLegalContactEmail : newMiniAppLegalContactEmail;
 }
 
 const companyDetails = `<dl class="detail-list">
@@ -193,6 +198,7 @@ export function legalDocumentForApp(type: LegalDocumentType, app: LegalApp): Leg
   if (app === 'taletv') return sagathiyaLegalDocument(source, 'TaleTV', taletvLegalContactEmail);
   const brand = newMiniAppNames[app];
   if (breezeApps.includes(app as typeof breezeApps[number])) return breezeLegalDocuments[type];
+  if (newbeatApps.includes(app as typeof newbeatApps[number])) return newbeatLegalDocument(type);
   return sagathiyaLegalDocument(source, brand, newMiniAppLegalContactEmail);
 }
 
@@ -238,3 +244,48 @@ const breezeLegalDocuments: Record<LegalDocumentType, LegalDocument> = {
 <section id="section-9" class="policy-section"><h2><span>9</span> Law and Contact</h2><p class="policy-copy">These Terms are governed by the laws of Hong Kong, subject to mandatory consumer and other protections in your place of residence. Before starting a dispute, please contact us so we can try to resolve it. Nothing here removes a right to bring a claim in a competent local forum where applicable law grants that right.</p>${breezeCompanyDetails}</section>`
   }
 };
+
+const newbeatCompanyDetails = `<dl class="detail-list">
+<div><dt>Operator</dt><dd>NEWBEAT DIGITAL MARKETING LIMITED</dd></div>
+<div><dt>Contact email</dt><dd><a href="mailto:${newbeatLegalContactEmail}">${newbeatLegalContactEmail}</a></dd></div>
+</dl>`;
+
+const newbeatLegalDocuments: Record<LegalDocumentType, LegalDocument> = {
+  privacy: {
+    eyebrow: 'Privacy Policy',
+    title: 'Privacy Policy',
+    introHtml: '<p>This Privacy Policy explains how NEWBEAT DIGITAL MARKETING LIMITED ("we", "us", or "our") processes personal information when you use short-drama TikTok Minis that we operate (the "Service"). This Policy covers all of those Minis.</p><p>TikTok and other providers may process information independently under their own privacy notices.</p>',
+    marketsHtml: '<span class="market-chip">TikTok Minis</span><span class="market-chip">Short-drama service</span>',
+    metaHtml: '<div><dt>Last Updated</dt><dd>October 13, 2026</dd></div><div><dt>Effective Date</dt><dd>October 13, 2026</dd></div><div><dt>Controller</dt><dd>NEWBEAT DIGITAL MARKETING LIMITED</dd></div>',
+    tocHtml: '<a href="#section-1"><span>1</span> Operator</a><a href="#section-2"><span>2</span> Information We Process</a><a href="#section-3"><span>3</span> Purposes and Legal Bases</a><a href="#section-4"><span>4</span> Sharing and Transfers</a><a href="#section-5"><span>5</span> Retention and Security</a><a href="#section-6"><span>6</span> Choices and Rights</a><a href="#section-7"><span>7</span> Children</a><a href="#section-8"><span>8</span> Changes and Contact</a>',
+    contentHtml: `<section id="section-1" class="policy-section"><h2><span>1</span> Operator</h2><p>NEWBEAT DIGITAL MARKETING LIMITED determines how and why personal information is processed for the Service.</p>${newbeatCompanyDetails}</section>
+<section id="section-2" class="policy-section"><h2><span>2</span> Information We Process</h2><p>Depending on the Mini and features used, we may process a locally generated anonymous identifier; a TikTok-provided identifier or authorization data if platform sign-in is used; viewing history, playback progress, favorites, preferences and episode unlock records; advertisement request and completion signals; IP address, device and network information, logs, diagnostics and security events; and information you send when contacting us. We do not require a separate Service password, contacts, precise location or payment-card details to watch short dramas.</p><p>Local storage helps us remember the Mini installation and viewing state. TikTok and advertising providers may use their own technologies under their separate notices.</p></section>
+<section id="section-3" class="policy-section"><h2><span>3</span> Purposes and Legal Bases</h2><p>We use information to deliver and personalize playback, remember progress and unlock status, verify advertising-supported access, secure the Service, prevent abuse, diagnose errors, answer requests and comply with law. Where a legal basis is required, it may be performance of a service, our legitimate interests, a legal obligation or your consent, depending on the activity and applicable law. You may withdraw consent where consent is the basis, without affecting earlier lawful processing.</p></section>
+<section id="section-4" class="policy-section"><h2><span>4</span> Sharing and Transfers</h2><p>We share information only as needed with TikTok, video delivery, hosting, advertising, security and support providers; authorized personnel; and authorities where required by law. We do not sell personal information for money. Providers may process information in countries outside your own. Where required, we use appropriate safeguards for international transfers.</p></section>
+<section id="section-5" class="policy-section"><h2><span>5</span> Retention and Security</h2><p>We retain information only as long as reasonably necessary for these purposes, including security, dispute resolution and legal obligations. We apply reasonable technical and organizational safeguards, but no online service is completely secure.</p></section>
+<section id="section-6" class="policy-section"><h2><span>6</span> Choices and Rights</h2><p>Depending on applicable law, you may request access, correction, deletion, portability or restriction of your information, object to certain processing, withdraw consent or complain to a relevant authority. Contact us at the address below. We may ask for information needed to verify the request and locate the affected Mini installation. Clearing local storage may remove local identifiers and progress but does not by itself delete all server records.</p></section>
+<section id="section-7" class="policy-section"><h2><span>7</span> Children</h2><p>The Service is subject to TikTok Minis age requirements and applicable law. We do not knowingly process children's information in violation of those requirements. Contact us if you believe this has happened.</p></section>
+<section id="section-8" class="policy-section"><h2><span>8</span> Changes and Contact</h2><p>We may update this Policy when the Service or legal requirements change. The current version and effective date will be published here. For privacy requests, contact:</p>${newbeatCompanyDetails}</section>`
+  },
+  terms: {
+    eyebrow: 'Terms of Service',
+    title: 'Terms of Service',
+    introHtml: '<p>These Terms govern your use of short-drama TikTok Minis operated by NEWBEAT DIGITAL MARKETING LIMITED (the "Service"). By using the Service, you agree to these Terms and our Privacy Policy. If you do not agree, do not use the Service.</p>',
+    marketsHtml: '<span class="market-chip">TikTok Minis</span><span class="market-chip">Ad-supported access</span>',
+    metaHtml: '<div><dt>Last Updated</dt><dd>October 13, 2026</dd></div><div><dt>Effective Date</dt><dd>October 13, 2026</dd></div><div><dt>Operator</dt><dd>NEWBEAT DIGITAL MARKETING LIMITED</dd></div>',
+    tocHtml: '<a href="#section-1"><span>1</span> The Service</a><a href="#section-2"><span>2</span> Eligibility</a><a href="#section-3"><span>3</span> Advertising</a><a href="#section-4"><span>4</span> License and Conduct</a><a href="#section-5"><span>5</span> Availability</a><a href="#section-6"><span>6</span> Third Parties</a><a href="#section-7"><span>7</span> Liability</a><a href="#section-8"><span>8</span> Privacy and Changes</a><a href="#section-9"><span>9</span> Disputes and Contact</a>',
+    contentHtml: `<section id="section-1" class="policy-section"><h2><span>1</span> The Service</h2><p>NEWBEAT DIGITAL MARKETING LIMITED provides short-drama discovery and playback through TikTok Minis. Titles and features may vary by location, license and platform. These Terms apply to every Mini we operate.</p></section>
+<section id="section-2" class="policy-section"><h2><span>2</span> Eligibility</h2><p>You must meet TikTok's applicable age and account requirements and comply with local law. If you are below the age of legal majority, obtain any permission required from a parent or guardian.</p></section>
+<section id="section-3" class="policy-section"><h2><span>3</span> Advertising</h2><p>Where enabled, access to some episodes may depend on completing a rewarded advertisement. Advertisement availability and eligibility may vary. Completing an advertisement does not transfer ownership of content or guarantee permanent access if rights or availability change. The Service currently does not offer direct purchases or subscriptions.</p></section>
+<section id="section-4" class="policy-section"><h2><span>4</span> License and Conduct</h2><p>Subject to these Terms, we grant you a limited, personal, revocable, non-transferable right to use the Service for non-commercial entertainment. The Service and its content are owned by us or our licensors. Do not copy or redistribute content, infringe rights, bypass episode locks or ad verification, automate impressions, interfere with security or reverse engineer the Service except where law permits it.</p></section>
+<section id="section-5" class="policy-section"><h2><span>5</span> Availability</h2><p>We may modify, restrict, suspend or discontinue content or features for licensing, operational, security, legal or platform reasons. We may restrict access to address misuse or protect the Service. We will provide notice where required by law.</p></section>
+<section id="section-6" class="policy-section"><h2><span>6</span> Third Parties</h2><p>The Service relies on TikTok and third-party hosting, video and advertising services. Their own terms and notices may apply to their services.</p></section>
+<section id="section-7" class="policy-section"><h2><span>7</span> Liability</h2><p>We use reasonable care to provide the Service but cannot promise uninterrupted availability or that each title or advertisement will always be available. Nothing in these Terms excludes rights, remedies or liabilities that cannot lawfully be excluded.</p></section>
+<section id="section-8" class="policy-section"><h2><span>8</span> Privacy and Changes</h2><p>Our Privacy Policy describes how we process information. We may update these Terms and publish the current version and effective date here. Material changes will be handled as required by applicable law.</p></section>
+<section id="section-9" class="policy-section"><h2><span>9</span> Disputes and Contact</h2><p>Applicable law governs these Terms, subject to mandatory protections in your place of residence. Please contact us first so we can try to resolve a dispute. Nothing here removes any right to bring a claim in a competent forum under applicable law.</p>${newbeatCompanyDetails}</section>`
+  }
+};
+
+function newbeatLegalDocument(type: LegalDocumentType): LegalDocument {
+  return newbeatLegalDocuments[type];
+}
