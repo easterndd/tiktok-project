@@ -1,0 +1,20 @@
+{
+  "appId": "7694875428925736980",
+  "dev": {
+    "name": "LumiShort",
+    "host": "localhost",
+    "port": 5199,
+    "iconUrl": "",
+    "desc": "LumiShort is a TikTok Minis short-drama app for discovering series, watching episodes, and resuming playback. Content availability varies by region.",
+    "ppLink": "https://xuyins.com/static/newbeat/privacy-policy.html",
+    "tosLink": "https://xuyins.com/static/newbeat/terms-of-service.html"
+  },
+  "navbar": {
+    "bgColorLight": "#0f172a",
+    "bgColorDark": "#0f172a"
+  },
+  "build": {
+    "htmlEntry": "index.html",
+    "outputDir": "dist"
+  }
+}
