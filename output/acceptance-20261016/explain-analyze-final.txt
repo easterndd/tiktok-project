@@ -1,0 +1,29 @@
+SET
+                                                                                QUERY PLAN                                                                                 
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=20974.97..20974.98 rows=1 width=8) (actual time=98.202..98.203 rows=1 loops=1)
+   Buffers: shared hit=21228
+   ->  Index Only Scan using "AppSession_userId_startedAt_idx" on "AppSession"  (cost=0.42..20146.01 rows=331584 width=26) (actual time=0.029..64.092 rows=332626 loops=1)
+         Index Cond: (("startedAt" >= '2026-09-16 00:00:00'::timestamp without time zone) AND ("startedAt" < '2026-10-16 00:00:00'::timestamp without time zone))
+         Heap Fetches: 60166
+         Buffers: shared hit=21228
+ Planning:
+   Buffers: shared hit=208
+ Planning Time: 1.834 ms
+ Execution Time: 98.327 ms
+(10 rows)
+
+                                                                                             QUERY PLAN                                                                                             
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=8.30..8.31 rows=1 width=8) (actual time=0.047..0.048 rows=1 loops=1)
+   Buffers: shared hit=3
+   ->  Index Only Scan using "PlaybackQualityEvent_eventType_createdAt_idx" on "PlaybackQualityEvent"  (cost=0.27..8.29 rows=1 width=0) (actual time=0.042..0.043 rows=1 loops=1)
+         Index Cond: (("eventType" = 'ERROR'::text) AND ("createdAt" >= '2026-09-16 00:00:00'::timestamp without time zone) AND ("createdAt" < '2026-10-16 00:00:00'::timestamp without time zone))
+         Heap Fetches: 1
+         Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=109
+ Planning Time: 1.149 ms
+ Execution Time: 0.083 ms
+(10 rows)
+

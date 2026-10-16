@@ -19,6 +19,8 @@ const environment = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   HOST: z.string().default('0.0.0.0'),
   DATABASE_URL: z.string().url(),
+  DATABASE_POOLER_HOST: z.string().trim().min(1).optional(),
+  DATABASE_POOLER_PORT: z.coerce.number().int().min(1).max(65535).optional(),
   SHARED_PLATFORM_DATABASE_URL: z.string().url().optional(),
   TALETV_DATABASE_URL: z.string().url().optional(),
   CINEREELS_DATABASE_URL: z.string().url().optional(),

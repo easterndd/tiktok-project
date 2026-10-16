@@ -12,12 +12,14 @@ const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
 
 function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
+  const placements = miniAppAdConfig(app.config);
+  const mode = placements.appEntryPlacementId ? 'INTERSTITIAL' as const : 'REWARDED_GATED' as const;
   return {
     id: releaseId === 'default' ? policyId : `release:${releaseId}`,
     releaseId,
     enabled: false,
-    mode: 'INTERSTITIAL' as const,
-    placementId: miniAppAdConfig(app.config).appEntryPlacementId,
+    mode,
+    placementId: mode === 'INTERSTITIAL' ? placements.appEntryPlacementId : placements.rewardedPlacementId,
     requiredCount: 1,
     countMode: 'COMPLETED' as const,
     onUnavailable: 'ALLOW' as const,
@@ -52,7 +54,17 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
     const { launchId, releaseId } = startInput.parse(request.body);
-    const policy = await readAppEntryAdPolicy(app, releaseId);
+    const saved = await app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } });
+    let policy = saved ?? disabledPolicy(app, releaseId);
+    if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
+      try {
+        policy = await app.prisma.appEntryAdPolicy.create({ data: { ...disabledPolicy(app, releaseId), firstSeenAt: new Date() } });
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+        policy = await readAppEntryAdPolicy(app, releaseId);
+      }
+    }
+    if (saved && !saved.firstSeenAt) await app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } });
     if (!policy.enabled) return { required: false as const };
     const now = new Date();
 

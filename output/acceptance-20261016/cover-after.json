@@ -1,0 +1,97 @@
+{
+  "at": "2026-10-16T04:06:42.966Z",
+  "report": [
+    {
+      "url": "https://api.evergreenprosper.com/api/v1/assets/covers/063785bdf3654161393ea04558153fdd08cf14644124ac0b81f1177bd48b085e.png",
+      "status": 200,
+      "bytes": 2727476,
+      "etag": "\"6ab64a44-299e34\"",
+      "headers": {
+        "cache-control": "public, max-age=31536000, immutable",
+        "x-cover-service": "static",
+        "content-type": "image/png"
+      },
+      "samples": [
+        416,
+        904,
+        702,
+        700,
+        901,
+        686
+      ],
+      "errors": [],
+      "p50": 700,
+      "p95": 904,
+      "conditionalStatus": 304
+    },
+    {
+      "url": "https://api.evergreenprosper.com/api/v1/assets/covers/063785bdf3654161393ea04558153fdd08cf14644124ac0b81f1177bd48b085e.png.w360.webp",
+      "status": 200,
+      "bytes": 36604,
+      "etag": "\"6ad1a271-8efc\"",
+      "headers": {
+        "cache-control": "public, max-age=31536000, immutable",
+        "x-cover-service": "static",
+        "content-type": "image/webp"
+      },
+      "samples": [
+        3,
+        8,
+        3,
+        2,
+        2,
+        2
+      ],
+      "errors": [],
+      "p50": 2,
+      "p95": 8,
+      "conditionalStatus": 304
+    },
+    {
+      "url": "https://api.evergreenprosper.com/api/v1/assets/covers/ed591655bb7a457b350eca6ffb90c1c96694ca705c0e09fb42a271c0fdeb24e6.png",
+      "status": 200,
+      "bytes": 2285114,
+      "etag": "\"6ab9da3b-22de3a\"",
+      "headers": {
+        "cache-control": "public, max-age=31536000, immutable",
+        "x-cover-service": "static",
+        "content-type": "image/png"
+      },
+      "samples": [
+        713,
+        717,
+        653,
+        732,
+        473,
+        756
+      ],
+      "errors": [],
+      "p50": 713,
+      "p95": 756,
+      "conditionalStatus": 304
+    },
+    {
+      "url": "https://api.evergreenprosper.com/api/v1/assets/covers/ed591655bb7a457b350eca6ffb90c1c96694ca705c0e09fb42a271c0fdeb24e6.png.w360.webp",
+      "status": 200,
+      "bytes": 27916,
+      "etag": "\"6ad1a276-6d0c\"",
+      "headers": {
+        "cache-control": "public, max-age=31536000, immutable",
+        "x-cover-service": "static",
+        "content-type": "image/webp"
+      },
+      "samples": [
+        2,
+        2,
+        2,
+        3,
+        2,
+        2
+      ],
+      "errors": [],
+      "p50": 2,
+      "p95": 3,
+      "conditionalStatus": 304
+    }
+  ]
+}

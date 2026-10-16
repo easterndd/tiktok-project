@@ -93,12 +93,22 @@ async function createPrismaStub() {
     completionEvents: new Map<string, any>(),
     uiConfigVersions: new Map<number, any>(),
     entryPolicies: new Map<string, any>(),
+    codeReleases: new Map<string, any>(),
     shareCount: 0,
     admin: { id: 'admin-1', email: 'operator@example.com', passwordHash: '', role: 'OWNER', status: 'ACTIVE', tokenVersion: 0, createdAt: new Date(), updatedAt: new Date() }
   };
   const adminPasswordHash = await hashPassword('not-used');
   state.admin.passwordHash = adminPasswordHash;
   const prisma: any = {
+    miniAppCodeRelease: {
+      findMany: async ({ where }: any) => [...state.codeReleases.values()].filter((item) => item.miniAppKey === where.miniAppKey),
+      upsert: async ({ where, create, update }: any) => {
+        const key = `${where.miniAppKey_releaseId.miniAppKey}:${where.miniAppKey_releaseId.releaseId}`;
+        const item = { ...(state.codeReleases.get(key) ?? create), ...update };
+        state.codeReleases.set(key, item);
+        return item;
+      }
+    },
     miniAppAlbumAuthorization: { findMany: async () => [], findFirst: async () => null },
     album: {
       findMany: async () => [album],
@@ -211,9 +221,21 @@ async function createPrismaStub() {
     },
     appEntryAdPolicy: {
       findUnique: async (args: any) => state.entryPolicies.get(args.where.releaseId ?? 'default') ?? null,
+      updateMany: async (args: any) => {
+        const policy = state.entryPolicies.get(args.where.releaseId);
+        if (!policy || policy.firstSeenAt) return { count: 0 };
+        state.entryPolicies.set(args.where.releaseId, { ...policy, ...args.data });
+        return { count: 1 };
+      },
+      findMany: async () => [...state.entryPolicies.values()].reverse(),
+      create: async (args: any) => {
+        const policy = { ...args.data, createdAt: new Date(), updatedAt: new Date() };
+        state.entryPolicies.set(policy.releaseId, policy);
+        return policy;
+      },
       upsert: async (args: any) => {
         const releaseId = args.where.releaseId;
-        const policy = { ...(state.entryPolicies.get(releaseId) ?? args.create), ...args.update, releaseId };
+        const policy = { ...(state.entryPolicies.get(releaseId) ?? args.create), ...args.update, releaseId, updatedAt: new Date() };
         state.entryPolicies.set(releaseId, policy);
         return policy;
       }
@@ -718,6 +740,26 @@ describe('QuicK ReeLS API', () => {
     assert.equal(analytics.json().timezone, 'Asia/Shanghai');
   });
 
+  it('counts distinct audience users in SQL without returning user ID rows', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const prisma = app.prisma as any;
+    prisma.appSession.findMany = async () => { throw new Error('Audience count must not fetch user ID rows'); };
+    let countQueries = 0;
+    prisma.$queryRaw = async (query: { strings: string[] }) => {
+      if (query.strings.join('').includes('SELECT COUNT(DISTINCT "userId")')) {
+        countQueries += 1;
+        return [{ count: 7 }];
+      }
+      return [];
+    };
+    const response = await app.inject({ method: 'GET', url: '/api/v1/admin/analytics/audience?from=2026-09-01&to=2026-09-07',
+      headers: { authorization: `Bearer ${await token(app, 'admin')}` } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(countQueries, 4);
+    assert.deepEqual([response.json().activeUsers, response.json().dau, response.json().wau, response.json().mau], [7, 7, 7, 7]);
+  });
+
   it('requires configured app-entry ad completions exactly once per launch', async () => {
     const app = await createTestApp();
     apps.push(app);
@@ -770,6 +812,53 @@ describe('QuicK ReeLS API', () => {
     const unchangedLegacyPolicy = await app.inject({ method: 'GET', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders });
     assert.equal(unchangedLegacyPolicy.json().enabled, true);
     assert.equal(unchangedLegacyPolicy.json().placementId, 'v5-entry');
+  });
+
+  it('discovers a preview build and keeps its ad settings separate from the released build', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const userHeaders = { authorization: `Bearer ${await token(app, 'user')}` };
+    const preview = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders,
+      payload: { launchId: '72211e1c-303f-4f95-b861-a0ff6aef0137', releaseId: 'main-review-v7' } });
+    assert.equal(preview.statusCode, 200);
+    assert.equal(preview.json().required, false);
+    const list = await app.inject({ url: '/api/v1/admin/app-entry-ad-policies', headers: adminHeaders });
+    assert.equal(list.statusCode, 200);
+    assert.deepEqual(list.json().items.map((item: { releaseId: string }) => item.releaseId), ['main-review-v7', 'default']);
+    assert.equal(list.json().placementDefaults.INTERSTITIAL, env.APP_ENTRY_PLACEMENT_ID);
+    const previewPolicy = await app.inject({ url: '/api/v1/admin/app-entry-ad-policy?releaseId=main-review-v7', headers: adminHeaders });
+    assert.equal(previewPolicy.json().placementId, env.APP_ENTRY_PLACEMENT_ID);
+    const configured = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders,
+      payload: { releaseId: 'main-review-v7', enabled: true, mode: 'INTERSTITIAL', placementId: 'review-placement', requiredCount: 2, onUnavailable: 'ALLOW' } });
+    assert.equal(configured.statusCode, 200);
+    const reviewLaunch = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders,
+      payload: { launchId: '0d6815d9-d7b8-44dd-a95d-e0c79ba951bc', releaseId: 'main-review-v7' } });
+    assert.equal(reviewLaunch.json().placementId, 'review-placement');
+    assert.equal(reviewLaunch.json().requiredCount, 2);
+    const releasedLaunch = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders,
+      payload: { launchId: '256c629e-f8ba-4aa2-b0f2-34a04383c1c5' } });
+    assert.equal(releasedLaunch.json().required, false);
+  });
+
+  it('stores Portal status separately from each code version ad policy', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const userHeaders = { authorization: `Bearer ${await token(app, 'user')}` };
+    await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders,
+      payload: { launchId: '72211e1c-303f-4f95-b861-a0ff6aef0138', releaseId: 'main-review-v7' } });
+    const before = await app.inject({ url: '/api/v1/admin/app-entry-ad-policies', headers: adminHeaders });
+    assert.equal(before.json().items.find((item: any) => item.releaseId === 'main-review-v7').portalStatus, 'UNKNOWN');
+    const saved = await app.inject({ method: 'PATCH', url: '/api/v1/admin/app-entry-ad-releases/main-review-v7', headers: adminHeaders,
+      payload: { portalVersion: 'Version 7', portalStatus: 'IN_REVIEW' } });
+    assert.equal(saved.statusCode, 200);
+    const after = await app.inject({ url: '/api/v1/admin/app-entry-ad-policies', headers: adminHeaders });
+    assert.deepEqual(after.json().items.find((item: any) => item.releaseId === 'main-review-v7'),
+      { ...before.json().items.find((item: any) => item.releaseId === 'main-review-v7'), portalVersion: 'Version 7', portalStatus: 'IN_REVIEW' });
+    const missing = await app.inject({ method: 'PATCH', url: '/api/v1/admin/app-entry-ad-releases/main-missing', headers: adminHeaders,
+      payload: { portalVersion: 'Version 8', portalStatus: 'RELEASED' } });
+    assert.equal(missing.statusCode, 404);
   });
 
   it('replays the current entry ad on an early close in completed mode', async () => {
@@ -937,6 +1026,36 @@ describe('QuicK ReeLS API', () => {
     assert.match(response.json().error.message, /其他上传任务/);
   });
 
+  it('filters upload jobs to the selected drama', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const prisma = app.prisma as any;
+    prisma.uploadJob.findMany = async ({ where, take, orderBy }: any) => {
+      assert.deepEqual(where, { episode: { albumId: 'album-1' } });
+      assert.equal(take, 200);
+      assert.deepEqual(orderBy, { createdAt: 'desc' });
+      return [{ id: 'job-1', episodeId: 'episode-1', status: 'PENDING' }];
+    };
+    const response = await app.inject({ method: 'GET', url: '/api/v1/admin/upload-jobs?albumId=album-1',
+      headers: { authorization: `Bearer ${await token(app, 'admin')}` } });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().items[0].id, 'job-1');
+  });
+
+  it('limits upload jobs for the overview without changing the default list', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const prisma = app.prisma as any;
+    const limits: number[] = [];
+    prisma.uploadJob.findMany = async ({ take }: { take: number }) => { limits.push(take); return []; };
+    const headers = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const recent = await app.inject({ method: 'GET', url: '/api/v1/admin/upload-jobs?limit=5', headers });
+    const all = await app.inject({ method: 'GET', url: '/api/v1/admin/upload-jobs', headers });
+    assert.equal(recent.statusCode, 200, recent.body);
+    assert.equal(all.statusCode, 200, all.body);
+    assert.deepEqual(limits, [5, 100]);
+  });
+
   it('does not release a recent or identified BytePlus upload', async () => {
     const app = await createTestApp();
     apps.push(app);
@@ -950,6 +1069,51 @@ describe('QuicK ReeLS API', () => {
     job.startedAt = new Date(Date.now() - 3 * 60 * 60_000);
     job.providerJobId = 'vid-1';
     assert.equal((await request()).statusCode, 409);
+  });
+
+  it('resumes only the requested upload immediately instead of waiting for the worker batch', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const prisma = app.prisma as any;
+    const job = { id: 'job-1', sourceType: 'FILE', status: 'PROCESSING', leaseToken: null, leaseExpiresAt: null };
+    prisma.uploadJob.findUnique = async () => job;
+    let requestedId: string | undefined;
+    prisma.uploadJob.findMany = async ({ where }: any) => { requestedId = where.id; return []; };
+    prisma.uploadJob.updateMany = async ({ where }: any) => {
+      assert.equal(where.leaseToken, null);
+      assert.equal(where.leaseExpiresAt, null);
+      return { count: 1 };
+    };
+    const response = await app.inject({ method: 'POST', url: '/api/v1/admin/upload-jobs/job-1/reconcile',
+      headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: {} });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().processing, 'QUEUED');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(requestedId, 'job-1');
+  });
+
+  it('reports an active upload without resetting its lease or starting another transfer', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const prisma = app.prisma as any;
+    prisma.uploadJob.findUnique = async () => ({ id: 'job-1', sourceType: 'FILE', status: 'PROCESSING', leaseExpiresAt: new Date(Date.now() + 120_000) });
+    prisma.uploadJob.updateMany = async () => { throw new Error('An active upload must not be reset'); };
+    prisma.uploadJob.findMany = async () => { throw new Error('An active upload must not be restarted'); };
+    const response = await app.inject({ method: 'POST', url: '/api/v1/admin/upload-jobs/job-1/reconcile',
+      headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: {} });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().processing, 'ACTIVE');
+  });
+
+  it('rejects resume when another process changed the task', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const prisma = app.prisma as any;
+    prisma.uploadJob.findUnique = async () => ({ id: 'job-1', sourceType: 'FILE', status: 'PROCESSING', leaseToken: null, leaseExpiresAt: null });
+    prisma.uploadJob.updateMany = async () => ({ count: 0 });
+    const response = await app.inject({ method: 'POST', url: '/api/v1/admin/upload-jobs/job-1/reconcile',
+      headers: { authorization: `Bearer ${await token(app, 'admin')}` }, payload: {} });
+    assert.equal(response.statusCode, 409);
   });
 
   it('rejects reconciliation with media from another BytePlus space', async () => {

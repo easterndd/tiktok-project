@@ -1,3 +1,4 @@
+import { combinePlaybackSummaries } from '../../services/analytics-playback-summary';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
@@ -5,14 +6,14 @@ import { mkdir, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
-import { Prisma } from '@prisma/client';
+import { Prisma, type AnalyticsDailySummary } from '@prisma/client';
 import { z } from 'zod';
 import { requireAdmin, requirePermission } from '../../plugins/auth';
 import { hashPassword, verifyPassword } from '../../services/password';
 import { accessConfigSchema, readMiniAppAccessConfig } from '../../lib/content-access';
 import { publicLocaleSchema } from '../../lib/locales';
 import { BytePlusVodService } from '../../services/byteplus-vod.service';
-import { assertMediaScope, localUploadDirectory, uploadScope, uploadTags } from '../../services/local-upload.service';
+import { assertMediaScope, localUploadDirectory, matchesUploadTags, processLocalUploadJobs, uploadScope, uploadTags } from '../../services/local-upload.service';
 import { LocalObjectStorageService } from '../../services/object-storage.service';
 import { defaultUiComponents } from '../ui/routes';
 import { readAppEntryAdPolicy } from '../app-entry-ads/routes';
@@ -29,10 +30,27 @@ import {
   listSharedMediaAssets,
 } from '../../services/shared-platform.service';
 import { authorizeSharedPlayback, sharedPlaybackStatus } from '../../services/shared-playback.service';
-import { assertSameMiniAppOrganization, miniAppKeys, sameMiniAppOrganization, type MiniAppKey } from '../../config/mini-apps';
+import { assertSameMiniAppOrganization, miniAppAdConfig, miniAppKeys, sameMiniAppOrganization, type MiniAppKey } from '../../config/mini-apps';
 import { assertDisplayMetadataOwner, carryBaseTextChanges, displayMetadataInput, findDisplayMetadataAlbum, readDisplayMetadata, retryDisplayMetadata, saveLocalDisplayMetadata, saveSharedDisplayMetadata } from '../../services/display-metadata.service';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
+
+type AnalyticsCacheEntry = { expiresAt: number; value: unknown };
+const analyticsCaches = new WeakMap<FastifyInstance, Map<string, AnalyticsCacheEntry>>();
+const ANALYTICS_CACHE_TTL_MS = 15_000;
+async function cachedAnalytics<T>(app: FastifyInstance, key: string, load: () => Promise<T>): Promise<T> {
+  const analyticsCache = analyticsCaches.get(app) ?? new Map<string, AnalyticsCacheEntry>();
+  analyticsCaches.set(app, analyticsCache);
+  const now = Date.now();
+  const cached = analyticsCache.get(key);
+  if (cached && cached.expiresAt > now) return cached.value as T;
+  const value = await load();
+  analyticsCache.set(key, { expiresAt: now + ANALYTICS_CACHE_TTL_MS, value });
+  if (analyticsCache.size > 100) {
+    for (const [entryKey, entry] of analyticsCache) if (entry.expiresAt <= now) analyticsCache.delete(entryKey);
+  }
+  return value;
+}
 async function checkDisplayMetadataOwner(app: FastifyInstance, request: FastifyRequest, shared: any) {
   const operator = await app.prisma.adminUser.findUniqueOrThrow({ where: { id: request.user.sub } });
   const sourceIds = await playbackAdminIds(app, request, [shared.ownerMiniAppKey as MiniAppKey]);
@@ -195,6 +213,11 @@ const appEntryAdPolicyInput = z.object({
   countMode: z.enum(['COMPLETED', 'SHOWN']).default('COMPLETED'),
   onUnavailable: z.enum(['ALLOW', 'BLOCK'])
 }).refine((value) => !value.enabled || value.placementId.length > 0, { path: ['placementId'], message: '启用进入广告时必须填写广告位 ID。' });
+const codeReleaseParams = z.object({ releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/) });
+const codeReleaseInput = z.object({
+  portalVersion: z.string().trim().max(32).nullable(),
+  portalStatus: z.enum(['UNKNOWN', 'PREVIEW', 'IN_REVIEW', 'READY', 'RELEASED'])
+});
 
 const componentLabels: Record<z.infer<typeof componentParams>['key'], string> = {
   APP_TOPBAR: '顶部导航',
@@ -272,6 +295,34 @@ function completeDailySeries(from: string, periodDays: number, values: Array<{ d
     const date = addDateKeyDays(from, index);
     return { date, count: counts.get(date) ?? 0 };
   });
+}
+
+async function readDailySummary(app: FastifyInstance, range: ReturnType<typeof resolveAnalyticsRange>) {
+  const model = app.prisma.analyticsDailySummary;
+  if (!model?.findMany) return null;
+  try {
+    const rows = await model.findMany({
+      where: {
+        timezone: range.timezone,
+        day: { gte: new Date(`${range.from}T00:00:00.000Z`), lt: new Date(`${addDateKeyDays(range.to, 1)}T00:00:00.000Z`) }
+      }, orderBy: { day: 'asc' }
+    });
+    if (rows.length < range.periodDays) return null;
+    const totals = rows.reduce((result, row: AnalyticsDailySummary) => {
+      for (const key of ['newUsers', 'watchSessions', 'completedEpisodes', 'favorites', 'shares', 'searches', 'playbackEvents', 'playbackErrors', 'adRequested', 'adShown', 'adFailed'] as const) result[key] += Number(row[key] ?? 0);
+      return result;
+    }, { newUsers: 0, watchSessions: 0, completedEpisodes: 0, favorites: 0, shares: 0, searches: 0, playbackEvents: 0, playbackErrors: 0, adRequested: 0, adShown: 0, adFailed: 0 });
+    const updatedAt = rows.reduce((latest, row) => Math.max(latest, new Date(row.sourceWindowEnd).getTime()), 0);
+    return {
+      totals,
+      playback: combinePlaybackSummaries(rows.map((row) => row.playbackSummary)),
+      updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
+      dailyNewUsers: rows.map((row) => ({ date: new Date(row.day).toISOString().slice(0, 10), count: Number(row.newUsers ?? 0) })),
+      dailyActiveUsers: rows.map((row) => ({ date: new Date(row.day).toISOString().slice(0, 10), count: Number(row.activeUsers ?? 0) }))
+    };
+  } catch {
+    return null;
+  }
 }
 
 function extensionMime(extension: string) {
@@ -518,6 +569,41 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const { releaseId } = z.object({ releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default') }).parse(request.query);
     return readAppEntryAdPolicy(app, releaseId);
   });
+  app.get('/admin/app-entry-ad-policies', { preHandler: requireAdmin }, async () => {
+    const policies = await app.prisma.appEntryAdPolicy.findMany({
+      orderBy: { updatedAt: 'desc' },
+      select: { releaseId: true, enabled: true, mode: true, placementId: true, requiredCount: true, countMode: true, onUnavailable: true, version: true, updatedAt: true, firstSeenAt: true }
+    });
+    const releases = await app.sharedPrisma.miniAppCodeRelease.findMany({
+      where: { miniAppKey: app.config.MINI_APP_KEY },
+      select: { releaseId: true, portalVersion: true, portalStatus: true }
+    });
+    const releaseById = new Map(releases.map((item) => [item.releaseId, item]));
+    const placements = miniAppAdConfig(app.config);
+    const items = policies.some((item) => item.releaseId === 'default') ? policies : [...policies, {
+      releaseId: 'default', enabled: false, mode: placements.appEntryPlacementId ? 'INTERSTITIAL' as const : 'REWARDED_GATED' as const,
+      placementId: placements.appEntryPlacementId || placements.rewardedPlacementId, requiredCount: 1,
+      countMode: 'COMPLETED' as const, onUnavailable: 'ALLOW' as const, version: 1, updatedAt: new Date(0), firstSeenAt: null
+    }];
+    return {
+      items: items.map((item) => ({ ...item, portalVersion: releaseById.get(item.releaseId)?.portalVersion ?? null, portalStatus: releaseById.get(item.releaseId)?.portalStatus ?? 'UNKNOWN' })),
+      placementDefaults: { INTERSTITIAL: placements.appEntryPlacementId, REWARDED_GATED: placements.rewardedPlacementId }
+    };
+  });
+  app.patch('/admin/app-entry-ad-releases/:releaseId', { preHandler: requireAdmin }, async (request) => {
+    const { releaseId } = codeReleaseParams.parse(request.params);
+    const input = codeReleaseInput.parse(request.body);
+    if (releaseId !== 'default' && !await app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId }, select: { id: true } })) {
+      throw Object.assign(new Error('该代码版本尚未登记。'), { statusCode: 404 });
+    }
+    const release = await app.sharedPrisma.miniAppCodeRelease.upsert({
+      where: { miniAppKey_releaseId: { miniAppKey: app.config.MINI_APP_KEY, releaseId } },
+      create: { miniAppKey: app.config.MINI_APP_KEY, releaseId, ...input, updatedBy: request.user.sub },
+      update: { ...input, updatedBy: request.user.sub }
+    });
+    await audit(app, request.user.sub, 'UPDATE', 'MiniAppCodeRelease', `${app.config.MINI_APP_KEY}:${releaseId}`, input);
+    return release;
+  });
   app.put('/admin/app-entry-ad-policy', { preHandler: requireAdmin }, async (request) => {
     const input = appEntryAdPolicyInput.parse(request.body);
     const current = await readAppEntryAdPolicy(app, input.releaseId);
@@ -533,7 +619,12 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/admin/albums', { preHandler: requireAdmin }, async () => {
     const albums = await app.prisma.album.findMany({
       orderBy: { updatedAt: 'desc' },
-      include: { _count: { select: { episodes: true } } }
+      select: {
+        id: true, title: true, status: true, coverUrl: true, coverAssetId: true,
+        tiktokAlbumId: true, tiktokVersion: true, onlineVersion: true,
+        platformPublishedVersion: true, reviewStatus: true, publishStatus: true,
+        accessConfig: true, updatedAt: true, _count: { select: { episodes: true } }
+      }
     });
     const shared = await app.sharedPrisma.miniAppAlbumAuthorization.findMany({ where: { miniAppKey: app.config.MINI_APP_KEY, targetLocalAlbumId: { not: null }, album: { ownerMiniAppKey: { not: app.config.MINI_APP_KEY } } }, select: { targetLocalAlbumId: true } });
     const sharedIds = new Set(shared.map((item) => item.targetLocalAlbumId));
@@ -1053,8 +1144,12 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return { items, version: restored.version, publishedAt: restored.publishedAt, repairedLegacyContent: repaired };
   });
 
-  app.get('/admin/upload-jobs', { preHandler: requireAdmin }, async () => {
-    const jobs = await app.prisma.uploadJob.findMany({ orderBy: { createdAt: 'desc' }, take: 100, include: { episode: true } });
+  app.get('/admin/upload-jobs', { preHandler: requireAdmin }, async (request) => {
+    const { albumId, limit } = z.object({ albumId: z.string().trim().min(1).optional(), limit: z.coerce.number().int().min(1).max(200).optional() }).parse(request.query);
+    const jobs = await app.prisma.uploadJob.findMany({
+      where: albumId ? { episode: { albumId } } : undefined,
+      orderBy: { createdAt: 'desc' }, take: limit ?? (albumId ? 200 : 100), include: { episode: true }
+    });
     return { items: jobs };
   });
 
@@ -1143,8 +1238,21 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: { code: 'CONFLICT', message: '只有待对账的本地上传任务可以对账。', requestId: request.id } });
     }
     if (!input.byteplusVid) {
-      await app.prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: new Date() } }] }, data: { nextAttemptAt: new Date() } });
-      return { job, recovering: true };
+      const now = new Date();
+      if (job.leaseExpiresAt && job.leaseExpiresAt > now) {
+        return { job, recovering: true, processing: 'ACTIVE', message: '该任务正在上传或确认 BytePlus VID，请等待处理完成。' };
+      }
+      const scheduled = await app.prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, data: { nextAttemptAt: now } });
+      if (!scheduled.count) throw Object.assign(new Error('任务状态已变化，请刷新后查看。'), { statusCode: 409 });
+      // Run only this task so a manual resume does not wait behind the worker's
+      // current batch. The same database lease prevents duplicate transfers.
+      setImmediate(() => {
+        void processLocalUploadJobs(app.prisma, app.sharedPrisma, new BytePlusVodService(app.config), app.config, {
+          jobId: job.id,
+          log: (message, details) => app.log.warn({ ...details, miniAppKey: app.config.MINI_APP_KEY }, message)
+        }).catch((error) => app.log.error({ err: error, jobId: job.id }, 'Manual upload recovery failed.'));
+      });
+      return { job: { ...job, nextAttemptAt: now }, recovering: true, processing: 'QUEUED', message: '已触发该任务继续处理，后台将立即尝试上传或确认 BytePlus VID。' };
     }
     if (job.leaseExpiresAt && job.leaseExpiresAt > new Date()) throw Object.assign(new Error('上传任务正在处理，请等待自动确认。'), { statusCode: 409 });
     if (job.providerJobId && job.providerJobId !== input.byteplusVid) {
@@ -1157,7 +1265,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: { code: 'BYTEPLUS_SPACE_MISMATCH', message: '无法确认该视频属于当前 BytePlus 空间，不能绑定到当前小程序。', requestId: request.id } });
     }
     await assertMediaScope(app.sharedPrisma, app.config, media);
-    if (!job.uploadScope || !uploadTags(job.uploadScope, job.id).every((tag) => media.tags?.includes(tag))) throw Object.assign(new Error('此 VID 无法证明属于原上传任务，请使用自动恢复或重新上传。'), { statusCode: 409 });
+    if (!job.uploadScope || !matchesUploadTags(media.tags, job.uploadScope, job.id)) throw Object.assign(new Error('此 VID 无法证明属于原上传任务，请使用自动恢复或重新上传。'), { statusCode: 409 });
     if (job.episode.byteplusVid && job.episode.byteplusVid !== media.vid) {
       return reply.code(409).send({ error: { code: 'CONFLICT', message: '该分集已经绑定了另一个 BytePlus VID。', requestId: request.id } });
     }
@@ -1528,8 +1636,41 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     await audit(app, request.user.sub, 'IMPORT', 'AdRevenue', undefined, { source: input.source, rows: imported });
     return { imported };
   });
+  app.get('/admin/analytics/health', { preHandler: requireAdmin }, async (request) => {
+    const { minutes } = z.object({ minutes: z.coerce.number().int().min(5).max(1440).default(30) }).parse(request.query);
+    const windowStart = new Date(Date.now() - minutes * 60_000);
+    const runtimeModel = app.prisma.miniAppRuntimeError;
+    const runtimeGroups = runtimeModel ? await runtimeModel.groupBy({ by: ['kind'], where: { createdAt: { gte: windowStart } }, _count: { _all: true } }) : [];
+    const runtimeErrors = runtimeModel ? await runtimeModel.findMany({ where: { createdAt: { gte: windowStart } }, orderBy: { createdAt: 'desc' }, take: 30 }) : [];
+    const runtimeCount = (kind: string) => runtimeGroups.find((row) => row.kind === kind)?._count._all ?? 0;
+    const [adFailures, playbackErrors, uploadFailures, platformFailures, recentAds, recentPlayback, recentUploads, recentPlatform] = await Promise.all([
+      app.prisma.adEvent.count({ where: { createdAt: { gte: windowStart }, eventType: 'FAILED' } }),
+      app.prisma.playbackQualityEvent.count({ where: { createdAt: { gte: windowStart }, eventType: 'ERROR' } }),
+      app.prisma.uploadJob.count({ where: { completedAt: { gte: windowStart }, status: 'FAILED' } }),
+      app.prisma.platformSyncJob.count({ where: { updatedAt: { gte: windowStart }, status: { in: ['FAILED', 'CONFLICT'] } } }),
+      app.prisma.adEvent.findMany({ where: { createdAt: { gte: windowStart }, eventType: 'FAILED' }, select: { createdAt: true, errorCode: true, placementId: true, scope: true }, orderBy: { createdAt: 'desc' }, take: 5 }),
+      app.prisma.playbackQualityEvent.findMany({ where: { createdAt: { gte: windowStart }, eventType: 'ERROR' }, select: { createdAt: true, errorCode: true, episode: { select: { title: true } } }, orderBy: { createdAt: 'desc' }, take: 5 }),
+      app.prisma.uploadJob.findMany({ where: { completedAt: { gte: windowStart }, status: 'FAILED' }, select: { completedAt: true, errorMessage: true, episode: { select: { title: true } } }, orderBy: { completedAt: 'desc' }, take: 5 }),
+      app.prisma.platformSyncJob.findMany({ where: { updatedAt: { gte: windowStart }, status: { in: ['FAILED', 'CONFLICT'] } }, select: { updatedAt: true, kind: true, status: true, errorMessage: true, album: { select: { title: true } } }, orderBy: { updatedAt: 'desc' }, take: 5 })
+    ]);
+    return {
+      generatedAt: new Date().toISOString(), windowStart: windowStart.toISOString(),
+      counts: { adFailures, playbackErrors, uploadFailures, platformFailures, startupErrors: runtimeCount('STARTUP'), apiErrors: runtimeCount('API') + runtimeCount('PLAYBACK'), scriptErrors: runtimeCount('SCRIPT'), clientAdErrors: runtimeCount('AD') },
+      recent: [
+        ...runtimeErrors.map((item) => ({ kind: ({ STARTUP: '启动异常', API: '接口加载失败', PLAYBACK: '剧集加载失败', SCRIPT: '脚本异常', AD: '广告运行异常' } as Record<string, string>)[item.kind] ?? item.kind, createdAt: item.createdAt, message: `${item.phase} · ${item.message}`, releaseId: item.releaseId, path: item.path, requestId: item.requestId, durationMs: item.durationMs, statusCode: item.statusCode, occurredAt: item.occurredAt })),
+        ...recentAds.map((item) => ({ kind: '广告失败', createdAt: item.createdAt, message: `${item.scope} · ${item.errorCode ?? '未知错误'} · ${item.placementId}` })),
+        ...recentPlayback.map((item) => ({ kind: '播放错误', createdAt: item.createdAt, message: `${item.episode.title} · ${item.errorCode ?? '未知错误'}` })),
+        ...recentUploads.map((item) => ({ kind: '上传失败', createdAt: item.completedAt!, message: `${item.episode?.title ?? '分集'} · ${item.errorMessage ?? '未知错误'}` })),
+        ...recentPlatform.map((item) => ({ kind: item.status === 'CONFLICT' ? '平台结果待确认' : '平台同步失败', createdAt: item.updatedAt, message: `${item.album?.title ?? item.kind} · ${item.errorMessage ?? '未知错误'}` }))
+      ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 30)
+    };
+  });
   app.get('/admin/analytics/overview', { preHandler: requireAdmin }, async () => {
-    const [albums, episodes, users, likes, favorites, shares, searches, unlocks] = await Promise.all([
+    return cachedAnalytics(app, 'overview', async () => {
+      const snapshot = await app.prisma.analyticsOverviewSnapshot?.findUnique({ where: { id: 'default' } });
+      if (snapshot?.totals) return { ...(snapshot.totals as Prisma.JsonObject), updatedAt: snapshot.updatedAt };
+
+      const [albums, episodes, users, likes, favorites, shares, searches, unlocks] = await Promise.all([
       app.prisma.album.count({ where: { status: 'ONLINE' } }),
       app.prisma.episode.count({ where: { status: 'ONLINE', album: { status: 'ONLINE' } } }),
       app.prisma.user.count(),
@@ -1538,49 +1679,56 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       app.prisma.shareEvent.count(),
       app.prisma.searchEvent.count(),
       app.prisma.episodeUnlock.count()
-    ]);
-    return { albums, episodes, users, likes, favorites, shares, searches, rewardedUnlocks: unlocks };
+      ]);
+      return { albums, episodes, users, likes, favorites, shares, searches, rewardedUnlocks: unlocks };
+    });
   });
   app.get('/admin/analytics/audience', { preHandler: requireAdmin }, async (request) => {
     const range = resolveAnalyticsRange(analyticsQuery.parse(request.query));
-    const where = { gte: range.start, lt: range.end };
-    const [activeRows, newUsers, watchSessions, completedEpisodes, favorites, shares, searches, dailyNewRows, dailyActiveRows, dauRows, wauRows, mauRows] = await Promise.all([
-      app.prisma.appSession.findMany({ where: { startedAt: where }, distinct: ['userId'], select: { userId: true } }),
-      app.prisma.user.count({ where: { createdAt: where } }),
-      app.prisma.playbackSession.count({ where: { startedAt: where } }),
-      app.prisma.episodeCompletionEvent.count({ where: { completedAt: where } }),
-      app.prisma.albumFavorite.count({ where: { createdAt: where } }),
-      app.prisma.shareEvent.count({ where: { createdAt: where } }),
-      app.prisma.searchEvent.count({ where: { createdAt: where } }),
-      app.prisma.$queryRaw<Array<{ date: string; count: number }>>(Prisma.sql`
-        SELECT to_char(date_trunc('day', "createdAt" AT TIME ZONE ${range.timezone}), 'YYYY-MM-DD') AS date,
+    return cachedAnalytics(app, `audience:${range.from}:${range.to}:${range.timezone}`, async () => {
+      const where = { gte: range.start, lt: range.end };
+      const summary = await readDailySummary(app, range);
+      const countActiveUsers = (start: Date) => app.prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+      SELECT COUNT(DISTINCT "userId")::int AS count FROM "AppSession"
+      WHERE "startedAt" >= ${start} AND "startedAt" < ${range.end}
+    `);
+      const [activeRows, newUsers, watchSessions, completedEpisodes, favorites, shares, searches, dailyNewRows, dailyActiveRows, dauRows, wauRows, mauRows] = await Promise.all([
+      countActiveUsers(range.start),
+      summary ? Promise.resolve(summary.totals.newUsers) : app.prisma.user.count({ where: { createdAt: where } }),
+      summary ? Promise.resolve(summary.totals.watchSessions) : app.prisma.playbackSession.count({ where: { startedAt: where } }),
+      summary ? Promise.resolve(summary.totals.completedEpisodes) : app.prisma.episodeCompletionEvent.count({ where: { completedAt: where } }),
+      summary ? Promise.resolve(summary.totals.favorites) : app.prisma.albumFavorite.count({ where: { createdAt: where } }),
+      summary ? Promise.resolve(summary.totals.shares) : app.prisma.shareEvent.count({ where: { createdAt: where } }),
+      summary ? Promise.resolve(summary.totals.searches) : app.prisma.searchEvent.count({ where: { createdAt: where } }),
+      summary ? Promise.resolve(summary.dailyNewUsers) : app.prisma.$queryRaw<Array<{ date: string; count: number }>>(Prisma.sql`
+        SELECT to_char(date_trunc('day', "createdAt" AT TIME ZONE 'UTC' AT TIME ZONE ${range.timezone}), 'YYYY-MM-DD') AS date,
                COUNT(*)::int AS count
         FROM "User"
         WHERE "createdAt" >= ${range.start} AND "createdAt" < ${range.end}
         GROUP BY 1
         ORDER BY 1
       `),
-      app.prisma.$queryRaw<Array<{ date: string; count: number }>>(Prisma.sql`
-        SELECT to_char(date_trunc('day', "startedAt" AT TIME ZONE ${range.timezone}), 'YYYY-MM-DD') AS date,
+      summary ? Promise.resolve(summary.dailyActiveUsers) : app.prisma.$queryRaw<Array<{ date: string; count: number }>>(Prisma.sql`
+        SELECT to_char(date_trunc('day', "startedAt" AT TIME ZONE 'UTC' AT TIME ZONE ${range.timezone}), 'YYYY-MM-DD') AS date,
                COUNT(DISTINCT "userId")::int AS count
         FROM "AppSession"
         WHERE "startedAt" >= ${range.start} AND "startedAt" < ${range.end}
         GROUP BY 1
         ORDER BY 1
       `),
-      app.prisma.appSession.findMany({ where: { startedAt: { gte: zonedMidnight(range.to, range.timezone), lt: range.end } }, distinct: ['userId'], select: { userId: true } }),
-      app.prisma.appSession.findMany({ where: { startedAt: { gte: zonedMidnight(addDateKeyDays(range.to, -6), range.timezone), lt: range.end } }, distinct: ['userId'], select: { userId: true } }),
-      app.prisma.appSession.findMany({ where: { startedAt: { gte: zonedMidnight(addDateKeyDays(range.to, -29), range.timezone), lt: range.end } }, distinct: ['userId'], select: { userId: true } })
-    ]);
-    return {
+      countActiveUsers(zonedMidnight(range.to, range.timezone)),
+      countActiveUsers(zonedMidnight(addDateKeyDays(range.to, -6), range.timezone)),
+      countActiveUsers(zonedMidnight(addDateKeyDays(range.to, -29), range.timezone))
+      ]);
+      return {
       from: range.from,
       to: range.to,
       timezone: range.timezone,
       periodDays: range.periodDays,
-      activeUsers: activeRows.length,
-      dau: dauRows.length,
-      wau: wauRows.length,
-      mau: mauRows.length,
+      activeUsers: activeRows[0]?.count ?? 0,
+      dau: dauRows[0]?.count ?? 0,
+      wau: wauRows[0]?.count ?? 0,
+      mau: mauRows[0]?.count ?? 0,
       newUsers,
       watchSessions,
       completedEpisodes,
@@ -1588,13 +1736,30 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       shares,
       searches,
       dailyNewUsers: completeDailySeries(range.from, range.periodDays, dailyNewRows),
-      dailyActiveUsers: completeDailySeries(range.from, range.periodDays, dailyActiveRows)
-    };
+      dailyActiveUsers: completeDailySeries(range.from, range.periodDays, dailyActiveRows),
+      updatedAt: summary?.updatedAt ?? null
+      };
+    });
   });
   app.get('/admin/analytics/playback-quality', { preHandler: requireAdmin }, async (request) => {
     const range = resolveAnalyticsRange(analyticsQuery.parse(request.query));
-    const createdAt = { gte: range.start, lt: range.end };
-    const [totals, errorCount, eventTypes, definitions, networks, recentErrors] = await Promise.all([
+    return cachedAnalytics(app, `playback:${range.from}:${range.to}:${range.timezone}`, async () => {
+      const createdAt = { gte: range.start, lt: range.end };
+      const summary = await readDailySummary(app, range);
+      if (summary?.playback) {
+        const recentErrors = await app.prisma.playbackQualityEvent.findMany({
+          where: { createdAt, eventType: 'ERROR' }, select: { errorCode: true, createdAt: true, episode: { select: { title: true } } },
+          orderBy: { createdAt: 'desc' }, take: 10
+        });
+        const { totalEvents } = summary.playback;
+        const errorCount = summary.totals.playbackErrors;
+        return { from: range.from, to: range.to, timezone: range.timezone, periodDays: range.periodDays,
+          ...summary.playback, errorCount, firstFrames: summary.playback.eventTypes.find((item) => item.eventType === 'FIRST_FRAME')?.count ?? 0,
+          errorRate: totalEvents ? Number((errorCount / totalEvents * 100).toFixed(2)) : 0,
+          updatedAt: summary.updatedAt,
+          recentErrors: recentErrors.map((event) => ({ episodeTitle: event.episode.title, errorCode: event.errorCode, createdAt: event.createdAt })) };
+      }
+      const [totals, errorCount, eventTypes, definitions, networks, recentErrors] = await Promise.all([
       app.prisma.playbackQualityEvent.aggregate({ where: { createdAt }, _count: true, _avg: { startupMs: true }, _sum: { bufferMs: true } }),
       app.prisma.playbackQualityEvent.count({ where: { createdAt, eventType: 'ERROR' } }),
       app.prisma.playbackQualityEvent.groupBy({ by: ['eventType'], where: { createdAt }, _count: { _all: true } }),
@@ -1606,9 +1771,9 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         orderBy: { createdAt: 'desc' },
         take: 10
       })
-    ]);
-    const totalEvents = totals._count;
-    return {
+      ]);
+      const totalEvents = totals._count;
+      return {
       from: range.from,
       to: range.to,
       timezone: range.timezone,
@@ -1619,10 +1784,12 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       errorRate: totalEvents ? Number((errorCount / totalEvents * 100).toFixed(2)) : 0,
       averageStartupMs: totals._avg.startupMs === null ? null : Math.round(totals._avg.startupMs),
       totalBufferMs: totals._sum.bufferMs ?? 0,
+      updatedAt: null,
       eventTypes: eventTypes.map((item) => ({ eventType: item.eventType, count: item._count._all })),
       definitions: definitions.map((item) => ({ definition: item.definition, count: item._count._all })),
       networks: networks.map((item) => ({ networkType: item.networkType, count: item._count._all })),
       recentErrors: recentErrors.map((event) => ({ episodeTitle: event.episode.title, errorCode: event.errorCode, createdAt: event.createdAt }))
-    };
+      };
+    });
   });
 }

@@ -3,7 +3,7 @@ import { stat, unlink } from 'node:fs/promises';
 import { resolve, relative, isAbsolute } from 'node:path';
 import type { PrismaClient } from '@prisma/client';
 import type { Env } from '../config/env';
-import { BytePlusVodError, BytePlusVodService, episodeMediaTitle, type BytePlusMedia } from './byteplus-vod.service';
+import { BytePlusVodError, BytePlusVodService, episodeMediaTitle, isBytePlusTransferFailure, type BytePlusMedia } from './byteplus-vod.service';
 import { enqueueVideoSync } from './platform-sync.service';
 import { getOrCreateSharedMediaAsset } from './shared-platform.service';
 
@@ -24,12 +24,22 @@ export function uploadScope(env: Env) {
 }
 
 export function uploadTags(scope: string, jobId: string) {
+  return [`s${scope.slice(0, 16)}`, `u${createHash('sha256').update(jobId).digest('hex').slice(0, 16)}`];
+}
+
+function legacyUploadTags(scope: string, jobId: string) {
   return [`qr-scope-${scope}`, `qr-upload-${jobId}`];
 }
 
+export function matchesUploadTags(tags: string[] | undefined, scope: string, jobId: string) {
+  return [uploadTags(scope, jobId), legacyUploadTags(scope, jobId)]
+    .some((expected) => expected.every((tag) => tags?.includes(tag)));
+}
+
 export async function assertMediaScope(sharedPrisma: Db, env: Env, media: BytePlusMedia) {
-  const scopes = (media.tags ?? []).filter((tag) => tag.startsWith('qr-scope-'));
-  if (scopes.length && (scopes.length !== 1 || scopes[0] !== `qr-scope-${uploadScope(env)}`)) {
+  const scopes = (media.tags ?? []).filter((tag) => tag.startsWith('qr-scope-') || /^s[0-9a-f]{16}$/.test(tag));
+  const allowed = [uploadTags(uploadScope(env), '')[0], legacyUploadTags(uploadScope(env), '')[0]];
+  if (scopes.some((tag) => !allowed.includes(tag))) {
     throw Object.assign(new Error('此 VID 由其他小程序或旧 Client Key 上传，不能绑定到当前小程序，请在当前小程序重新上传。'), { statusCode: 409 });
   }
   const owner = await sharedPrisma.sharedMediaAsset.findUnique({ where: { byteplusVid: media.vid } });
@@ -45,30 +55,32 @@ export async function findUploadMedia(service: BytePlusVodService, env: Env, job
     const [media] = await service.getMediaInfos({ vids: [job.providerJobId] });
     if (!media) return null;
     if (media.spaceName !== env.BYTEPLUS_SPACE_NAME) throw conflict('上传结果不属于当前 BytePlus 空间。');
-    if (job.uploadScope && !uploadTags(job.uploadScope, job.id).every((tag) => media.tags?.includes(tag))) {
-      const scopeTag = media.tags?.find((tag) => tag.startsWith('qr-scope-'));
-      if (scopeTag && scopeTag !== `qr-scope-${job.uploadScope}`) throw conflict('VID 属于其他小程序，不能自动绑定。');
+    if (job.uploadScope && !matchesUploadTags(media.tags, job.uploadScope, job.id)) {
+      const scopeTags = (media.tags ?? []).filter((tag) => tag.startsWith('qr-scope-') || /^s[0-9a-f]{16}$/.test(tag));
+      const allowed = [uploadTags(job.uploadScope, job.id)[0], legacyUploadTags(job.uploadScope, job.id)[0]];
+      if (scopeTags.some((tag) => !allowed.includes(tag))) throw conflict('VID 属于其他小程序，不能自动绑定。');
       return null;
     }
     return media;
   }
   if (!job.uploadScope) return null;
-  const expected = uploadTags(job.uploadScope, job.id);
   const matches: BytePlusMedia[] = [];
+  const taskTag = uploadTags(job.uploadScope, job.id)[1];
   for (let offset = 0; ; offset += 100) {
-    const page = await service.listMedia({ offset, pageSize: 100, tags: expected[1] });
-    matches.push(...page.items.filter((media) => media.spaceName === env.BYTEPLUS_SPACE_NAME && expected.every((tag) => media.tags?.includes(tag))));
+    const page = await service.listMedia({ offset, pageSize: 100, tags: taskTag });
+    matches.push(...page.items.filter((media) => media.spaceName === env.BYTEPLUS_SPACE_NAME && matchesUploadTags(media.tags, job.uploadScope!, job.id)));
     if (page.items.length < 100 || offset + page.items.length >= page.total) break;
     if (offset >= 9_900) throw new Error('VOD 查询结果超过上限，无法确认完整结果，请检查媒资标签。');
   }
-  if (matches.length > 1) throw conflict('同一上传任务出现多个 VID，已暂停自动绑定，请核查 BytePlus 媒资。');
-  return matches[0] ?? null;
+  const unique = [...new Map(matches.map((media) => [media.vid, media])).values()];
+  if (unique.length > 1) throw conflict('同一上传任务出现多个 VID，已暂停自动绑定，请核查 BytePlus 媒资。');
+  return unique[0] ?? null;
 }
 
-export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, service: BytePlusVodService, env: Env, options: { now?: () => Date; maxRetries?: number; log?: (message: string, details?: Record<string, unknown>) => void } = {}) {
+export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, service: BytePlusVodService, env: Env, options: { jobId?: string; concurrency?: 1 | 2; now?: () => Date; maxRetries?: number; log?: (message: string, details?: Record<string, unknown>) => void } = {}) {
   const now = options.now ?? (() => new Date());
   const jobs = await prisma.uploadJob.findMany({
-    where: { sourceType: 'FILE', status: { in: ['PENDING', 'PROCESSING'] },
+    where: { ...(options.jobId ? { id: options.jobId } : {}), sourceType: 'FILE', status: { in: ['PENDING', 'PROCESSING'] },
       AND: [
         { OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now() } }] },
         { OR: [{ leaseExpiresAt: { lte: now() } }, { leaseExpiresAt: null, status: 'PENDING' },
@@ -78,11 +90,11 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
     orderBy: { createdAt: 'asc' }, take: 5,
     include: { episode: { include: { album: true, coverAsset: true } } }
   });
-  for (const job of jobs) {
+  const processJob = async (job: typeof jobs[number]) => {
     const leaseToken = randomUUID();
-    const remoteStartedAt = job.remoteStartedAt;
+    const remoteStartedAt = !job.providerJobId && isBytePlusTransferFailure(job.errorMessage ?? '') ? null : job.remoteStartedAt;
     const claimed = await prisma.uploadJob.updateMany({ where: { id: job.id, status: job.status, leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt }, data: { status: 'PROCESSING', leaseToken, leaseExpiresAt: new Date(now().getTime() + leaseMs), startedAt: job.startedAt ?? now(), remoteStartedAt } });
-    if (!claimed.count) continue;
+    if (!claimed.count) return;
     let lostLease = false;
     let attemptedUpload = false;
     const renew = setInterval(() => {
@@ -108,31 +120,31 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
             leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs),
             errorMessage: `上传结果待确认，VOD 查询暂不可用，稍后自动重试：${message}`
           } });
-          continue;
+          return;
         }
       }
       if (!media && remoteStartedAt && now().getTime() - remoteStartedAt.getTime() < recoveryWindowMs) {
         await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs), errorMessage: `BytePlus 上传结果待确认，正在核查任务 VID。${job.errorMessage ? `上次错误：${job.errorMessage}` : ''}`.slice(0, 500) } });
-        continue;
+        return;
       }
       if (!media && remoteStartedAt && /InvalidParameter\.InvalidParamErro/i.test(job.errorMessage ?? '')) {
         await fail('BytePlus 已拒绝上次上传请求（InvalidParameter.InvalidParamError）。旧版错误详情已截断；请检查上传参数后重试保留的文件。', true);
-        continue;
+        return;
       }
       if (!media) {
         if (!job.localFilePath || !job.uploadScope) {
           await fail('上传已中断，未找到可确认归属的 VID，原临时文件已丢失。任务已解除占用，请在当前小程序重新选择文件上传。');
-          continue;
+          return;
         }
-        if (job.providerJobId) { await fail('已记录的 VID 在 BytePlus 中不存在，请重新上传。'); continue; }
-        if (job.episode.byteplusVid) { await fail('分集已绑定其他视频，已停止旧上传任务。'); continue; }
-        if (job.retryCount >= (options.maxRetries ?? env.UPLOAD_MAX_RETRIES)) { await fail(job.errorMessage ?? '自动上传重试次数已耗尽，请重试原任务或重新选择文件上传。'); continue; }
+        if (job.providerJobId) { await fail('已记录的 VID 在 BytePlus 中不存在，请重新上传。'); return; }
+        if (job.episode.byteplusVid) { await fail('分集已绑定其他视频，已停止旧上传任务。'); return; }
+        if (job.retryCount >= (options.maxRetries ?? env.UPLOAD_MAX_RETRIES)) { await fail(job.errorMessage ?? '自动上传重试次数已耗尽，请重试原任务或重新选择文件上传。'); return; }
         const directory = localUploadDirectory(env);
         const path = relative(directory, resolve(job.localFilePath));
         if (!path || path.startsWith('..') || isAbsolute(path)) throw conflict('上传文件不在配置的持久化目录中。');
         await stat(job.localFilePath);
-        const started = await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { remoteStartedAt: now(), retryCount: { increment: 1 } } });
-        if (!started.count || lostLease) continue;
+        const started = await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { remoteStartedAt: now(), retryCount: { increment: 1 }, errorMessage: null, nextAttemptAt: null } });
+        if (!started.count || lostLease) return;
         attemptedUpload = true;
         const result = await service.uploadLocalVideo({ filePath: job.localFilePath, fileName: job.sourceName ?? 'episode.mp4',
           title: episodeMediaTitle(job.episode.album.title, job.episode.episodeNo),
@@ -147,15 +159,15 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
             leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs),
             errorMessage: 'BytePlus 已返回 VID，正在等待媒资可查询后确认归属。'
           } });
-          continue;
+          return;
         }
         if (confirmed.vid !== result.byteplusVid || confirmed.spaceName !== env.BYTEPLUS_SPACE_NAME ||
-            !uploadTags(job.uploadScope, job.id).every((tag) => confirmed.tags?.includes(tag))) {
+            !matchesUploadTags(confirmed.tags, job.uploadScope, job.id)) {
           throw conflict('BytePlus 返回的媒资缺少当前上传任务的归属标签，已停止自动绑定。');
         }
         media = confirmed;
       }
-      if (lostLease) continue;
+      if (lostLease) return;
       await assertMediaScope(sharedPrisma, env, media);
       await getOrCreateSharedMediaAsset(sharedPrisma as any, { byteplusVid: media.vid, byteplusAccountId: env.BYTEPLUS_ACCOUNT_ID,
         byteplusSpaceName: env.BYTEPLUS_SPACE_NAME, byteplusRegion: env.BYTEPLUS_REGION, miniAppKey: env.MINI_APP_KEY,
@@ -180,6 +192,13 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
       } else await fail(message, error instanceof BytePlusVodError && !error.retryable && !error.uncertain);
       options.log?.('Local upload recovery.', { jobId: job.id, error: message });
     } finally { clearInterval(renew); }
-  }
+  };
+  let nextJob = 0;
+  const workers = Array.from({ length: Math.min(options.jobId ? 1 : options.concurrency ?? 1, jobs.length) }, async () => {
+    while (nextJob < jobs.length) await processJob(jobs[nextJob++]);
+  });
+  const results = await Promise.allSettled(workers);
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failed) throw failed.reason;
   return jobs.length;
 }

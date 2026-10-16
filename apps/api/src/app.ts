@@ -9,6 +9,7 @@ import { stat } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 import type { Env } from './config/env';
 import { configuredMiniAppKeys, miniAppEnvironment, miniAppPath, miniAppKeys, type MiniAppKey } from './config/mini-apps';
+import { runtimeDatabaseUrl } from './config/database-pool';
 import { PrismaClient as DatabaseClient } from '@prisma/client';
 import { registerAlbumRoutes } from './modules/albums/routes';
 import { registerAuthRoutes } from './modules/auth/routes';
@@ -19,6 +20,7 @@ import { registerSearchRoutes } from './modules/search/routes';
 import { registerInteractionRoutes } from './modules/interactions/routes';
 import { registerProfileRoutes } from './modules/profile/routes';
 import { registerAdRoutes } from './modules/ads/routes';
+import { registerDiagnosticRoutes } from './modules/diagnostics/routes';
 import { registerAppEntryAdRoutes } from './modules/app-entry-ads/routes';
 import { registerAdminRoutes } from './modules/admin/routes';
 import { registerUiRoutes } from './modules/ui/routes';
@@ -140,12 +142,12 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
       return ipKey;
     }
   });
-  await registerPrisma(app, options.prisma);
+  await registerPrisma(app, options.prisma, runtimeDatabaseUrl(mainEnv.DATABASE_URL, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT));
   const sharedDatabaseUrl = env.SHARED_PLATFORM_DATABASE_URL ?? mainEnv.DATABASE_URL;
   const sharedPrisma = options.sharedPrisma
     ?? (sharedDatabaseUrl === mainEnv.DATABASE_URL
       ? app.prisma
-      : new DatabaseClient({ datasources: { db: { url: sharedDatabaseUrl } } }));
+      : new DatabaseClient({ datasources: { db: { url: runtimeDatabaseUrl(sharedDatabaseUrl, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT) } } }));
   app.decorate('sharedPrisma', sharedPrisma);
   if (!options.sharedPrisma && sharedDatabaseUrl !== mainEnv.DATABASE_URL) {
     app.addHook('onClose', async () => sharedPrisma.$disconnect());
@@ -155,12 +157,17 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     const { fileName } = request.params as { fileName: string };
     const targetPath = resolveCoverPath(env.COVER_ASSET_STORAGE_DIR, fileName);
     if (!targetPath) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Cover asset not found.', requestId: request.id } });
+    let metadata;
     try {
-      await stat(targetPath);
+      metadata = await stat(targetPath);
     } catch {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Cover asset not found.', requestId: request.id } });
     }
+    const etag = `"${metadata.size.toString(16)}-${Math.floor(metadata.mtimeMs).toString(16)}"`;
+    reply.header('etag', etag);
     reply.header('cache-control', 'public, max-age=31536000, immutable');
+    if (request.headers['if-none-match'] === etag) return reply.code(304).send();
+    reply.header('content-length', String(metadata.size));
     reply.type(coverContentTypes[extname(targetPath).toLowerCase()] ?? 'application/octet-stream');
     return reply.send(createReadStream(targetPath));
   });
@@ -199,6 +206,7 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
       await registerInteractionRoutes(api);
       await registerProfileRoutes(api);
       await registerAdRoutes(api);
+      await registerDiagnosticRoutes(api);
       await registerUiRoutes(api);
       await registerAdminRoutes(api);
     });
@@ -209,7 +217,7 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     const contextEnv = miniAppEnvironment(mainEnv, key);
     if (!contextEnv) continue;
     const providedPrisma = options.miniPrisma?.[key] ?? (key === 'taletv' ? options.taletvPrisma : undefined);
-    const prisma = providedPrisma ?? new DatabaseClient({ datasources: { db: { url: contextEnv.DATABASE_URL } } });
+    const prisma = providedPrisma ?? new DatabaseClient({ datasources: { db: { url: runtimeDatabaseUrl(contextEnv.DATABASE_URL, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT) } } });
     miniAppPrisma[key] = prisma;
     await app.register((context) => registerContext(context, contextEnv, prisma, miniAppPrisma), { prefix: `/api/${miniAppPath(key)}/v1` });
     if (!providedPrisma) app.addHook('onClose', async () => prisma.$disconnect());

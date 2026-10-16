@@ -1,0 +1,15 @@
+from pathlib import Path
+p=Path('apps/api/src/services/analytics-summary.service.ts')
+s=p.read_text(); s=s.replace("${sourceWindowStart} AT TIME ZONE ${timezone}","${sourceWindowStart}::timestamp AT TIME ZONE 'UTC' AT TIME ZONE ${timezone}").replace("${sourceWindowEnd} AT TIME ZONE ${timezone}","${sourceWindowEnd}::timestamp AT TIME ZONE 'UTC' AT TIME ZONE ${timezone}")
+import re
+s=re.sub(r'("(?:createdAt|startedAt|completedAt)") AT TIME ZONE',r"\1 AT TIME ZONE 'UTC' AT TIME ZONE",s)
+s=re.sub(r'WHERE ("(?:createdAt|startedAt|completedAt)") >= \$\{sourceWindowStart\} GROUP',r'WHERE \1 >= ${sourceWindowStart} AND \1 < ${sourceWindowEnd} GROUP',s)
+s=s.replace("IN ('SHOWN', 'CLOSED_COMPLETED', 'CLOSED_INCOMPLETE')", "= 'SHOWN'")
+p.write_text(s)
+p=Path('apps/api/src/modules/admin/routes.ts');s=p.read_text();s=s.replace("import { Prisma }", "import { Prisma, type AnalyticsDailySummary }")
+s=s.replace("const model = (app.prisma as any).analyticsDailySummary as { findMany?: (args: unknown) => Promise<Array<Record<string, any>>> } | undefined;", "const model = app.prisma.analyticsDailySummary;")
+s=s.replace("rows.reduce((result, row) =>", "rows.reduce((result, row: AnalyticsDailySummary) =>")
+s=s.replace('new Date(row.updatedAt).getTime()', 'new Date(row.sourceWindowEnd).getTime()')
+s=s.replace('dateKey(new Date(row.day), range.timezone)', 'new Date(row.day).toISOString().slice(0, 10)')
+s=re.sub(r'("(?:createdAt|startedAt)") AT TIME ZONE \$\{range.timezone\}',r"\1 AT TIME ZONE 'UTC' AT TIME ZONE ${range.timezone}",s)
+p.write_text(s)

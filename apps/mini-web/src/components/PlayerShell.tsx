@@ -3,6 +3,7 @@ import { AlertCircle, Play } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { DramaPlayerController } from '../features/player/drama-player-controller';
 import { apiClient } from '../lib/api-client';
+import { reportDiagnostic } from '../lib/diagnostics';
 import { t } from '../lib/i18n';
 import { useLocale } from '../lib/storage';
 import styles from './PlayerShell.module.css';
@@ -109,6 +110,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     const onError = (event?: unknown) => {
       if (disposed) return;
       const errorCode = errorCodeFromEvent(event);
+      reportDiagnostic({ kind: 'PLAYBACK', phase: 'PLAYER_ERROR', message: errorCode, path: `/episodes/${playInfo.localEpisodeId}` });
       setPlayerError('Player playback failed.');
       void apiClient.post('/playback-quality-events', {
         episodeId: playInfo.localEpisodeId,
@@ -175,6 +177,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
         instance.on(events.ERROR, onError);
       } catch (error) {
         if (disposed) return;
+        reportDiagnostic({ kind: 'PLAYBACK', phase: 'PLAYER_INIT_FAILED', message: error instanceof Error ? error.message : String(error), path: `/episodes/${playInfo.localEpisodeId}` });
         setPlayerError(error instanceof Error ? error.message : 'Player initialization failed.');
         void apiClient.post('/playback-quality-events', {
           episodeId: playInfo.localEpisodeId,

@@ -1,0 +1,273 @@
+{
+  "at": "2026-10-16T04:16:22.671Z",
+  "summaries": [
+    {
+      "key": "main",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:14:57.815Z"
+    },
+    {
+      "key": "taletv",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:14:57.974Z"
+    },
+    {
+      "key": "cinereels",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:14:58.454Z"
+    },
+    {
+      "key": "talereels",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:14:59.467Z"
+    },
+    {
+      "key": "storyland",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:14:59.982Z"
+    },
+    {
+      "key": "dramacloud",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:00.323Z"
+    },
+    {
+      "key": "dailyreel",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:00.529Z"
+    },
+    {
+      "key": "dramaone",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:00.728Z"
+    },
+    {
+      "key": "dramaup",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:00.902Z"
+    },
+    {
+      "key": "dramavault",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:01.101Z"
+    },
+    {
+      "key": "talehub",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:01.260Z"
+    },
+    {
+      "key": "talebox",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:01.462Z"
+    },
+    {
+      "key": "storyworld",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:01.630Z"
+    },
+    {
+      "key": "storyhub",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:01.776Z"
+    },
+    {
+      "key": "dramaroom",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:01.934Z"
+    },
+    {
+      "key": "dramazone",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:02.128Z"
+    },
+    {
+      "key": "taleflick",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:02.313Z"
+    },
+    {
+      "key": "dramashort",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:02.478Z"
+    },
+    {
+      "key": "storyshort",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:02.679Z"
+    },
+    {
+      "key": "storyflicks",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:02.917Z"
+    },
+    {
+      "key": "dramaflicks",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:03.079Z"
+    },
+    {
+      "key": "crownrush",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:03.239Z"
+    },
+    {
+      "key": "sugarreel",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:03.515Z"
+    },
+    {
+      "key": "crimsonshorts",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:04.877Z"
+    },
+    {
+      "key": "sweetreel",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:05.657Z"
+    },
+    {
+      "key": "dramablaze",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:07.126Z"
+    },
+    {
+      "key": "heartreel",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:13.179Z"
+    },
+    {
+      "key": "dramahit",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:18.215Z"
+    },
+    {
+      "key": "crownreel",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:18.688Z"
+    },
+    {
+      "key": "luxereel",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:19.207Z"
+    },
+    {
+      "key": "elitedrama",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:19.423Z"
+    },
+    {
+      "key": "lucidreel",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:19.882Z"
+    },
+    {
+      "key": "astraclip",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:20.059Z"
+    },
+    {
+      "key": "lumoreel",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:20.196Z"
+    },
+    {
+      "key": "orbitplay",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:20.325Z"
+    },
+    {
+      "key": "zenclip",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:20.509Z"
+    },
+    {
+      "key": "auraclip",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:20.744Z"
+    },
+    {
+      "key": "fluxplay",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:21.106Z"
+    },
+    {
+      "key": "driftreel",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:21.287Z"
+    },
+    {
+      "key": "novaclip",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:21.440Z"
+    },
+    {
+      "key": "lumishort",
+      "days": 91,
+      "updatedAt": "2026-10-16T04:15:21.626Z"
+    }
+  ],
+  "releases": [
+    {
+      "key": "main",
+      "status": 200,
+      "items": [
+        {
+          "releaseId": "default",
+          "firstSeenAt": "2026-09-18T07:57:31.453Z",
+          "portalStatus": "UNKNOWN",
+          "portalVersion": null,
+          "enabled": false,
+          "version": 7
+        }
+      ]
+    },
+    {
+      "key": "taletv",
+      "status": 200,
+      "items": [
+        {
+          "releaseId": "taletv-v6",
+          "firstSeenAt": "2026-10-15T08:14:52.529Z",
+          "portalStatus": "RELEASED",
+          "portalVersion": "Version 7",
+          "enabled": true,
+          "version": 1
+        },
+        {
+          "releaseId": "default",
+          "firstSeenAt": "2026-09-24T07:17:40.069Z",
+          "portalStatus": "UNKNOWN",
+          "portalVersion": null,
+          "enabled": true,
+          "version": 11
+        }
+      ]
+    },
+    {
+      "key": "talereels",
+      "status": 200,
+      "items": [
+        {
+          "releaseId": "talereels-release-20261008",
+          "firstSeenAt": "2026-10-15T08:21:45.206Z",
+          "portalStatus": "UNKNOWN",
+          "portalVersion": null,
+          "enabled": true,
+          "version": 1
+        },
+        {
+          "releaseId": "default",
+          "firstSeenAt": "2026-09-29T08:03:52.185Z",
+          "portalStatus": "UNKNOWN",
+          "portalVersion": null,
+          "enabled": true,
+          "version": 9
+        }
+      ]
+    }
+  ]
+}
+
+COVER_LOG_SUMMARY
+{"requests": 535, "statusCounts": {"200": 531, "304": 4}, "responseBodyBytes": 129883923}

@@ -1,6 +1,7 @@
 import { PrismaClient, type UploadJob } from '@prisma/client';
 import { loadEnv } from '../config/env';
 import { configuredMiniAppKeys, miniAppEnvironment } from '../config/mini-apps';
+import { runtimeDatabaseUrl } from '../config/database-pool';
 import {
   ProviderNotConfiguredError,
   UnconfiguredTikTokShortDramaService,
@@ -12,6 +13,7 @@ import { processLocalUploadJobs } from '../services/local-upload.service';
 import { TikTokShortDramaApiService } from '../services/tiktok-short-drama-api.service';
 import { enqueueDueReviewReconciliations, enqueueVideoSync, processPlatformSyncJobs } from '../services/platform-sync.service';
 import { enqueueDueSharedReconciliations, processSharedPlatformOperations } from '../services/shared-platform.service';
+import { refreshAnalyticsDailySummaries, refreshOverviewSnapshot } from '../services/analytics-summary.service';
 
 const defaultIntervalMs = 30_000;
 const defaultMaxRetries = 5;
@@ -232,7 +234,7 @@ export async function startUploadWorker() {
   const environments = configuredMiniAppKeys(env).map((key) => miniAppEnvironment(env, key)).filter((item): item is typeof env => item !== null);
   const contexts = environments.map((contextEnv) => ({
     env: contextEnv,
-    prisma: new PrismaClient({ datasources: { db: { url: contextEnv.DATABASE_URL } } }),
+    prisma: new PrismaClient({ datasources: { db: { url: runtimeDatabaseUrl(contextEnv.DATABASE_URL, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT) } } }),
     service: contextEnv.BYTEPLUS_ACCESS_KEY && contextEnv.BYTEPLUS_SECRET_KEY
       ? new BytePlusVodService(contextEnv)
       : new UnconfiguredTikTokShortDramaService(),
@@ -241,12 +243,14 @@ export async function startUploadWorker() {
   const sharedDatabaseUrl = env.SHARED_PLATFORM_DATABASE_URL ?? env.DATABASE_URL;
   const sharedPrisma = sharedDatabaseUrl === env.DATABASE_URL
     ? contexts.find((context) => context.env.MINI_APP_KEY === 'main')?.prisma
-    : new PrismaClient({ datasources: { db: { url: sharedDatabaseUrl } } });
+    : new PrismaClient({ datasources: { db: { url: runtimeDatabaseUrl(sharedDatabaseUrl, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT) } } });
   if (!sharedPrisma) throw new Error('Main Prisma context is required for shared platform operations.');
+
   const run = async () => {
     for (const context of contexts) {
       try {
         if (context.service instanceof BytePlusVodService) await processLocalUploadJobs(context.prisma, sharedPrisma, context.service, context.env, {
+          concurrency: 2,
           log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
         });
         await processJobs(context.prisma, context.service, {
@@ -263,6 +267,7 @@ export async function startUploadWorker() {
       } catch (error) {
         console.error(`${context.env.MINI_APP_KEY} worker cycle failed.`, error);
       }
+
     }
     const apiByApp = Object.fromEntries(contexts.map((context) => [context.env.MINI_APP_KEY, context.platformApi]));
     const localPrismaByApp = Object.fromEntries(contexts.map((context) => [context.env.MINI_APP_KEY, context.prisma]));
@@ -276,6 +281,22 @@ export async function startUploadWorker() {
     });
   };
 
+  let analyticsRunning = false;
+  const refreshAnalytics = async () => {
+    if (analyticsRunning) return;
+    analyticsRunning = true;
+    try {
+      for (const context of contexts) {
+        try {
+          await refreshAnalyticsDailySummaries(context.prisma, { days: 2 });
+          await refreshOverviewSnapshot(context.prisma);
+          await context.prisma.miniAppRuntimeError.deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 86_400_000) } } });
+        } catch (error) { console.error(`${context.env.MINI_APP_KEY} analytics summary refresh failed.`, error); }
+      }
+    } finally { analyticsRunning = false; }
+  };
+  void refreshAnalytics();
+  const analyticsTimer = setInterval(() => { void refreshAnalytics(); }, 5 * 60_000);
   await run().catch((error) => console.error('Upload worker cycle failed.', error));
   let running = false;
   const timer = setInterval(() => {
@@ -285,6 +306,7 @@ export async function startUploadWorker() {
   }, env.UPLOAD_WORKER_INTERVAL_MS || defaultIntervalMs);
   const shutdown = async () => {
     clearInterval(timer);
+    clearInterval(analyticsTimer);
     await Promise.all([
       ...contexts.map((context) => context.prisma.$disconnect()),
       ...(sharedPrisma !== contexts.find((context) => context.env.MINI_APP_KEY === 'main')?.prisma ? [sharedPrisma.$disconnect()] : [])

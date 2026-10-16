@@ -1,0 +1,14 @@
+CONTAINERS
+quickreels-admin-1 Up 18 minutes quickreels-admin
+quickreels-covers-1 Up 18 minutes nginx:1.27-alpine
+quickreels-api-1 Up 18 minutes (healthy) quickreels-api
+quickreels-worker-1 Up 18 minutes quickreels-worker
+HEALTH
+{"status":"ok","database":"ok","timestamp":"2026-10-16T04:23:20.108Z"}
+PUBLIC_APPS
+taletv 200 0.042411
+cinereels 200 0.039214
+talereels 200 0.047826
+WORKER_RECENT
+API_5XX_RECENT
+{"count": 0, "recent": []}

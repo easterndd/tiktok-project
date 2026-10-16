@@ -1,0 +1,389 @@
+{
+  "at": "2026-10-16T04:08:38.181Z",
+  "apps": [
+    {
+      "key": "main",
+      "summary": {
+        "_count": {
+          "_all": 91
+        },
+        "_max": {
+          "sourceWindowEnd": "2026-10-16T04:04:57.698Z"
+        }
+      },
+      "endpoints": [
+        {
+          "endpoint": "/admin/analytics/overview",
+          "status": 200,
+          "p50": 14,
+          "p95": 240,
+          "samples": [
+            240,
+            44,
+            21,
+            42,
+            18,
+            21,
+            10,
+            13,
+            11,
+            12,
+            14,
+            6
+          ],
+          "updatedAt": "2026-10-16T04:04:59.397Z"
+        },
+        {
+          "endpoint": "/admin/analytics/audience",
+          "status": 200,
+          "p50": 8,
+          "p95": 32,
+          "samples": [
+            32,
+            8,
+            8,
+            6,
+            17,
+            21,
+            16,
+            8,
+            6,
+            6,
+            9,
+            8
+          ],
+          "updatedAt": "2026-10-16T04:04:57.698Z"
+        },
+        {
+          "endpoint": "/admin/analytics/playback-quality",
+          "status": 200,
+          "p50": 5,
+          "p95": 18,
+          "samples": [
+            18,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5,
+            6,
+            6,
+            9,
+            8
+          ],
+          "updatedAt": null
+        },
+        {
+          "endpoint": "/admin/analytics/health",
+          "status": 200,
+          "p50": 17,
+          "p95": 27,
+          "samples": [
+            27,
+            19,
+            17,
+            18,
+            20,
+            18,
+            15,
+            13,
+            13,
+            14,
+            14,
+            18
+          ],
+          "generatedAt": "2026-10-16T04:08:39.209Z",
+          "counts": {
+            "adFailures": 0,
+            "playbackErrors": 0,
+            "uploadFailures": 0,
+            "platformFailures": 0,
+            "startupErrors": 0,
+            "apiErrors": 0,
+            "scriptErrors": 0,
+            "clientAdErrors": 0
+          }
+        },
+        {
+          "endpoint": "/admin/app-entry-ad-policies",
+          "status": 200,
+          "p50": 7,
+          "p95": 13,
+          "samples": [
+            13,
+            10,
+            10,
+            7,
+            7,
+            6,
+            6,
+            7,
+            7,
+            6,
+            6,
+            9
+          ],
+          "items": 1
+        }
+      ]
+    },
+    {
+      "key": "taletv",
+      "summary": {
+        "_count": {
+          "_all": 91
+        },
+        "_max": {
+          "sourceWindowEnd": "2026-10-16T04:04:59.420Z"
+        }
+      },
+      "endpoints": [
+        {
+          "endpoint": "/admin/analytics/overview",
+          "status": 200,
+          "p50": 4,
+          "p95": 8,
+          "samples": [
+            8,
+            4,
+            4,
+            4,
+            5,
+            6,
+            4,
+            4,
+            4,
+            4,
+            4,
+            5
+          ],
+          "updatedAt": "2026-10-16T04:05:01.061Z"
+        },
+        {
+          "endpoint": "/admin/analytics/audience",
+          "status": 200,
+          "p50": 6,
+          "p95": 157,
+          "samples": [
+            157,
+            20,
+            7,
+            9,
+            7,
+            6,
+            6,
+            5,
+            5,
+            5,
+            6,
+            10
+          ],
+          "updatedAt": "2026-10-16T04:04:59.420Z"
+        },
+        {
+          "endpoint": "/admin/analytics/playback-quality",
+          "status": 200,
+          "p50": 6,
+          "p95": 51,
+          "samples": [
+            51,
+            8,
+            7,
+            6,
+            5,
+            5,
+            5,
+            6,
+            6,
+            6,
+            6,
+            6
+          ],
+          "updatedAt": null
+        },
+        {
+          "endpoint": "/admin/analytics/health",
+          "status": 200,
+          "p50": 200,
+          "p95": 476,
+          "samples": [
+            476,
+            191,
+            282,
+            184,
+            211,
+            196,
+            189,
+            183,
+            203,
+            203,
+            200,
+            291
+          ],
+          "generatedAt": "2026-10-16T04:08:42.588Z",
+          "counts": {
+            "adFailures": 442,
+            "playbackErrors": 0,
+            "uploadFailures": 0,
+            "platformFailures": 0,
+            "startupErrors": 0,
+            "apiErrors": 0,
+            "scriptErrors": 0,
+            "clientAdErrors": 0
+          }
+        },
+        {
+          "endpoint": "/admin/app-entry-ad-policies",
+          "status": 200,
+          "p50": 6,
+          "p95": 9,
+          "samples": [
+            7,
+            6,
+            6,
+            5,
+            6,
+            5,
+            6,
+            6,
+            5,
+            8,
+            7,
+            9
+          ],
+          "items": 2
+        }
+      ]
+    },
+    {
+      "key": "talereels",
+      "summary": {
+        "_count": {
+          "_all": 91
+        },
+        "_max": {
+          "sourceWindowEnd": "2026-10-16T04:05:02.815Z"
+        }
+      },
+      "endpoints": [
+        {
+          "endpoint": "/admin/analytics/overview",
+          "status": 200,
+          "p50": 4,
+          "p95": 7,
+          "samples": [
+            7,
+            4,
+            3,
+            4,
+            4,
+            6,
+            5,
+            4,
+            4,
+            5,
+            4,
+            4
+          ],
+          "updatedAt": "2026-10-16T04:05:05.490Z"
+        },
+        {
+          "endpoint": "/admin/analytics/audience",
+          "status": 200,
+          "p50": 6,
+          "p95": 380,
+          "samples": [
+            380,
+            10,
+            8,
+            6,
+            8,
+            6,
+            5,
+            6,
+            6,
+            5,
+            5,
+            17
+          ],
+          "updatedAt": "2026-10-16T04:05:02.815Z"
+        },
+        {
+          "endpoint": "/admin/analytics/playback-quality",
+          "status": 200,
+          "p50": 5,
+          "p95": 33,
+          "samples": [
+            33,
+            7,
+            23,
+            6,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5
+          ],
+          "updatedAt": null
+        },
+        {
+          "endpoint": "/admin/analytics/health",
+          "status": 200,
+          "p50": 268,
+          "p95": 539,
+          "samples": [
+            539,
+            268,
+            240,
+            236,
+            275,
+            341,
+            299,
+            342,
+            283,
+            251,
+            255,
+            260
+          ],
+          "generatedAt": "2026-10-16T04:08:46.939Z",
+          "counts": {
+            "adFailures": 14,
+            "playbackErrors": 0,
+            "uploadFailures": 0,
+            "platformFailures": 0,
+            "startupErrors": 0,
+            "apiErrors": 0,
+            "scriptErrors": 0,
+            "clientAdErrors": 0
+          }
+        },
+        {
+          "endpoint": "/admin/app-entry-ad-policies",
+          "status": 200,
+          "p50": 6,
+          "p95": 15,
+          "samples": [
+            9,
+            12,
+            15,
+            8,
+            6,
+            6,
+            7,
+            6,
+            6,
+            6,
+            6,
+            8
+          ],
+          "items": 2
+        }
+      ]
+    }
+  ]
+}

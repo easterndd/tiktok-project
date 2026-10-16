@@ -1,0 +1,68 @@
+--- a/apps/api/src/services/byteplus-vod.service.ts
++++ b/apps/api/src/services/byteplus-vod.service.ts
+@@ -323,21 +323,8 @@
+     let response: Awaited<ReturnType<typeof service.CommitUploadInfo>>;
+     let stage = '申请上传地址';
+     try {
+-      // Use the vendor SDK in production. It owns the exact HTTP client behavior
+-      // for ApplyUploadInfo, multipart init/parts/merge, and CommitUploadInfo.
+-      if (typeof service.UploadMedia === 'function') {
+-        stage = '上传视频文件';
+-        response = await service.UploadMedia({
+-          SpaceName: input.spaceName,
+-          FilePath: input.filePath,
+-          FileName: objectName,
+-          CallbackArgs: JSON.stringify({ byteplusAccountId: input.byteplusAccountId }),
+-          Functions: JSON.stringify([
+-            { Name: 'GetMeta' },
+-            { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128), ...(tags ? { Tags: tags } : {}) } }
+-          ])
+-        });
+-      } else {
++      // Keep SDK signing for the control API, but transfer over HTTPS with
++      // bounded requests and part retries. SDK UploadMedia uses unbounded HTTP.
+       const applied = await service.ApplyUploadInfo({
+         SpaceName: input.spaceName,
+         FileType: 'media',
+@@ -367,26 +354,27 @@
+           { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128), ...(tags ? { Tags: tags } : {}) } }
+         ])
+       });
+-      }
+     } catch (error) {
+       if (error instanceof BytePlusVodError) throw error;
+       const provider = sdkProviderError(error);
+       if (provider) throw Object.assign(new BytePlusVodError(`BytePlus ${stage}失败：${provider.message}`, provider.retryable, provider.uncertain), { cause: error });
+       const raw = error instanceof Error ? error.message : String(error);
+-      const transferFailed = typeof service.UploadMedia === 'function' && isBytePlusTransferFailure(raw);
++      const transferFailed = isBytePlusTransferFailure(raw);
+       const status = transferFailed ? raw.match(/Request failed with status code (\d{3})\b/i)?.[1] : undefined;
+       const detail = error instanceof Error ? error.message.replace(/[\r\n\t]/g, ' ').slice(0, 240) : String(error).slice(0, 240);
+       throw Object.assign(new BytePlusVodError(
+         `BytePlus ${stage}失败：${detail}`,
+         status ? isRetryableStatus(Number(status)) : true,
+-        !transferFailed && (stage === '提交媒资' || typeof service.UploadMedia === 'function')
++        !transferFailed && stage === '提交媒资'
+       ), { cause: error });
+     }
+     const providerError = response.ResponseMetadata?.Error;
+     if (providerError) {
++      const provider = sdkProviderError(new Error(JSON.stringify(response)));
+       throw new BytePlusVodError(
+-        safeProviderMessage({ ResponseMetadata: { Error: providerError } }, 'BytePlus VOD 拒绝本地上传。'),
+-        false
++        provider?.message ?? safeProviderMessage({ ResponseMetadata: { Error: providerError } }, 'BytePlus VOD 拒绝本地上传。'),
++        provider?.retryable ?? false,
++        provider?.retryable ?? false
+       );
+     }
+     const data = response.Result?.Data;
+@@ -487,7 +475,7 @@
+ 
+   private async uploadRequest(host: string, objectName: string, auth: string, uploadHeaders: Record<string, string>, stage: UploadStage, query: string,
+     data?: Buffer | string, multipart = false, checksum?: string, retry = true): Promise<Response> {
+-    const url = new URL(`http://${host}/${objectName.split('/').map(encodeURIComponent).join('/')}`);
++    const url = new URL(`https://${host}/${objectName.split('/').map(encodeURIComponent).join('/')}`);
+     url.search = query;
+     for (let attempt = 1; attempt <= (retry ? uploadAttempts : 1); attempt++) {
+       try {

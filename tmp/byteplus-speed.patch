@@ -1,0 +1,47 @@
+diff --git a/apps/api/src/services/byteplus-vod.service.ts b/apps/api/src/services/byteplus-vod.service.ts
+--- a/apps/api/src/services/byteplus-vod.service.ts
++++ b/apps/api/src/services/byteplus-vod.service.ts
+@@ -43,7 +43,7 @@ type LocalUploadInput = {
+   tags?: string[];
+ };
+ 
+-const uploadPartSize = 20 * 1024 * 1024;
++const uploadPartSize = 10 * 1024 * 1024;
+ const uploadAttempts = 3;
+ 
+ export function episodeMediaTitle(albumTitle: string, episodeNo: number) {
+@@ -403,14 +403,26 @@ export class BytePlusVodService implements TikTokShortDramaService {
+           if (host === hosts.at(-1)) throw error;
+           continue;
+         }
+-        const checksums: string[] = [];
+-        for (let offset = 0, partNumber = 1; offset < size; offset += uploadPartSize, partNumber++) {
+-          const data = await this.readPart(file, offset, Math.min(uploadPartSize, size - offset));
+-          const checksum = crc32(data).toString(16).padStart(8, '0');
+-          await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片上传',
+-            `partNumber=${partNumber}&uploadID=${encodeURIComponent(uploadId)}`, data, true, checksum);
+-          checksums.push(`${partNumber - 1}:${checksum}`);
+-        }
++        const partCount = Math.ceil(size / uploadPartSize);
++        const checksums = new Array<string>(partCount);
++        let nextPart = 0;
++        let failed: unknown;
++        const uploadPart = async () => {
++          while (nextPart < partCount && !failed) {
++            const index = nextPart++;
++            try {
++              const data = await this.readPart(file, index * uploadPartSize, Math.min(uploadPartSize, size - index * uploadPartSize));
++              const checksum = crc32(data).toString(16).padStart(8, '0');
++              await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片上传',
++                `partNumber=${index + 1}&uploadID=${encodeURIComponent(uploadId)}`, data, true, checksum);
++              checksums[index] = `${index}:${checksum}`;
++            } catch (error) {
++              failed = error;
++            }
++          }
++        };
++        await Promise.all([uploadPart(), uploadPart()]);
++        if (failed) throw failed;
+         // The BytePlus SDK uses zero-based checksum positions in the merge body.
+         await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片合并', `uploadID=${encodeURIComponent(uploadId)}`,
+           checksums.join(','), true, undefined, false);
