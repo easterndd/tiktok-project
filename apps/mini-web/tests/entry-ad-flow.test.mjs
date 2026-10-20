@@ -3,9 +3,45 @@ import { describe, it } from 'node:test';
 import { runEntryAdFlow } from '../src/features/ads/entry-ad-flow.ts';
 
 const session = { required: true, sessionId: 'session', mode: 'REWARDED_GATED', placementId: 'placement', requiredCount: 3, completedCount: 0, onUnavailable: 'BLOCK' };
-const base = { wait: async () => {}, isActive: () => true, onError: () => {} };
+const base = { refreshSession: async () => session, wait: async () => {}, isActive: () => true, onError: () => {} };
 
 describe('entry ad gate flow', () => {
+  it('forwards the display callback without advancing before server acknowledgement', async () => {
+    const events = [];
+    await runEntryAdFlow({ ...session, requiredCount: 2 }, {
+      ...base,
+      onAdShown: () => events.push('shown'),
+      show: async ({ onShown, adIndex }) => {
+        events.push(`open-${adIndex}`);
+        onShown();
+        return { clientEventId: String(adIndex), isEnded: true };
+      },
+      complete: async (_sessionId, id) => {
+        events.push(`confirm-${id}`);
+        return { completedCount: Number(id), shouldContinue: id !== '2' };
+      }
+    });
+    assert.deepEqual(events, ['open-1', 'shown', 'confirm-1', 'open-2', 'shown', 'confirm-2']);
+  });
+
+  it('stops BLOCK playback failures after three attempts without granting access', async () => {
+    let shows = 0;
+    await assert.rejects(runEntryAdFlow(session, { ...base,
+      show: async () => { shows++; throw new Error('no fill'); },
+      complete: async () => { throw new Error('must not complete'); }
+    }), /no fill/);
+    assert.equal(shows, 3);
+  });
+
+  it('bounds failed acknowledgements without opening another ad', async () => {
+    let shows = 0; let completions = 0;
+    await assert.rejects(runEntryAdFlow(session, { ...base,
+      show: async () => { shows++; return { clientEventId: 'same-id', isEnded: true }; },
+      complete: async (_session, id) => { assert.equal(id, 'same-id'); completions++; throw new Error('offline'); }
+    }), /offline/);
+    assert.equal(shows, 1);
+    assert.equal(completions, 3);
+  });
   it('repeats the same index after early closes in completed mode', async () => {
     const indices = [];
     let shows = 0;
@@ -48,6 +84,38 @@ describe('entry ad gate flow', () => {
       }
     });
     assert.deepEqual(events, ['show', 'shown-id', 'shown-id']);
+  });
+
+  it('refreshes server progress after a conflict and replays only an unconfirmed ad', async () => {
+    let shows = 0;
+    let completes = 0;
+    const shownIndices = [];
+    await runEntryAdFlow({ ...session, requiredCount: 1 }, {
+      ...base,
+      show: async ({ adIndex }) => { shows++; shownIndices.push(adIndex); return { clientEventId: `event-${shows}`, isEnded: true }; },
+      complete: async () => {
+        completes++;
+        if (completes === 1) throw Object.assign(new Error('session conflict'), { status: 409 });
+        return { completedCount: 1, shouldContinue: false };
+      },
+      refreshSession: async () => ({ ...session, requiredCount: 1, completedCount: 0 })
+    });
+    assert.equal(shows, 2);
+    assert.equal(completes, 2);
+    assert.deepEqual(shownIndices, [1, 1]);
+  });
+
+  it('stops on a persistent client error instead of retrying the same completion', async () => {
+    let completes = 0;
+    let refreshes = 0;
+    await assert.rejects(runEntryAdFlow({ ...session, requiredCount: 1 }, {
+      ...base,
+      show: async () => ({ clientEventId: 'event', isEnded: true }),
+      complete: async () => { completes++; throw Object.assign(new Error('unauthorized'), { status: 401 }); },
+      refreshSession: async () => { refreshes++; return session; }
+    }), /unauthorized/);
+    assert.equal(completes, 1);
+    assert.equal(refreshes, 0);
   });
 
   it('applies ALLOW only to unavailable ad playback and stops after cancellation', async () => {

@@ -1,0 +1,1381 @@
+{
+  "at": "2026-10-16T03:52:56.267Z",
+  "apps": [
+    {
+      "key": "main",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:52:46.692Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "taletv",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:52:46.783Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "cinereels",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:16.617Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "talereels",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:17.586Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "storyland",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:18.722Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dramacloud",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:19.012Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dailyreel",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:19.151Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dramaone",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:19.288Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dramaup",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:19.426Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dramavault",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:46.916Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "talehub",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:47.034Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "talebox",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:47.174Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "storyworld",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:47.287Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "storyhub",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:47.398Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dramaroom",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:47.511Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dramazone",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:47.641Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "taleflick",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:47.768Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dramashort",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:47.876Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "storyshort",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:47.988Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "storyflicks",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:48.106Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dramaflicks",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:48.219Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "crownrush",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:48.329Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "sugarreel",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:48.737Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "crimsonshorts",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:48:52.334Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "sweetreel",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:49:47.667Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dramablaze",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:49:49.542Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "heartreel",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:49:54.904Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "dramahit",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:03.912Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "crownreel",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:04.835Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "luxereel",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:05.361Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "elitedrama",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:05.698Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "lucidreel",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:06.629Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "astraclip",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:06.785Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "lumoreel",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:06.937Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "orbitplay",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:07.060Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "zenclip",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:07.262Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "auraclip",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:07.576Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "fluxplay",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:07.956Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "driftreel",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:08.127Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "novaclip",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:08.223Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "key": "lumishort",
+      "tables": [
+        "AnalyticsDailySummary",
+        "AnalyticsOverviewSnapshot",
+        "MiniAppRuntimeError"
+      ],
+      "migrations": [
+        "20261016030000_mini_app_runtime_error",
+        "20261016023000_app_session_active_index",
+        "20261016020000_analytics_daily_summary",
+        "20261015110000_mini_app_code_release_status",
+        "20261010100000_recoverable_local_uploads"
+      ],
+      "summary": [
+        {
+          "days": 91,
+          "latest": "2026-10-16T03:50:08.393Z",
+          "first": "2026-07-18T00:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "latency": [
+    {
+      "key": "main",
+      "endpoint": "/admin/analytics/overview",
+      "samples": [
+        1297,
+        23,
+        11,
+        6,
+        212,
+        5
+      ],
+      "p50": 11,
+      "p95": 1297,
+      "status": 200
+    },
+    {
+      "key": "main",
+      "endpoint": "/admin/analytics/audience",
+      "samples": [
+        62,
+        238,
+        244,
+        220,
+        218,
+        8
+      ],
+      "p50": 218,
+      "p95": 244,
+      "status": 200,
+      "updatedAt": "2026-10-16T03:52:46.757Z"
+    },
+    {
+      "key": "main",
+      "endpoint": "/admin/analytics/playback-quality",
+      "samples": [
+        253,
+        5,
+        5,
+        5,
+        219,
+        16
+      ],
+      "p50": 5,
+      "p95": 253,
+      "status": 200,
+      "updatedAt": "2026-10-16T03:52:46.757Z"
+    },
+    {
+      "key": "main",
+      "endpoint": "/admin/analytics/health",
+      "samples": [
+        55,
+        19,
+        13,
+        13,
+        11,
+        10
+      ],
+      "p50": 13,
+      "p95": 55,
+      "status": 200,
+      "counts": {
+        "adFailures": 0,
+        "playbackErrors": 0,
+        "uploadFailures": 0,
+        "platformFailures": 0
+      }
+    },
+    {
+      "key": "main",
+      "endpoint": "/admin/app-entry-ad-policies",
+      "samples": [
+        228,
+        6,
+        5,
+        8,
+        6,
+        6
+      ],
+      "p50": 6,
+      "p95": 228,
+      "status": 200,
+      "items": 1
+    },
+    {
+      "key": "taletv",
+      "endpoint": "/admin/analytics/overview",
+      "samples": [
+        203,
+        7,
+        4,
+        10,
+        221,
+        4
+      ],
+      "p50": 7,
+      "p95": 221,
+      "status": 200
+    },
+    {
+      "key": "taletv",
+      "endpoint": "/admin/analytics/audience",
+      "samples": [
+        452,
+        233,
+        226,
+        222,
+        225,
+        9
+      ],
+      "p50": 225,
+      "p95": 452,
+      "status": 200,
+      "updatedAt": "2026-10-16T03:52:47.515Z"
+    },
+    {
+      "key": "taletv",
+      "endpoint": "/admin/analytics/playback-quality",
+      "samples": [
+        245,
+        7,
+        216,
+        8,
+        216,
+        220
+      ],
+      "p50": 216,
+      "p95": 245,
+      "status": 200,
+      "updatedAt": "2026-10-16T03:52:47.515Z"
+    },
+    {
+      "key": "taletv",
+      "endpoint": "/admin/analytics/health",
+      "samples": [
+        828,
+        352,
+        345,
+        290,
+        226,
+        254
+      ],
+      "p50": 290,
+      "p95": 828,
+      "status": 200,
+      "counts": {
+        "adFailures": 453,
+        "playbackErrors": 0,
+        "uploadFailures": 0,
+        "platformFailures": 0
+      }
+    },
+    {
+      "key": "taletv",
+      "endpoint": "/admin/app-entry-ad-policies",
+      "samples": [
+        223,
+        218,
+        8,
+        230,
+        7,
+        6
+      ],
+      "p50": 8,
+      "p95": 230,
+      "status": 200,
+      "items": 2
+    },
+    {
+      "key": "talereels",
+      "endpoint": "/admin/analytics/overview",
+      "samples": [
+        184,
+        15,
+        7,
+        6,
+        6,
+        6
+      ],
+      "p50": 6,
+      "p95": 184,
+      "status": 200
+    },
+    {
+      "key": "talereels",
+      "endpoint": "/admin/analytics/audience",
+      "samples": [
+        493,
+        9,
+        215,
+        218,
+        215,
+        5
+      ],
+      "p50": 215,
+      "p95": 493,
+      "status": 200,
+      "updatedAt": "2026-10-16T03:48:18.692Z"
+    },
+    {
+      "key": "talereels",
+      "endpoint": "/admin/analytics/playback-quality",
+      "samples": [
+        249,
+        5,
+        4,
+        4,
+        4,
+        5
+      ],
+      "p50": 4,
+      "p95": 249,
+      "status": 200,
+      "updatedAt": "2026-10-16T03:48:18.692Z"
+    },
+    {
+      "key": "talereels",
+      "endpoint": "/admin/analytics/health",
+      "samples": [
+        1170,
+        342,
+        272,
+        281,
+        497,
+        333
+      ],
+      "p50": 333,
+      "p95": 1170,
+      "status": 200,
+      "counts": {
+        "adFailures": 17,
+        "playbackErrors": 0,
+        "uploadFailures": 0,
+        "platformFailures": 0
+      }
+    },
+    {
+      "key": "talereels",
+      "endpoint": "/admin/app-entry-ad-policies",
+      "samples": [
+        219,
+        219,
+        222,
+        6,
+        218,
+        7
+      ],
+      "p50": 218,
+      "p95": 222,
+      "status": 200,
+      "items": 2
+    }
+  ],
+  "coverSamples": [
+    {
+      "publicUrl": "https://api.evergreenprosper.com/api/v1/assets/covers/063785bdf3654161393ea04558153fdd08cf14644124ac0b81f1177bd48b085e.png",
+      "fileSize": 2727476,
+      "width": 1054,
+      "height": 1492
+    },
+    {
+      "publicUrl": "https://api.evergreenprosper.com/api/v1/assets/covers/ed591655bb7a457b350eca6ffb90c1c96694ca705c0e09fb42a271c0fdeb24e6.png",
+      "fileSize": 2285114,
+      "width": 1049,
+      "height": 1499
+    }
+  ],
+  "indexes": [
+    {
+      "indexname": "AppSession_pkey",
+      "indexdef": "CREATE UNIQUE INDEX \"AppSession_pkey\" ON talereels.\"AppSession\" USING btree (id)"
+    },
+    {
+      "indexname": "AppSession_userId_clientSessionId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"AppSession_userId_clientSessionId_key\" ON talereels.\"AppSession\" USING btree (\"userId\", \"clientSessionId\")"
+    },
+    {
+      "indexname": "AppSession_startedAt_userId_idx",
+      "indexdef": "CREATE INDEX \"AppSession_startedAt_userId_idx\" ON talereels.\"AppSession\" USING btree (\"startedAt\", \"userId\")"
+    },
+    {
+      "indexname": "AppSession_userId_lastSeenAt_idx",
+      "indexdef": "CREATE INDEX \"AppSession_userId_lastSeenAt_idx\" ON talereels.\"AppSession\" USING btree (\"userId\", \"lastSeenAt\")"
+    },
+    {
+      "indexname": "AppSession_userId_startedAt_idx",
+      "indexdef": "CREATE INDEX \"AppSession_userId_startedAt_idx\" ON talereels.\"AppSession\" USING btree (\"userId\", \"startedAt\")"
+    },
+    {
+      "indexname": "PlaybackQualityEvent_pkey",
+      "indexdef": "CREATE UNIQUE INDEX \"PlaybackQualityEvent_pkey\" ON talereels.\"PlaybackQualityEvent\" USING btree (id)"
+    },
+    {
+      "indexname": "PlaybackQualityEvent_episodeId_createdAt_idx",
+      "indexdef": "CREATE INDEX \"PlaybackQualityEvent_episodeId_createdAt_idx\" ON talereels.\"PlaybackQualityEvent\" USING btree (\"episodeId\", \"createdAt\")"
+    },
+    {
+      "indexname": "PlaybackQualityEvent_eventType_createdAt_idx",
+      "indexdef": "CREATE INDEX \"PlaybackQualityEvent_eventType_createdAt_idx\" ON talereels.\"PlaybackQualityEvent\" USING btree (\"eventType\", \"createdAt\")"
+    },
+    {
+      "indexname": "PlaybackQualityEvent_sessionId_createdAt_idx",
+      "indexdef": "CREATE INDEX \"PlaybackQualityEvent_sessionId_createdAt_idx\" ON talereels.\"PlaybackQualityEvent\" USING btree (\"sessionId\", \"createdAt\")"
+    },
+    {
+      "indexname": "PlaybackQualityEvent_userId_createdAt_idx",
+      "indexdef": "CREATE INDEX \"PlaybackQualityEvent_userId_createdAt_idx\" ON talereels.\"PlaybackQualityEvent\" USING btree (\"userId\", \"createdAt\")"
+    }
+  ],
+  "explain": {
+    "active": [
+      {
+        "QUERY PLAN": [
+          {
+            "Plan": {
+              "Node Type": "Aggregate",
+              "Strategy": "Plain",
+              "Partial Mode": "Simple",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 21011.09,
+              "Total Cost": 21011.1,
+              "Plan Rows": 1,
+              "Plan Width": 8,
+              "Actual Startup Time": 103.625,
+              "Actual Total Time": 103.627,
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 21413,
+              "Shared Read Blocks": 1,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "Index Only Scan",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Scan Direction": "Forward",
+                  "Index Name": "AppSession_userId_startedAt_idx",
+                  "Relation Name": "AppSession",
+                  "Alias": "AppSession",
+                  "Startup Cost": 0.42,
+                  "Total Cost": 20175.93,
+                  "Plan Rows": 334063,
+                  "Plan Width": 26,
+                  "Actual Startup Time": 0.039,
+                  "Actual Total Time": 72.284,
+                  "Actual Rows": 334060,
+                  "Actual Loops": 1,
+                  "Index Cond": "((\"startedAt\" >= '2026-09-16 03:53:11.32+00'::timestamp with time zone) AND (\"startedAt\" < '2026-10-16 03:53:11.32+00'::timestamp with time zone))",
+                  "Rows Removed by Index Recheck": 0,
+                  "Heap Fetches": 61600,
+                  "Shared Hit Blocks": 21413,
+                  "Shared Read Blocks": 1,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0
+                }
+              ]
+            },
+            "Planning": {
+              "Shared Hit Blocks": 9,
+              "Shared Read Blocks": 0,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0
+            },
+            "Planning Time": 0.193,
+            "Triggers": [],
+            "Execution Time": 103.686
+          }
+        ]
+      }
+    ],
+    "playback": [
+      {
+        "QUERY PLAN": [
+          {
+            "Plan": {
+              "Node Type": "Aggregate",
+              "Strategy": "Plain",
+              "Partial Mode": "Simple",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 8.3,
+              "Total Cost": 8.31,
+              "Plan Rows": 1,
+              "Plan Width": 8,
+              "Actual Startup Time": 0.147,
+              "Actual Total Time": 0.148,
+              "Actual Rows": 1,
+              "Actual Loops": 1,
+              "Shared Hit Blocks": 6,
+              "Shared Read Blocks": 0,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0,
+              "Plans": [
+                {
+                  "Node Type": "Index Only Scan",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Scan Direction": "Forward",
+                  "Index Name": "PlaybackQualityEvent_eventType_createdAt_idx",
+                  "Relation Name": "PlaybackQualityEvent",
+                  "Alias": "PlaybackQualityEvent",
+                  "Startup Cost": 0.27,
+                  "Total Cost": 8.29,
+                  "Plan Rows": 1,
+                  "Plan Width": 0,
+                  "Actual Startup Time": 0.141,
+                  "Actual Total Time": 0.142,
+                  "Actual Rows": 1,
+                  "Actual Loops": 1,
+                  "Index Cond": "((\"eventType\" = 'ERROR'::text) AND (\"createdAt\" >= '2026-09-16 03:53:11.32+00'::timestamp with time zone) AND (\"createdAt\" < '2026-10-16 03:53:11.32+00'::timestamp with time zone))",
+                  "Rows Removed by Index Recheck": 0,
+                  "Heap Fetches": 1,
+                  "Shared Hit Blocks": 6,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0
+                }
+              ]
+            },
+            "Planning": {
+              "Shared Hit Blocks": 0,
+              "Shared Read Blocks": 0,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0
+            },
+            "Planning Time": 0.101,
+            "Triggers": [],
+            "Execution Time": 0.179
+          }
+        ]
+      }
+    ]
+  }
+}

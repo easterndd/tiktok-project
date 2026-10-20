@@ -1,0 +1,4 @@
+set -eu
+cd /opt/quickreels
+sudo docker cp /tmp/ad-conflict-diagnose.cjs quickreels-api-1:/app/apps/api/ad-conflict-diagnose.cjs
+sudo docker exec quickreels-api-1 node ad-conflict-diagnose.cjs cmvdb0gth26r5pl01ouvfockx cmvdb0v9i27vzpl01fetwtmde cmvdb10yy28efpl01v19u68t7 cmvdaz0hf230lpl01ypckajsl cmvdb19sg2922pl01zzfloej8 cmvdb15nl28sqpl01guoayuor cmvdb13pk28m1pl016w47glf5 cmvdb1h6i29lbpl011qxgt23u cmvdb1s582ag9pl01gidfabrv cmvdb1ndz2a25pl0165nq1bai cmvd9xh4uzaknpl012dgr4r8j cmvdb1skj2ahipl01an2vrwbq

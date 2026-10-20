@@ -1,0 +1,6 @@
+[Unit]
+Description=Check QuickReels disk space and cap Docker build cache
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/quickreels-disk-guard

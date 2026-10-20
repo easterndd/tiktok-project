@@ -1,5 +1,21 @@
 services:
+  covers:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - cover_assets:/usr/share/nginx/html/covers:ro
+      - ./deploy/covers/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    expose:
+      - "80"
+    networks:
+      - quickreels-proxy
+
   api:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -7,6 +23,7 @@ services:
       - ${QUICKREELS_ENV_FILE:-.env.production}
     environment:
       LOCAL_UPLOAD_STORAGE_DIR: /var/lib/quickreels/video-uploads
+      DATABASE_POOLER_HOST: pgbouncer
     dns:
       - 183.60.83.19
       - 183.60.82.98
@@ -15,6 +32,8 @@ services:
       - "3000"
     depends_on:
       postgres:
+        condition: service_healthy
+      pgbouncer:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
@@ -30,6 +49,11 @@ services:
       - quickreels-internal
 
   worker:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -37,6 +61,7 @@ services:
       - ${QUICKREELS_ENV_FILE:-.env.production}
     environment:
       LOCAL_UPLOAD_STORAGE_DIR: /var/lib/quickreels/video-uploads
+      DATABASE_POOLER_HOST: pgbouncer
     dns:
       - 183.60.83.19
       - 183.60.82.98
@@ -44,6 +69,8 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
+        condition: service_healthy
+      pgbouncer:
         condition: service_healthy
     volumes:
       - cover_assets:/var/lib/quickreels/cover-assets
@@ -53,6 +80,11 @@ services:
       - quickreels-internal
 
   admin:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     build:
       context: .
       dockerfile: apps/admin-web/Dockerfile
@@ -178,13 +210,53 @@ services:
         VITE_LUMISHORT_API_BASE_URL: ${VITE_LUMISHORT_API_BASE_URL:-}
         VITE_LUMISHORT_REWARDED_PLACEMENT_ID: ${VITE_LUMISHORT_REWARDED_PLACEMENT_ID:-}
         VITE_LUMISHORT_APP_ENTRY_PLACEMENT_ID: ${VITE_LUMISHORT_APP_ENTRY_PLACEMENT_ID:-}
+        VITE_SONICREEL_API_BASE_URL: ${VITE_SONICREEL_API_BASE_URL:-}
+        VITE_SONICREEL_REWARDED_PLACEMENT_ID: ${VITE_SONICREEL_REWARDED_PLACEMENT_ID:-}
+        VITE_SONICREEL_APP_ENTRY_PLACEMENT_ID: ${VITE_SONICREEL_APP_ENTRY_PLACEMENT_ID:-}
+        VITE_HARBORPLAY_API_BASE_URL: ${VITE_HARBORPLAY_API_BASE_URL:-}
+        VITE_HARBORPLAY_REWARDED_PLACEMENT_ID: ${VITE_HARBORPLAY_REWARDED_PLACEMENT_ID:-}
+        VITE_HARBORPLAY_APP_ENTRY_PLACEMENT_ID: ${VITE_HARBORPLAY_APP_ENTRY_PLACEMENT_ID:-}
+        VITE_DAZZLESHORT_API_BASE_URL: ${VITE_DAZZLESHORT_API_BASE_URL:-}
+        VITE_DAZZLESHORT_REWARDED_PLACEMENT_ID: ${VITE_DAZZLESHORT_REWARDED_PLACEMENT_ID:-}
+        VITE_DAZZLESHORT_APP_ENTRY_PLACEMENT_ID: ${VITE_DAZZLESHORT_APP_ENTRY_PLACEMENT_ID:-}
+        VITE_FABLECLIP_API_BASE_URL: ${VITE_FABLECLIP_API_BASE_URL:-}
+        VITE_FABLECLIP_REWARDED_PLACEMENT_ID: ${VITE_FABLECLIP_REWARDED_PLACEMENT_ID:-}
+        VITE_FABLECLIP_APP_ENTRY_PLACEMENT_ID: ${VITE_FABLECLIP_APP_ENTRY_PLACEMENT_ID:-}
+        VITE_EMBERREEL_API_BASE_URL: ${VITE_EMBERREEL_API_BASE_URL:-}
+        VITE_EMBERREEL_REWARDED_PLACEMENT_ID: ${VITE_EMBERREEL_REWARDED_PLACEMENT_ID:-}
+        VITE_EMBERREEL_APP_ENTRY_PLACEMENT_ID: ${VITE_EMBERREEL_APP_ENTRY_PLACEMENT_ID:-}
     restart: unless-stopped
     expose:
       - "80"
     networks:
       - quickreels-proxy
 
+  pgbouncer:
+    build:
+      context: .
+      dockerfile: deploy/pgbouncer/Dockerfile
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env.production}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env.production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U $$POSTGRES_USER -d $${POSTGRES_DB}__public"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - quickreels-internal
+
   postgres:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     image: postgres:16-alpine
     restart: unless-stopped
     environment:

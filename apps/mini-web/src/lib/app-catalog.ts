@@ -11,7 +11,9 @@ export const newMiniApps = {
   dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama',
   lucidreel: 'LucidReel', astraclip: 'AstraClip', lumoreel: 'LumoReel', orbitplay: 'OrbitPlay',
   zenclip: 'ZenClip', auraclip: 'AuraClip', fluxplay: 'FluxPlay', driftreel: 'DriftReel',
-  novaclip: 'NovaClip', lumishort: 'LumiShort'
+  novaclip: 'NovaClip', lumishort: 'LumiShort',
+  sonicreel: 'SonicReel', harborplay: 'HarborPlay', dazzleshort: 'DazzleShort',
+  fableclip: 'FableClip', emberreel: 'EmberReel'
 } as const;
 
 export type NewMiniAppKey = keyof typeof newMiniApps;

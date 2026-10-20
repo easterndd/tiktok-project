@@ -19,6 +19,8 @@ const environment = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   HOST: z.string().default('0.0.0.0'),
   DATABASE_URL: z.string().url(),
+  DATABASE_POOLER_HOST: z.string().trim().min(1).optional(),
+  DATABASE_POOLER_PORT: z.coerce.number().int().min(1).max(65535).optional(),
   SHARED_PLATFORM_DATABASE_URL: z.string().url().optional(),
   TALETV_DATABASE_URL: z.string().url().optional(),
   CINEREELS_DATABASE_URL: z.string().url().optional(),
@@ -30,6 +32,7 @@ const environment = z.object({
   // supplied X-Geo-Country and writes a verified ISO 3166-1 alpha-2 value.
   TRUST_GEO_COUNTRY_HEADER: z.coerce.boolean().default(false),
   JWT_SECRET: z.string().min(32),
+  USER_DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
   USER_JWT_EXPIRES_IN: z.coerce.number().int().positive().default(3_600),
   ADMIN_JWT_EXPIRES_IN: z.coerce.number().int().positive().default(28_800),
   ADMIN_BOOTSTRAP_EMAIL: z.string().email().optional(),

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { PrismaClient } from '@prisma/client';
 import type { Env } from '../config/env';
-import { assertMediaScope, findUploadMedia, processLocalUploadJobs, uploadScope, uploadTags } from './local-upload.service';
+import { assertMediaScope, findUploadMedia, matchesUploadTags, processLocalUploadJobs, uploadScope, uploadTags } from './local-upload.service';
 import { BytePlusVodError, type BytePlusMedia, type BytePlusVodService } from './byteplus-vod.service';
 
 const env = {
@@ -23,11 +23,15 @@ function vod(input: { items?: BytePlusMedia[]; known?: BytePlusMedia[]; upload?:
   let uploads = 0;
   const service = {
     listMedia: async ({ tags }: { tags: string }) => {
-      assert.equal(tags, uploadTags(uploadScope(env), 'job-1')[1]);
-      return { items: input.items ?? [], total: input.items?.length ?? 0 };
+      const items = (input.items ?? []).filter((item) => item.tags?.includes(tags));
+      return { items, total: items.length };
     },
     getMediaInfos: async () => input.known ?? [],
-    uploadLocalVideo: async () => { uploads++; return input.upload ? input.upload() : { byteplusVid: 'vid-1' }; }
+    uploadLocalVideo: async ({ tags }: { tags?: string[] }) => {
+      assert.equal(tags?.join(',').length, 35);
+      uploads++;
+      return input.upload ? input.upload() : { byteplusVid: 'vid-1' };
+    }
   } as unknown as BytePlusVodService;
   return { service, uploadCount: () => uploads };
 }
@@ -70,6 +74,16 @@ function database(filePath: string | null, overrides: Record<string, unknown> = 
 }
 
 describe('local upload recovery', () => {
+  it('uses BytePlus-compatible tags while keeping app and job identities distinct', () => {
+    const scope = uploadScope(env);
+    const tags = uploadTags(scope, 'job-1');
+    assert.equal(tags.join(',').length, 35);
+    assert.notEqual(tags[0], uploadTags(uploadScope({ ...env, MINI_APP_KEY: 'taletv' } as Env), 'job-1')[0]);
+    assert.notEqual(tags[1], uploadTags(scope, 'job-2')[1]);
+    assert.equal(matchesUploadTags(tags, scope, 'job-1'), true);
+    assert.equal(matchesUploadTags([`qr-scope-${scope}`, 'qr-upload-job-1'], scope, 'job-1'), true);
+  });
+
   it('binds only the exact task and scope match after a lost upload response', async () => {
     const foreign = { ...env, MINI_APP_KEY: 'taletv', TIKTOK_CLIENT_KEY: 'other-client' } as Env;
     const { service } = vod({ items: [mediaFor('job-1', foreign), mediaFor('other-job'), mediaFor()] });
@@ -78,6 +92,10 @@ describe('local upload recovery', () => {
       env, { id: 'job-1', uploadScope: uploadScope(env), providerJobId: null }), /多个 VID/);
     await assert.rejects(() => assertMediaScope(database(null).prisma, env, mediaFor('job-1', foreign)), /其他小程序/);
     await assert.rejects(() => assertMediaScope(database(null).prisma, env, { vid: 'untagged', title: 'Episode 1' }), /缺少可验证/);
+    const oldMedia = { ...mediaFor(), tags: [`qr-scope-${uploadScope(env)}`, 'qr-upload-job-1'] };
+    assert.equal((await findUploadMedia(vod({ known: [oldMedia] }).service, env,
+      { id: 'job-1', uploadScope: uploadScope(env), providerJobId: 'vid-1' }))?.vid, 'vid-1');
+    await assertMediaScope(database(null).prisma, env, oldMedia);
   });
 
   it('recovers a committed upload without transferring the file again', async () => {
@@ -184,6 +202,45 @@ describe('local upload recovery', () => {
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
+  it('retries a retained legacy SDK part failure without waiting for VID reconciliation', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-sdk-part-retry-'));
+    try {
+      const path = join(directory, 'episode.mp4');
+      await writeFile(path, 'video');
+      const db = database(path, { status: 'PROCESSING', retryCount: 1,
+        remoteStartedAt: new Date(instant.getTime() - 60_000),
+        errorMessage: '上传结果待确认：BytePlus 上传视频文件失败：Upload Media Error: Error: upload part error:AxiosError: Request failed with status code 503' });
+      const provider = vod({ known: [mediaFor()] });
+      provider.service.listMedia = async () => { throw new Error('An uncommitted part failure should not query VOD'); };
+      provider.service.uploadLocalVideo = async () => {
+        assert.equal(db.job.errorMessage, null, 'A running retry must not display the previous failure');
+        assert.equal(db.job.nextAttemptAt, null);
+        return { byteplusVid: 'vid-1', coverUrl: undefined, durationMs: undefined };
+      };
+      const findMany = db.prisma.uploadJob.findMany.bind(db.prisma.uploadJob);
+      db.prisma.uploadJob.findMany = (async (args: any) => {
+        assert.equal(args.where.id, 'job-1');
+        assert.ok(args.where.AND, 'Manual resume must retain the lease and retry eligibility checks');
+        return findMany(args);
+      }) as typeof db.prisma.uploadJob.findMany;
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service,
+        { ...env, LOCAL_UPLOAD_STORAGE_DIR: directory }, { now: () => instant, jobId: 'job-1' });
+      assert.equal(db.job.retryCount, 2);
+      assert.equal(db.job.status, 'SUCCEEDED');
+      assert.equal(db.episode.byteplusVid, 'vid-1');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('recovers a recorded VID even if the previous error mentions a failed part', async () => {
+    const db = database(null, { status: 'PROCESSING', providerJobId: 'vid-1',
+      remoteStartedAt: new Date(instant.getTime() - 60_000), errorMessage: 'upload part error: status code 503' });
+    const provider = vod({ known: [mediaFor()] });
+    await processLocalUploadJobs(db.prisma, db.prisma, provider.service, env, { now: () => instant });
+    assert.equal(provider.uploadCount(), 0);
+    assert.equal(db.job.status, 'SUCCEEDED');
+    assert.equal(db.episode.byteplusVid, 'vid-1');
+  });
+
   it('fails a provider parameter rejection and can retry the retained file directly', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'quickreels-invalid-commit-'));
     try {
@@ -225,5 +282,76 @@ describe('local upload recovery', () => {
       assert.equal(db.episode.byteplusVid, null);
       assert.match(db.job.errorMessage, /等待媒资可查询/);
     } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('uploads at most two episodes concurrently and starts the next when a slot opens', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-parallel-upload-'));
+    const releases = new Map<number, () => void>();
+    let run: Promise<number> | undefined;
+    try {
+      const databases = await Promise.all([1, 2, 3].map(async (number) => {
+        const path = join(directory, `episode-${number}.mp4`);
+        await writeFile(path, 'video');
+        const db = database(path, { id: `job-${number}`, episodeId: `episode-${number}`, sourceName: `episode-${number}.mp4` });
+        db.episode.id = `episode-${number}`;
+        db.episode.episodeNo = number;
+        return db;
+      }));
+      const batch: Record<string, any> = {
+        uploadJob: {
+          findMany: async () => databases.map((db) => db.job),
+          updateMany: async (args: any) => databases.find((db) => db.job.id === args.where.id)!.prisma.uploadJob.updateMany(args)
+        },
+        episode: {
+          updateMany: async (args: any) => databases.find((db) => db.episode.id === args.where.id)!.prisma.episode.updateMany(args)
+        },
+        sharedMediaAsset: databases[0].prisma.sharedMediaAsset
+      };
+      batch.$transaction = async (callback: (tx: unknown) => Promise<unknown>) => callback(batch);
+      const prisma = batch as PrismaClient;
+      let active = 0;
+      let peak = 0;
+      const started: number[] = [];
+      let firstPairStarted!: () => void;
+      let thirdStarted!: () => void;
+      const firstPair = new Promise<void>((resolve) => { firstPairStarted = resolve; });
+      const third = new Promise<void>((resolve) => { thirdStarted = resolve; });
+      const service = {
+        uploadLocalVideo: async ({ fileName }: { fileName: string }) => {
+          const number = Number(fileName.match(/episode-(\d+)/)?.[1]);
+          started.push(number);
+          peak = Math.max(peak, ++active);
+          if (started.length === 2) firstPairStarted();
+          if (started.length === 3) thirdStarted();
+          await new Promise<void>((resolve) => { releases.set(number, resolve); });
+          active--;
+          return { byteplusVid: `vid-${number}` };
+        },
+        getMediaInfos: async ({ vids }: { vids: string[] }) => {
+          const number = Number(vids[0].split('-')[1]);
+          return [{ ...mediaFor(`job-${number}`), vid: vids[0] }];
+        }
+      } as unknown as BytePlusVodService;
+      const within = <T>(promise: Promise<T>) => Promise.race([promise, new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Parallel upload did not advance')), 2_000);
+      })]);
+      run = processLocalUploadJobs(prisma, prisma, service, { ...env, LOCAL_UPLOAD_STORAGE_DIR: directory },
+        { now: () => instant, concurrency: 2 });
+      await within(firstPair);
+      assert.deepEqual(started, [1, 2]);
+      assert.equal(peak, 2);
+      releases.get(1)!();
+      await within(third);
+      assert.deepEqual(started, [1, 2, 3]);
+      assert.equal(peak, 2);
+      releases.get(2)!();
+      releases.get(3)!();
+      assert.equal(await within(run), 3);
+      assert.ok(databases.every((db) => db.job.status === 'SUCCEEDED' && db.episode.byteplusVid));
+    } finally {
+      for (const release of releases.values()) release();
+      await run?.catch(() => undefined);
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

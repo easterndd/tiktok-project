@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildAlbumSnapshot, enqueueAlbumAction, enqueueDueReviewReconciliations, enqueuePlatformSyncJob, processPlatformSyncJobs } from './platform-sync.service';
+import { buildAlbumSnapshot, enqueueAlbumAction, enqueueAlbumVersionSync, enqueueDueReviewReconciliations, enqueuePlatformSyncJob, processPlatformSyncJobs } from './platform-sync.service';
 import { TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
 
 test('reports every episode missing TikTok registration before version sync', async () => {
   const prisma = { album: { findUnique: async () => ({
     coverAsset: { providerImageId: 'cover-1' }, releaseYear: 2026, dramaType: 2, tagList: [1],
+    description: 'Description',
     episodes: [
       { episodeNo: 15, byteplusVid: 'vid-15', tiktokVideoStatus: 'READY' },
       { episodeNo: 16, byteplusVid: 'vid-16', tiktokVideoStatus: 'PENDING' },
@@ -16,6 +17,19 @@ test('reports every episode missing TikTok registration before version sync', as
     assert.equal(error.statusCode, 409);
     assert.match(error.message, /第 16、18 集视频/);
     assert.match(error.message, /共 2 集/);
+    return true;
+  });
+});
+
+test('rejects version sync locally when the TikTok description is empty', async () => {
+  const prisma = { album: { findUnique: async () => ({
+    coverAsset: { providerImageId: 'cover-1' }, releaseYear: 2026, dramaType: 2, tagList: [1],
+    description: '  ',
+    episodes: [{ episodeNo: 1, byteplusVid: 'vid-1', tiktokVideoStatus: 'READY' }]
+  }) } };
+  await assert.rejects(() => buildAlbumSnapshot(prisma as any, 'album-1'), (error: any) => {
+    assert.equal(error.statusCode, 409);
+    assert.match(error.message, /剧情简介/);
     return true;
   });
 });
@@ -67,6 +81,37 @@ test('does not duplicate an active platform sync job', async () => {
   });
 
   assert.equal(result, existing);
+});
+
+test('queues a fresh version task only after reconciliation confirms no TikTok version', async () => {
+  const conflict = { id: 'uncertain-version', kind: 'ALBUM_VERSION', status: 'CONFLICT', createdAt: new Date('2026-10-14T02:59:50Z'), completedAt: new Date('2026-10-14T03:00:00Z') };
+  let reconciliation: any = null;
+  const queued: any[] = [];
+  const prisma: any = {
+    album: { findUnique: async () => ({
+      reviewStatus: null, tiktokAlbumId: 'platform-album', tiktokVersion: null,
+      coverAsset: { providerImageId: 'cover-1' }, releaseYear: 2026, dramaType: 2, tagList: [1],
+      language: 'en', title: 'Drama', description: 'Description',
+      episodes: [{ id: 'episode-1', episodeNo: 1, title: 'Episode 1', byteplusVid: 'vid-1', tiktokVideoStatus: 'READY' }]
+    }) },
+    platformSyncJob: {
+      findFirst: async ({ where }: any) => where.kind === 'ALBUM_VERSION' && where.status === 'CONFLICT' ? conflict
+        : where.kind === 'ALBUM_VERSION' && where.status === 'SUCCEEDED' ? null
+        : where.kind === 'RECONCILE' ? reconciliation : null,
+      findUnique: async ({ where }: any) => String(where.dedupeKey).includes(':retry:') ? null : conflict,
+      upsert: async ({ create }: any) => { queued.push(create); return { id: 'retry-version', ...create }; }
+    }
+  };
+  await assert.rejects(() => enqueueAlbumVersionSync(prisma, 'album-1'), /请先对账/);
+  reconciliation = { id: 'reconciled', status: 'SUCCEEDED', completedAt: new Date('2026-10-14T03:01:00Z'),
+    snapshotJson: { platformAlbumId: 'platform-album' }, providerResponse: { album_version_list: [] } };
+  const retry = await enqueueAlbumVersionSync(prisma, 'album-1');
+  assert.equal(retry.status, 'PENDING');
+  assert.equal((retry.snapshotJson as any).retryOfJobId, conflict.id);
+  assert.match(retry.dedupeKey, /:retry:/);
+  assert.equal(queued.length, 1);
+  reconciliation.providerResponse = { album_version_list: [{ version: 1 }] };
+  await assert.rejects(() => enqueueAlbumVersionSync(prisma, 'album-1'), /未确认当前 TikTok 剧目无版本/);
 });
 
 function urlUploadFixture(extraJob: Record<string, unknown> = {}) {

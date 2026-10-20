@@ -3,6 +3,7 @@ import { clearSessionToken, getOrCreateVisitorKey, getSessionToken, isDemoMode, 
 import { storagePrefix } from '../../lib/app-brand';
 
 let pendingSession: Promise<void> | null = null;
+let pendingTikTokSession: Promise<void> | null = null;
 
 function getOrCreateClientSessionId() {
   const key = `${storagePrefix}_app_session_id`;
@@ -33,7 +34,52 @@ export async function ensureAnonymousSession(options: { force?: boolean } = {}) 
   return pendingSession;
 }
 
+function getTikTokLoginCode() {
+  const login = window.TTMinis?.login;
+  if (!login) return Promise.reject(new Error('TIKTOK_LOGIN_UNAVAILABLE'));
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown, code?: string) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      if (error || !code) reject(error ?? new Error('TIKTOK_LOGIN_CODE_MISSING'));
+      else resolve(code);
+    };
+    const timeout = window.setTimeout(() => finish(new Error('TIKTOK_LOGIN_TIMEOUT')), 12_000);
+    try {
+      const result = login.call(window.TTMinis, {
+        success: (value) => finish(undefined, value?.code),
+        fail: (error) => finish(error)
+      });
+      if (result && typeof result.then === 'function') {
+        void result.then((value) => finish(undefined, value?.code), (error: unknown) => finish(error));
+      }
+    } catch (error) {
+      finish(error);
+    }
+  });
+}
+
+export async function ensureTikTokSession() {
+  if (!window.TTMinis?.login || isDemoMode()) return;
+  if (!pendingTikTokSession) {
+    pendingTikTokSession = (async () => {
+      await ensureAnonymousSession();
+      const code = await getTikTokLoginCode();
+      const session = await apiClient.post<{ accessToken: string }>('/auth/tiktok/session', {
+        code,
+        clientSessionId: getOrCreateClientSessionId(),
+        clientVersion: import.meta.env.VITE_APP_VERSION || undefined
+      });
+      setSessionToken(session.accessToken);
+    })().finally(() => { pendingTikTokSession = null; });
+  }
+  return pendingTikTokSession;
+}
+
 registerUnauthorizedHandler(async () => {
   clearSessionToken();
   await ensureAnonymousSession({ force: true });
+  await ensureTikTokSession();
 });

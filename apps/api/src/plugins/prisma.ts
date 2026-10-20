@@ -7,8 +7,8 @@ declare module 'fastify' {
   }
 }
 
-export async function registerPrisma(app: FastifyInstance, providedPrisma?: PrismaClient) {
-  const prisma = providedPrisma ?? new PrismaClient();
+export async function registerPrisma(app: FastifyInstance, providedPrisma?: PrismaClient, databaseUrl?: string) {
+  const prisma = providedPrisma ?? (databaseUrl ? new PrismaClient({ datasources: { db: { url: databaseUrl } } }) : new PrismaClient());
   app.decorate('prisma', prisma);
   if (!providedPrisma) app.addHook('onClose', async () => prisma.$disconnect());
 }

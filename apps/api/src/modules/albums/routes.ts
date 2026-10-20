@@ -5,6 +5,7 @@ import { optionalUser } from '../../plugins/optional-auth';
 import { isEpisodeFree } from '../../lib/content-access';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
+import { coverThumbnailUrl } from '../../lib/cover-thumbnail';
 
 const params = z.object({ albumId: z.string().min(1).max(128) });
 const localeQuery = z.object({ locale: publicLocaleSchema.default(defaultLocale) });
@@ -15,7 +16,7 @@ function toSummary(album: { id: string; title: string; description: string; cove
     id: album.id,
     title: translated?.title ?? album.title,
     description: translated?.description ?? album.description,
-    coverUrl: translated?.coverUrl ?? album.coverUrl,
+    coverUrl: coverThumbnailUrl(translated?.coverUrl ?? album.coverUrl),
     episodeCount: album._count.episodes,
     updatedAt: album.updatedAt.toISOString(),
     language: album.language,

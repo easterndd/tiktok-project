@@ -212,8 +212,21 @@ model User {
   completionEvents EpisodeCompletionEvent[]
   activityEvents   AudienceActivityEvent[]
   preference       UserPreference?
+  tiktokCredential TikTokCredential?
 
   @@index([createdAt])
+}
+
+model TikTokCredential {
+  userId              String   @id
+  accessTokenEncrypted String   @db.Text
+  refreshTokenEncrypted String  @db.Text
+  accessExpiresAt     DateTime
+  refreshExpiresAt    DateTime
+  scope               String?
+  tokenType           String?
+  updatedAt           DateTime @updatedAt
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Album {
@@ -530,6 +543,7 @@ model AppSession {
 
   @@unique([userId, clientSessionId])
   @@index([startedAt, userId])
+  @@index([userId, startedAt])
   @@index([userId, lastSeenAt])
 }
 
@@ -657,6 +671,7 @@ model AdEvent {
 }
 
 model AppEntryAdPolicy {
+  firstSeenAt DateTime?
   id            String             @id @default("default")
   releaseId     String             @unique @default("default")
   enabled       Boolean            @default(false)
@@ -669,6 +684,19 @@ model AppEntryAdPolicy {
   updatedBy     String?
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
+}
+
+model MiniAppCodeRelease {
+  miniAppKey    String
+  releaseId     String
+  portalVersion String?
+  portalStatus  String   @default("UNKNOWN")
+  updatedBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@id([miniAppKey, releaseId])
+  @@index([miniAppKey, portalStatus])
 }
 
 model AppEntryAdSession {
@@ -876,6 +904,32 @@ model PlaybackQualityEvent {
   @@index([userId, createdAt])
 }
 
+model AnalyticsDailySummary {
+  id                String   @id @default(cuid())
+  day               DateTime @db.Date
+  timezone          String   @default("Asia/Shanghai")
+  newUsers          Int      @default(0)
+  activeUsers       Int      @default(0)
+  watchSessions     Int      @default(0)
+  completedEpisodes Int      @default(0)
+  favorites         Int      @default(0)
+  shares            Int      @default(0)
+  searches          Int      @default(0)
+  playbackEvents    Int      @default(0)
+  playbackErrors    Int      @default(0)
+  adRequested       Int      @default(0)
+  adShown           Int      @default(0)
+  adFailed          Int      @default(0)
+  playbackSummary   Json?
+  sourceWindowStart DateTime
+  sourceWindowEnd   DateTime
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([day, timezone])
+  @@index([timezone, day])
+}
+
 model AdRevenue {
   id             String   @id @default(cuid())
   reportDate     DateTime
@@ -940,6 +994,29 @@ model AdminUser {
   publishedConfigVersions UiConfigVersion[] @relation("UiConfigPublishedBy")
 
   @@index([status, role])
+}
+
+model AnalyticsOverviewSnapshot {
+  id        String   @id @default("default")
+  totals    Json
+  updatedAt DateTime @updatedAt
+}
+
+model MiniAppRuntimeError {
+  id          String   @id @default(cuid())
+  kind        String
+  releaseId   String
+  phase       String
+  message     String
+  path        String?
+  requestId   String?
+  statusCode  Int?
+  durationMs  Int?
+  occurredAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([kind, createdAt])
 }
 
 model AuditLog {

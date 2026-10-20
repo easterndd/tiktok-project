@@ -13,6 +13,12 @@
     "bgColorLight": "#0f172a",
     "bgColorDark": "#0f172a"
   },
+  "domain": {
+    "trustedDomains": [
+      "https://api.evergreenprosper.com",
+      "https://www.yya.ai"
+    ]
+  },
   "build": {
     "htmlEntry": "index.html",
     "outputDir": "dist"

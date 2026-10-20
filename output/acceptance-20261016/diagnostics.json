@@ -1,0 +1,74 @@
+{
+  "marker": "ACCEPTANCE_1792123856205",
+  "posts": [
+    {
+      "kind": "STARTUP",
+      "status": 202
+    },
+    {
+      "kind": "AD",
+      "status": 202
+    },
+    {
+      "kind": "PLAYBACK",
+      "status": 202
+    }
+  ],
+  "health": {
+    "status": 200,
+    "counts": {
+      "adFailures": 16,
+      "playbackErrors": 0,
+      "uploadFailures": 0,
+      "platformFailures": 0,
+      "startupErrors": 1,
+      "apiErrors": 1,
+      "scriptErrors": 0,
+      "clientAdErrors": 1
+    },
+    "rows": [
+      {
+        "kind": "剧集加载失败",
+        "createdAt": "2026-10-16T04:10:56.472Z",
+        "occurredAt": "2026-10-16T04:10:56.460Z",
+        "message": "ACCEPTANCE_1792123856205_PLAYBACK · ACCEPTANCE_1792123856205 test Bearer [REDACTED] [URL]",
+        "releaseId": "acceptance-test",
+        "path": "/episodes",
+        "requestId": "ACCEPTANCE_1792123856205_PLAYBACK",
+        "statusCode": 503,
+        "durationMs": 1234
+      },
+      {
+        "kind": "广告运行异常",
+        "createdAt": "2026-10-16T04:10:56.457Z",
+        "occurredAt": "2026-10-16T04:10:56.442Z",
+        "message": "ACCEPTANCE_1792123856205_AD · ACCEPTANCE_1792123856205 test Bearer [REDACTED] [URL]",
+        "releaseId": "acceptance-test",
+        "path": "/episodes",
+        "requestId": "ACCEPTANCE_1792123856205_AD",
+        "statusCode": 503,
+        "durationMs": 1234
+      },
+      {
+        "kind": "启动异常",
+        "createdAt": "2026-10-16T04:10:56.424Z",
+        "occurredAt": "2026-10-16T04:10:56.325Z",
+        "message": "ACCEPTANCE_1792123856205_STARTUP · ACCEPTANCE_1792123856205 test Bearer [REDACTED] [URL]",
+        "releaseId": "acceptance-test",
+        "path": "/episodes",
+        "requestId": "ACCEPTANCE_1792123856205_STARTUP",
+        "statusCode": 503,
+        "durationMs": 1234
+      }
+    ]
+  },
+  "isolation": {
+    "talereels": 3,
+    "taletv": 0
+  },
+  "pass": true,
+  "cleanup": {
+    "talereels": 3,
+    "taletv": 0
+  }
+}

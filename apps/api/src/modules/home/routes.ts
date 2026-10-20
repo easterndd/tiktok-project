@@ -5,6 +5,7 @@ import { optionalUser } from '../../plugins/optional-auth';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { defaultUiComponents } from '../ui/routes';
 import { isAlbumVisibleInCountry, isPlatformPublished, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
+import { coverThumbnailUrl } from '../../lib/cover-thumbnail';
 
 const querySchema = z.object({ locale: publicLocaleSchema.default(defaultLocale) });
 
@@ -37,7 +38,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
       id: album.id,
       title: translatedText(album.translations, locale, 'title') ?? album.title,
       description: translatedText(album.translations, locale, 'description') ?? album.description,
-      coverUrl: translatedText(album.translations, locale, 'coverUrl') ?? album.coverUrl,
+      coverUrl: coverThumbnailUrl(translatedText(album.translations, locale, 'coverUrl') ?? album.coverUrl),
       episodeCount: album.episodes.length,
       updatedAt: album.updatedAt.toISOString(),
       language: album.language,
@@ -91,7 +92,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
           items: onlineItems.map((item) => {
             const album = item.album!;
             const title = translatedText(album.translations, locale, 'title') ?? album.title;
-            const coverUrl = translatedText(album.translations, locale, 'coverUrl') ?? album.coverUrl;
+            const coverUrl = coverThumbnailUrl(translatedText(album.translations, locale, 'coverUrl') ?? album.coverUrl);
             const localPreviewUrl = app.config.NODE_ENV !== 'production' && app.config.LOCAL_PLAYBACK_ENABLED && item.targetEpisode?.albumId === album.id && item.targetEpisode.status === 'ONLINE'
               ? item.targetEpisode.localPlaybackUrl
               : null;
@@ -99,8 +100,8 @@ export async function registerHomeRoutes(app: FastifyInstance) {
               albumId: album.id,
               title,
               subtitle: translatedText(album.translations, locale, 'description') ?? album.description,
-              coverUrl: item.imageUrl ?? coverUrl,
-              backdropUrl: item.imageUrl ?? coverUrl,
+              coverUrl: coverThumbnailUrl(item.imageUrl ?? coverUrl),
+              backdropUrl: coverThumbnailUrl(item.imageUrl ?? coverUrl),
               previewUrl: item.previewUrl ?? localPreviewUrl,
               deepLink: item.linkPath ?? `/album/${album.id}`
             };
@@ -138,7 +139,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
           episodeId: item.episodeId,
           episodeNo: item.episode.episodeNo,
           title: translatedText(item.episode.album.translations, locale, 'title') ?? item.episode.album.title,
-          coverUrl: translatedText(item.episode.album.translations, locale, 'coverUrl') ?? item.episode.album.coverUrl,
+          coverUrl: coverThumbnailUrl(translatedText(item.episode.album.translations, locale, 'coverUrl') ?? item.episode.album.coverUrl),
           progress: item.durationMs ? Math.min(item.positionMs / item.durationMs, 1) : 0,
           resumePositionMs: item.positionMs,
           durationMs: item.durationMs

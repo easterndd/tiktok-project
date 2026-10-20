@@ -25,6 +25,10 @@
 .drama-materials .material-check input { width: 18px; min-height: 18px; height: 18px; }
 .material-episode button { min-height: 44px; justify-self: start; }
 .material-success { margin: 12px 0 0; color: #167449; font-size: 13px; }
+.material-upload-task { display: grid; justify-items: start; gap: 7px; max-width: 460px; margin-top: 12px; font-size: 12px; }
+.material-upload-task .upload-meter { width: min(100%, 320px); min-width: min(320px, 80vw); }
+.material-upload-task small { font-size: 12px; }
+.material-upload-task .material-upload-error { color: #b4233d; }
 .material-message { margin-block: 12px; font-size: 13px; }
 .drama-materials .form-error { margin-top: 12px; white-space: normal; overflow-wrap: anywhere; }
 .drama-materials button:disabled { opacity: .6; cursor: default; }

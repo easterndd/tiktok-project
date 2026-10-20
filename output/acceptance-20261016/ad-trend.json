@@ -1,0 +1,80 @@
+{
+  "at": "2026-10-16T04:17:02.631Z",
+  "apps": [
+    {
+      "key": "taletv",
+      "periods": [
+        {
+          "minutes": 15,
+          "events": {
+            "REQUESTED": 518,
+            "SHOWN": 75,
+            "CLOSED_COMPLETED": 15,
+            "CLOSED_INCOMPLETE": 357,
+            "FAILED": 238
+          },
+          "runtimeErrors": 0
+        },
+        {
+          "minutes": 60,
+          "events": {
+            "REQUESTED": 1996,
+            "SHOWN": 283,
+            "CLOSED_COMPLETED": 94,
+            "CLOSED_INCOMPLETE": 1361,
+            "FAILED": 865
+          },
+          "runtimeErrors": 0
+        },
+        {
+          "minutes": 1440,
+          "events": {
+            "REQUESTED": 23605,
+            "SHOWN": 3256,
+            "CLOSED_COMPLETED": 1218,
+            "CLOSED_INCOMPLETE": 15248,
+            "FAILED": 10665
+          },
+          "runtimeErrors": 0
+        }
+      ]
+    },
+    {
+      "key": "talereels",
+      "periods": [
+        {
+          "minutes": 15,
+          "events": {
+            "REQUESTED": 90,
+            "SHOWN": 15,
+            "CLOSED_INCOMPLETE": 90,
+            "FAILED": 28
+          },
+          "runtimeErrors": 0
+        },
+        {
+          "minutes": 60,
+          "events": {
+            "REQUESTED": 188,
+            "SHOWN": 45,
+            "CLOSED_COMPLETED": 16,
+            "CLOSED_INCOMPLETE": 148,
+            "FAILED": 50
+          },
+          "runtimeErrors": 0
+        },
+        {
+          "minutes": 1440,
+          "events": {
+            "REQUESTED": 21875,
+            "SHOWN": 3538,
+            "CLOSED_COMPLETED": 1371,
+            "CLOSED_INCOMPLETE": 14407,
+            "FAILED": 9178
+          },
+          "runtimeErrors": 0
+        }
+      ]
+    }
+  ]
+}

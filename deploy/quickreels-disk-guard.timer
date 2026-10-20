@@ -1,0 +1,12 @@
+[Unit]
+Description=Check QuickReels disk space every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=quickreels-disk-guard.service
+
+[Install]
+WantedBy=timers.target

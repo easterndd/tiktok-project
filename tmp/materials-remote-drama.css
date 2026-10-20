@@ -1,0 +1,32 @@
+.drama-materials { margin-block: 24px; padding-block: 24px; border-block: 1px solid var(--line); }
+.drama-materials > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.drama-materials h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
+.drama-materials label { display: grid; min-width: 0; gap: 6px; color: var(--ink); font-size: 12px; font-weight: 700; }
+.drama-materials input, .drama-materials select, .drama-materials textarea { width: 100%; min-width: 0; min-height: 44px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); font: inherit; letter-spacing: 0; }
+.drama-materials input:focus-visible, .drama-materials textarea:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.drama-materials textarea { resize: vertical; }
+.drama-materials small { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
+.material-picker { max-width: 650px; margin-bottom: 20px; }
+.drama-materials fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.material-album > fieldset { display: grid; grid-template-columns: minmax(0, 1fr) 240px; align-items: start; gap: 18px; }
+.material-meta { display: grid; gap: 14px; }
+.material-cover { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: start; gap: 10px; }
+.material-cover img { width: 80px; height: 112px; object-fit: cover; border: 1px solid var(--line); border-radius: 6px; }
+.material-cover label span { display: flex; align-items: center; gap: 6px; }
+.material-album button { justify-self: start; min-height: 44px; }
+.material-translations { grid-column: 1 / -1; }
+.material-translations summary { cursor: pointer; font-size: 13px; }
+.material-translation { display: grid; gap: 12px; padding-block: 16px; border-bottom: 1px solid var(--line); }
+.material-episodes { margin-top: 24px; }
+.material-episode { padding-block: 20px; border-top: 1px solid var(--line); }
+.material-episode-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; font-size: 14px; }
+.material-episode fieldset { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 14px; }
+.drama-materials .material-check { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.drama-materials .material-check input { width: 18px; min-height: 18px; height: 18px; }
+.material-episode button { min-height: 44px; justify-self: start; }
+.material-success { margin: 12px 0 0; color: #167449; font-size: 13px; }
+.material-message { margin-block: 12px; font-size: 13px; }
+.drama-materials .form-error { margin-top: 12px; white-space: normal; overflow-wrap: anywhere; }
+.drama-materials button:disabled { opacity: .6; cursor: default; }
+@media (max-width: 1080px) { .material-album > fieldset, .material-episode fieldset { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 680px) { .drama-materials > header { align-items: start; flex-direction: column; } .material-album > fieldset, .material-episode fieldset { grid-template-columns: minmax(0, 1fr); } .material-cover { max-width: 100%; } }

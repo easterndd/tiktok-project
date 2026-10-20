@@ -1,5 +1,6 @@
 import type { PlayInfo } from '@quickreels/shared-types';
 import type { FastifyInstance } from 'fastify';
+import { coverThumbnailUrl } from '../../lib/cover-thumbnail';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { optionalUser } from '../../plugins/optional-auth';
@@ -256,7 +257,7 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
       playAuthToken,
       sourceUrl: localPlaybackUrl,
       title: episode.translations.find((translation) => translation.locale === locale)?.title ?? episode.title,
-      coverUrl: episode.translations.find((translation) => translation.locale === locale)?.coverUrl ?? episode.coverUrl,
+      coverUrl: coverThumbnailUrl(episode.translations.find((translation) => translation.locale === locale)?.coverUrl ?? episode.coverUrl),
       durationMs: episode.durationMs,
       resumePositionMs: progress?.positionMs ?? 0
     };

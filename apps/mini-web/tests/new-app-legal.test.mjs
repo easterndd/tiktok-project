@@ -8,7 +8,9 @@ const apps = {
   sugarreel: 'SugarReel',
   crimsonshorts: 'CrimsonShorts',
   sweetreel: 'SweetReel', dramablaze: 'DramaBlaze', heartreel: 'HeartReel',
-  dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama'
+  dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama',
+  sonicreel: 'SonicReel', harborplay: 'HarborPlay', dazzleshort: 'DazzleShort',
+  fableclip: 'FableClip', emberreel: 'EmberReel'
 };
 const legalBase = 'https://xuyins.com/static';
 const operator = 'Breeze and Azure Sky Culture Limited';

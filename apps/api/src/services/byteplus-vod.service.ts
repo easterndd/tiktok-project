@@ -43,7 +43,7 @@ type LocalUploadInput = {
   tags?: string[];
 };
 
-const uploadPartSize = 20 * 1024 * 1024;
+const uploadPartSize = 10 * 1024 * 1024;
 const uploadAttempts = 3;
 
 export function episodeMediaTitle(albumTitle: string, episodeNo: number) {
@@ -226,7 +226,8 @@ function sdkProviderError(error: unknown) {
     const provider = body.ResponseMetadata?.Error;
     if (!provider?.Code) return null;
     const code = provider.Code.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 100);
-    const message = (provider.Message ?? '').replace(/[\r\n\t]/g, ' ')
+    const message = (provider.Message ?? '').replace(new RegExp(`^${code}:?\\s*`, 'i'), '')
+      .replace(/[\r\n\t]/g, ' ')
       .replace(/https?:\/\/\S+/gi, '[url]')
       .replace(/(?:Authorization|Auth|Token|Signature|Secret|SessionKey)\s*[:=]\s*\S+/gi, '[redacted]')
       .replace(/[a-zA-Z0-9_+=/-]{40,}/g, '[id]').slice(0, 250);
@@ -241,6 +242,11 @@ function sdkProviderError(error: unknown) {
 
 function isRetryableStatus(status: number) {
   return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+export function isBytePlusTransferFailure(message: string) {
+  // These SDK errors are thrown before UploadMedia can call CommitUploadInfo.
+  return /\b(?:init upload|upload part|upload merge part) error:/i.test(message);
 }
 
 function sanitizeFileName(title: string, nowMs: number) {
@@ -304,6 +310,10 @@ export class BytePlusVodService implements TikTokShortDramaService {
   }
 
   async uploadLocalVideo(input: LocalUploadInput) {
+    const tags = input.tags?.join(',');
+    if (tags && Buffer.byteLength(tags, 'utf8') > 36) {
+      throw new BytePlusVodError('BytePlus 媒资标签超过 36 字节，已停止上传。', false);
+    }
     const service = this.createSdkService();
     const extension = input.fileName.includes('.') ? input.fileName.slice(input.fileName.lastIndexOf('.')) : '.mp4';
     const safeName = input.fileName.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'episode';
@@ -313,21 +323,8 @@ export class BytePlusVodService implements TikTokShortDramaService {
     let response: Awaited<ReturnType<typeof service.CommitUploadInfo>>;
     let stage = '申请上传地址';
     try {
-      // Use the vendor SDK in production. It owns the exact HTTP client behavior
-      // for ApplyUploadInfo, multipart init/parts/merge, and CommitUploadInfo.
-      if (typeof service.UploadMedia === 'function') {
-        stage = '上传视频文件';
-        response = await service.UploadMedia({
-          SpaceName: input.spaceName,
-          FilePath: input.filePath,
-          FileName: objectName,
-          CallbackArgs: JSON.stringify({ byteplusAccountId: input.byteplusAccountId }),
-          Functions: JSON.stringify([
-            { Name: 'GetMeta' },
-            { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128), ...(input.tags ? { Tags: input.tags.join(',') } : {}) } }
-          ])
-        });
-      } else {
+      // Keep SDK signing for the control API, but transfer over HTTPS with
+      // bounded requests and part retries. SDK UploadMedia uses unbounded HTTP.
       const applied = await service.ApplyUploadInfo({
         SpaceName: input.spaceName,
         FileType: 'media',
@@ -354,26 +351,30 @@ export class BytePlusVodService implements TikTokShortDramaService {
         CallbackArgs: JSON.stringify({ byteplusAccountId: input.byteplusAccountId }),
         Functions: JSON.stringify([
           { Name: 'GetMeta' },
-          { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128), ...(input.tags ? { Tags: input.tags.join(',') } : {}) } }
+          { Name: 'AddOptionInfo', Input: { Title: input.title.slice(0, 128), ...(tags ? { Tags: tags } : {}) } }
         ])
       });
-      }
     } catch (error) {
       if (error instanceof BytePlusVodError) throw error;
       const provider = sdkProviderError(error);
       if (provider) throw Object.assign(new BytePlusVodError(`BytePlus ${stage}失败：${provider.message}`, provider.retryable, provider.uncertain), { cause: error });
+      const raw = error instanceof Error ? error.message : String(error);
+      const transferFailed = isBytePlusTransferFailure(raw);
+      const status = transferFailed ? raw.match(/Request failed with status code (\d{3})\b/i)?.[1] : undefined;
       const detail = error instanceof Error ? error.message.replace(/[\r\n\t]/g, ' ').slice(0, 240) : String(error).slice(0, 240);
       throw Object.assign(new BytePlusVodError(
         `BytePlus ${stage}失败：${detail}`,
-        true,
-        stage === '提交媒资' || typeof service.UploadMedia === 'function'
+        status ? isRetryableStatus(Number(status)) : true,
+        !transferFailed && stage === '提交媒资'
       ), { cause: error });
     }
     const providerError = response.ResponseMetadata?.Error;
     if (providerError) {
+      const provider = sdkProviderError(new Error(JSON.stringify(response)));
       throw new BytePlusVodError(
-        safeProviderMessage({ ResponseMetadata: { Error: providerError } }, 'BytePlus VOD 拒绝本地上传。'),
-        false
+        provider?.message ?? safeProviderMessage({ ResponseMetadata: { Error: providerError } }, 'BytePlus VOD 拒绝本地上传。'),
+        provider?.retryable ?? false,
+        provider?.retryable ?? false
       );
     }
     const data = response.Result?.Data;
@@ -402,14 +403,26 @@ export class BytePlusVodService implements TikTokShortDramaService {
           if (host === hosts.at(-1)) throw error;
           continue;
         }
-        const checksums: string[] = [];
-        for (let offset = 0, partNumber = 1; offset < size; offset += uploadPartSize, partNumber++) {
-          const data = await this.readPart(file, offset, Math.min(uploadPartSize, size - offset));
-          const checksum = crc32(data).toString(16).padStart(8, '0');
-          await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片上传',
-            `partNumber=${partNumber}&uploadID=${encodeURIComponent(uploadId)}`, data, true, checksum);
-          checksums.push(`${partNumber - 1}:${checksum}`);
-        }
+        const partCount = Math.ceil(size / uploadPartSize);
+        const checksums = new Array<string>(partCount);
+        let nextPart = 0;
+        let failed: unknown;
+        const uploadPart = async () => {
+          while (nextPart < partCount && !failed) {
+            const index = nextPart++;
+            try {
+              const data = await this.readPart(file, index * uploadPartSize, Math.min(uploadPartSize, size - index * uploadPartSize));
+              const checksum = crc32(data).toString(16).padStart(8, '0');
+              await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片上传',
+                `partNumber=${index + 1}&uploadID=${encodeURIComponent(uploadId)}`, data, true, checksum);
+              checksums[index] = `${index}:${checksum}`;
+            } catch (error) {
+              failed = error;
+            }
+          }
+        };
+        await Promise.all([uploadPart(), uploadPart()]);
+        if (failed) throw failed;
         // The BytePlus SDK uses zero-based checksum positions in the merge body.
         await this.uploadRequest(host, objectName, auth, uploadHeaders, '分片合并', `uploadID=${encodeURIComponent(uploadId)}`,
           checksums.join(','), true, undefined, false);
@@ -474,7 +487,7 @@ export class BytePlusVodService implements TikTokShortDramaService {
 
   private async uploadRequest(host: string, objectName: string, auth: string, uploadHeaders: Record<string, string>, stage: UploadStage, query: string,
     data?: Buffer | string, multipart = false, checksum?: string, retry = true): Promise<Response> {
-    const url = new URL(`http://${host}/${objectName.split('/').map(encodeURIComponent).join('/')}`);
+    const url = new URL(`https://${host}/${objectName.split('/').map(encodeURIComponent).join('/')}`);
     url.search = query;
     for (let attempt = 1; attempt <= (retry ? uploadAttempts : 1); attempt++) {
       try {

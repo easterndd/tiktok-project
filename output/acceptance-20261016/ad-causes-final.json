@@ -1,0 +1,41 @@
+{
+  "at": "2026-10-16T04:23:10.698Z",
+  "apps": [
+    {
+      "key": "taletv",
+      "failures": [
+        {
+          "scope": "APP_ENTRY",
+          "adType": "REWARDED",
+          "reason": "ENTRY_AD_SHOW_FAILED",
+          "count": 212
+        }
+      ],
+      "sessions": [
+        {
+          "releaseId": "taletv-v6",
+          "status": "ACTIVE",
+          "count": 131
+        }
+      ]
+    },
+    {
+      "key": "talereels",
+      "failures": [
+        {
+          "scope": "APP_ENTRY",
+          "adType": "REWARDED",
+          "reason": "ENTRY_AD_SHOW_FAILED",
+          "count": 29
+        }
+      ],
+      "sessions": [
+        {
+          "releaseId": "talereels-release-20261008",
+          "status": "ACTIVE",
+          "count": 28
+        }
+      ]
+    }
+  ]
+}

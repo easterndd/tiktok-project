@@ -1,0 +1,5 @@
+set -eu
+printf 'RESOURCE\n'; free -h
+printf 'DB LIMIT\n'; sudo docker exec quickreels-postgres-1 sh -c 'psql -U "$POSTGRES_USER" -d postgres -Atc "show max_connections; select count(*) from pg_stat_activity"'
+printf 'LAST MINUTE\n'
+sudo docker logs --since 60s quickreels-api-1 2>&1 | sudo docker exec -i quickreels-api-1 node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{let requests=new Map(),apps={},ips={},routes={},status={},errors={};for(let l of s.split("\n")){try{let j=JSON.parse(l);if(j.req){requests.set(j.reqId,j.req);let a=j.req.url?.split("/")[2]||"unknown";apps[a]=(apps[a]||0)+1;let ip=j.req.remoteAddress||"unknown";ips[ip]=(ips[ip]||0)+1;let path=j.req.url?.split("?")[0]||"unknown";routes[path]=(routes[path]||0)+1}if(j.res?.statusCode){let k=String(j.res.statusCode);status[k]=(status[k]||0)+1}if(j.level>=50){let k=j.err?.code||"other";errors[k]=(errors[k]||0)+1}}catch{}}let top=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,12);console.log(JSON.stringify({totalRequests:requests.size,apps:top(apps),ips:top(ips),routes:top(routes),status,errors}))})'
