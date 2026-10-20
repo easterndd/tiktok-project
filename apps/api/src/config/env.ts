@@ -32,6 +32,7 @@ const environment = z.object({
   // supplied X-Geo-Country and writes a verified ISO 3166-1 alpha-2 value.
   TRUST_GEO_COUNTRY_HEADER: z.coerce.boolean().default(false),
   JWT_SECRET: z.string().min(32),
+  USER_DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
   USER_JWT_EXPIRES_IN: z.coerce.number().int().positive().default(3_600),
   ADMIN_JWT_EXPIRES_IN: z.coerce.number().int().positive().default(28_800),
   ADMIN_BOOTSTRAP_EMAIL: z.string().email().optional(),

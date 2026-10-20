@@ -4,9 +4,11 @@ import { ChevronLeft, ChevronRight, Flame, Play, RefreshCw, Search as SearchIcon
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AlbumCard } from '../components/AlbumCard';
+import { StoryLandEntryAd } from '../components/StoryLandEntryAd';
 import { LoadingState } from '../components/LoadingState';
 import { getMockHome } from '../data/mock-data';
 import { apiClient } from '../lib/api-client';
+import { appKey } from '../lib/app-brand';
 import { t } from '../lib/i18n';
 import { useLocale, isDemoMode } from '../lib/storage';
 import { componentIsEnabled, useUiComponents } from '../features/cms/ui-components';
@@ -120,6 +122,7 @@ export function HomePage() {
   if (home.isError && !home.data) return <section className="state"><p>{t(locale, 'unavailable')}</p><button onClick={() => void home.refetch()}><RefreshCw size={17} aria-hidden="true" /> {t(locale, 'retry')}</button></section>;
 
   return <div className={styles.page}>
+    {appKey === 'storyland' && home.data && !home.isError && <StoryLandEntryAd />}
     <section className={styles.discoveryHeader} aria-label={t(locale, 'discover')}>
       <nav className={styles.channelRail} aria-label={t(locale, 'discover')}>
         <button className={activeChannel === 'hot' ? styles.channelActive : ''} onClick={() => selectChannel('hot')}><Flame size={16} aria-hidden="true" />{t(locale, 'trending')}</button>

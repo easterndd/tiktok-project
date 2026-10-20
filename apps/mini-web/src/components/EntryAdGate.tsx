@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { completeAppEntryAd, showAppEntryAd, startAppEntryAdSession } from '../features/ads/app-entry-ad';
 import { runEntryAdFlow } from '../features/ads/entry-ad-flow';
-import { ensureAnonymousSession } from '../features/auth/anonymous-session';
+import { ensureAnonymousSession, ensureTikTokSession } from '../features/auth/anonymous-session';
 import { appName } from '../lib/app-brand';
 import { reportDiagnostic } from '../lib/diagnostics';
 import styles from './EntryAdGate.module.css';
@@ -57,12 +57,16 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
           if (controller.signal.aborted) return;
           if (session.required) {
             step = 'ENTRY_AD_PLAYBACK';
-            await runEntryAdFlow(session, { show: showAppEntryAd, complete: completeAppEntryAd, wait, isActive: () => !controller.signal.aborted, onAdShown: () => { if (!controller.signal.aborted) setHasShownAd(true); }, onError: (cause) => {
+            await runEntryAdFlow(session, { show: showAppEntryAd, complete: completeAppEntryAd, refreshSession: startAppEntryAdSession, wait, isActive: () => !controller.signal.aborted, onAdShown: () => { if (!controller.signal.aborted) setHasShownAd(true); }, onError: (cause) => {
               reportDiagnostic({ kind: 'AD', phase: 'ENTRY_AD_PLAYBACK', message: cause instanceof Error ? cause.message : String(cause) });
               console.warn('[EntryAdGate] entry ad unavailable; retrying', cause);
             } });
           }
-          if (!controller.signal.aborted) { window.clearTimeout(startupTimer); setState('READY'); }
+          if (!controller.signal.aborted) {
+            window.clearTimeout(startupTimer);
+            setState('READY');
+            void ensureTikTokSession().catch(() => undefined);
+          }
           return;
         } catch (cause) {
           if (controller.signal.aborted) return;

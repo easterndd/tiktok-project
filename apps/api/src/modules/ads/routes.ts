@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
 import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
 
+const appEntrySessionTtlMs = 15 * 60 * 1000;
+
 export async function registerAdRoutes(app: FastifyInstance) {
   app.post('/ad-events', {
     preHandler: requireUser,
@@ -49,13 +51,17 @@ export async function registerAdRoutes(app: FastifyInstance) {
         }
         return true;
       };
-      if (await acceptExisting()) return { accepted: true };
+      if (await acceptExisting()) {
+        await app.prisma.appEntryAdSession.update({ where: { id: body.appEntrySessionId }, data: { expiresAt: new Date(Date.now() + appEntrySessionTtlMs) } });
+        return { accepted: true };
+      }
       try {
         await app.prisma.adEvent.create({ data: { ...body, userId: request.user.sub } });
       } catch (error) {
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
         if (!(await acceptExisting())) throw error;
       }
+      await app.prisma.appEntryAdSession.update({ where: { id: body.appEntrySessionId }, data: { expiresAt: new Date(Date.now() + appEntrySessionTtlMs) } });
       return { accepted: true };
     }
     await app.prisma.adEvent.upsert({

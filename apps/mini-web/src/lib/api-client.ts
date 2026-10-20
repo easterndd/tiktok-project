@@ -55,7 +55,7 @@ class ApiClient {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null) as ApiErrorResponse | null;
-        if (response.status === 401 && !retried && path !== '/auth/anonymous/session' && unauthorizedHandler) {
+        if (response.status === 401 && !retried && !path.startsWith('/auth/') && unauthorizedHandler) {
           pendingUnauthorizedRecovery ??= unauthorizedHandler().finally(() => { pendingUnauthorizedRecovery = null; });
           await pendingUnauthorizedRecovery;
           return this.request<T>(path, options, true);

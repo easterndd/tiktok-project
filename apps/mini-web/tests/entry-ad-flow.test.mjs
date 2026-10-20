@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { runEntryAdFlow } from '../src/features/ads/entry-ad-flow.ts';
 
 const session = { required: true, sessionId: 'session', mode: 'REWARDED_GATED', placementId: 'placement', requiredCount: 3, completedCount: 0, onUnavailable: 'BLOCK' };
-const base = { wait: async () => {}, isActive: () => true, onError: () => {} };
+const base = { refreshSession: async () => session, wait: async () => {}, isActive: () => true, onError: () => {} };
 
 describe('entry ad gate flow', () => {
   it('forwards the display callback without advancing before server acknowledgement', async () => {
@@ -84,6 +84,38 @@ describe('entry ad gate flow', () => {
       }
     });
     assert.deepEqual(events, ['show', 'shown-id', 'shown-id']);
+  });
+
+  it('refreshes server progress after a conflict and replays only an unconfirmed ad', async () => {
+    let shows = 0;
+    let completes = 0;
+    const shownIndices = [];
+    await runEntryAdFlow({ ...session, requiredCount: 1 }, {
+      ...base,
+      show: async ({ adIndex }) => { shows++; shownIndices.push(adIndex); return { clientEventId: `event-${shows}`, isEnded: true }; },
+      complete: async () => {
+        completes++;
+        if (completes === 1) throw Object.assign(new Error('session conflict'), { status: 409 });
+        return { completedCount: 1, shouldContinue: false };
+      },
+      refreshSession: async () => ({ ...session, requiredCount: 1, completedCount: 0 })
+    });
+    assert.equal(shows, 2);
+    assert.equal(completes, 2);
+    assert.deepEqual(shownIndices, [1, 1]);
+  });
+
+  it('stops on a persistent client error instead of retrying the same completion', async () => {
+    let completes = 0;
+    let refreshes = 0;
+    await assert.rejects(runEntryAdFlow({ ...session, requiredCount: 1 }, {
+      ...base,
+      show: async () => ({ clientEventId: 'event', isEnded: true }),
+      complete: async () => { completes++; throw Object.assign(new Error('unauthorized'), { status: 401 }); },
+      refreshSession: async () => { refreshes++; return session; }
+    }), /unauthorized/);
+    assert.equal(completes, 1);
+    assert.equal(refreshes, 0);
   });
 
   it('applies ALLOW only to unavailable ad playback and stops after cancellation', async () => {

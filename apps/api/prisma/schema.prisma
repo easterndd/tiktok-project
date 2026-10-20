@@ -212,8 +212,21 @@ model User {
   completionEvents EpisodeCompletionEvent[]
   activityEvents   AudienceActivityEvent[]
   preference       UserPreference?
+  tiktokCredential TikTokCredential?
 
   @@index([createdAt])
+}
+
+model TikTokCredential {
+  userId              String   @id
+  accessTokenEncrypted String   @db.Text
+  refreshTokenEncrypted String  @db.Text
+  accessExpiresAt     DateTime
+  refreshExpiresAt    DateTime
+  scope               String?
+  tokenType           String?
+  updatedAt           DateTime @updatedAt
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Album {

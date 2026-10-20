@@ -42,7 +42,8 @@ async function recordAdEvent(input: { clientEventId: string; eventType: 'REQUEST
 
 async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; sessionId: string; adIndex: number; rewardEventId: string }) {
   const { adUnitId, episodeId, sessionId, adIndex, rewardEventId } = input;
-  await recordAdEvent({ clientEventId: `${rewardEventId}:requested`, eventType: 'REQUESTED', placementId: adUnitId, episodeId, sessionId, adIndex });
+  // REQUESTED is analytics only; network latency must not block the native ad.
+  void recordAdEvent({ clientEventId: `${rewardEventId}:requested`, eventType: 'REQUESTED', placementId: adUnitId, episodeId, sessionId, adIndex });
   let ad;
   try { ad = window.TTMinis!.createRewardedVideoAd({ adUnitId }); }
   catch (error) { reportDiagnostic({ kind: 'AD', phase: 'REWARDED_CREATE', message: error instanceof Error ? error.message : String(error), path: `/episodes/${episodeId}` }); throw error; }

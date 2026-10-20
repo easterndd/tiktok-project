@@ -1,0 +1,3 @@
+set -eu
+cd /opt/quickreels
+sudo docker logs --since 90s quickreels-api-1 2>&1 | sudo docker exec -i quickreels-api-1 node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{let q=new Map(),ids=[];for(const l of s.split("\n")){try{const j=JSON.parse(l);if(j.req)q.set(j.reqId,j.req.url||"");if(j.res?.statusCode===409){const p=q.get(j.reqId)||"";if(p.includes("/api/dramablaze/v1/app-entry-ad-sessions/")&&p.endsWith("/complete")){const m=p.match(/app-entry-ad-sessions\/([^/]+)\/complete/);if(m)ids.push(m[1])}}}catch{}}console.log([...new Set(ids)].slice(-12).join(" "))})'

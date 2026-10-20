@@ -2,7 +2,7 @@ declare global {
   interface Window {
     TTMinis?: {
       init(options: { clientKey: string }): void;
-      login(): Promise<{ code: string }>;
+      login(options?: { success?: (result: { code: string }) => void; fail?: (error: unknown) => void; complete?: () => void }): Promise<{ code: string }> | void;
       canIUse(apiName: string): boolean;
       getPlayer?(channel?: 'byteplus'): Promise<VePlayerConstructor>;
       createRewardedVideoAd(options: { adUnitId: string }): RewardedVideoAd;

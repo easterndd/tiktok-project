@@ -3,7 +3,7 @@ import { it } from 'node:test';
 import type { PrismaClient } from '@prisma/client';
 import { buildApp } from './app';
 import { loadEnv } from './config/env';
-import { assertSameMiniAppOrganization, configuredMiniAppKeys, miniAppEnvironment, miniAppKeys, miniAppOrganization, miniAppOrganizations, sameMiniAppOrganization, taletvEnvironment } from './config/mini-apps';
+import { assertSameMiniAppOrganization, configuredMiniAppKeys, miniAppEnvironment, miniAppKeys, miniAppOrganization, miniAppOrganizations, miniAppPath, sameMiniAppOrganization, taletvEnvironment } from './config/mini-apps';
 import { accessConfigSchema } from './lib/content-access';
 
 const env = loadEnv({
@@ -234,14 +234,23 @@ it('registers all new Mini routes with separate databases and app-bound admin to
 });
 
 it('keeps mini apps in the configured organization groups and rejects cross-organization sharing', () => {
-  assert.deepEqual(Object.values(miniAppOrganizations).map((group) => group.miniApps.length), [1, 20, 10, 10]);
+  assert.deepEqual(Object.values(miniAppOrganizations).map((group) => group.miniApps.length), [1, 20, 15, 10]);
   assert.deepEqual(Object.values(miniAppOrganizations).flatMap((group) => group.miniApps).sort(), [...miniAppKeys].sort());
   assert.equal(miniAppOrganization('main'), 'quickreels');
   assert.equal(miniAppOrganization('storyland'), miniAppOrganization('taletv'));
   assert.equal(miniAppOrganization('crownrush'), miniAppOrganization('elitedrama'));
   assert.equal(miniAppOrganization('lucidreel'), miniAppOrganization('lumishort'));
+  assert.equal(miniAppOrganizations.taletv.label, 'Gmart 挂靠组织');
+  assert.equal(miniAppOrganizations.crownrush.label, '香港长风组织');
+  assert.equal(miniAppOrganizations.newbeat.label, '飞书挂靠');
+  for (const key of ['sonicreel', 'harborplay', 'dazzleshort', 'fableclip', 'emberreel'] as const) {
+    assert.equal(miniAppOrganization(key), 'crownrush');
+    assert.equal(miniAppPath(key), key);
+    assert.equal(miniAppEnvironment({ ...env, [`${key.toUpperCase()}_DATABASE_URL`]: `postgresql://test:test@localhost:5432/test?schema=${key}` }, key)?.MINI_APP_KEY, key);
+  }
   assert.equal(sameMiniAppOrganization('lucidreel', 'crownrush'), false);
   assert.equal(sameMiniAppOrganization('dramacloud', 'cinereels'), true);
+  assert.equal(sameMiniAppOrganization('sonicreel', 'dramablaze'), true);
   assert.equal(sameMiniAppOrganization('taletv', 'crownrush'), false);
   assert.throws(() => assertSameMiniAppOrganization('main', ['taletv']), /同一组织/);
   assert.throws(() => assertSameMiniAppOrganization('storyland', ['crownrush']), /同一组织/);

@@ -5,6 +5,16 @@ dist/
 !.env.example
 !.env.production.example
 !.env.production.self-hosted.example
+!.env.*.example
+*.local
+*.local.*
+*.pem
+*.key
+*.p12
+*.pfx
+key.txt
+credentials.*
+secrets.*
 coverage/
 *.log
 .pnpm-*.out
