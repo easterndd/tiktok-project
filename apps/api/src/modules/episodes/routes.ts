@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { optionalUser } from '../../plugins/optional-auth';
 import { BytePlusVodService } from '../../services/byteplus-vod.service';
 import { requireUser } from '../../plugins/auth';
+import { measureDatabase } from '../../lib/request-performance';
 import { isEpisodeFree, readMiniAppAccessConfig } from '../../lib/content-access';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
@@ -172,7 +173,7 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
   }, async (request, reply) => {
     const { episodeId } = params.parse(request.params);
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
-    const result = await createOrResumeRewardSession(app, request.user.sub, episodeId, country);
+    const result = await measureDatabase(request, () => createOrResumeRewardSession(app, request.user.sub, episodeId, country));
     if ('missing' in result) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Episode not found.', requestId: request.id } }) as never;
     if ('adDisabled' in result) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Rewarded unlocking is disabled for this drama.', requestId: request.id } }) as never;
     return result;
@@ -185,7 +186,7 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
     const { episodeId, sessionId } = sessionParams.parse(request.params);
     const input = unlockInput.parse(request.body);
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
-    const result = await completeRewardSession(app, request.user.sub, episodeId, sessionId, input.clientEventId, country);
+    const result = await measureDatabase(request, () => completeRewardSession(app, request.user.sub, episodeId, sessionId, input.clientEventId, country));
     if ('missing' in result) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Episode not found.', requestId: request.id } }) as never;
     if ('adDisabled' in result) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Rewarded unlocking is disabled for this drama.', requestId: request.id } }) as never;
     if ('invalidPlacement' in result) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Rewarded ad placement does not match this drama configuration.', requestId: request.id } }) as never;

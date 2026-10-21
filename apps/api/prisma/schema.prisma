@@ -193,8 +193,10 @@ enum SharedPlatformOperationKind {
 model User {
   id               String                   @id @default(cuid())
   identityType     UserIdentityType         @default(ANONYMOUS)
+  appEntryAdExempt Boolean                  @default(false)
   tiktokOpenId     String?                  @unique
   visitorKeyHash   String?                  @unique
+  mergedIntoUserId String?
   createdAt        DateTime                 @default(now())
   updatedAt        DateTime                 @updatedAt
   watchProgresses  WatchProgress[]
@@ -212,21 +214,24 @@ model User {
   completionEvents EpisodeCompletionEvent[]
   activityEvents   AudienceActivityEvent[]
   preference       UserPreference?
+  mergedInto       User?                    @relation("UserMerge", fields: [mergedIntoUserId], references: [id], onDelete: SetNull)
+  mergedUsers      User[]                   @relation("UserMerge")
   tiktokCredential TikTokCredential?
 
   @@index([createdAt])
+  @@index([mergedIntoUserId])
 }
 
 model TikTokCredential {
-  userId              String   @id
+  userId               String   @id
   accessTokenEncrypted String   @db.Text
   refreshTokenEncrypted String  @db.Text
-  accessExpiresAt     DateTime
-  refreshExpiresAt    DateTime
-  scope               String?
-  tokenType           String?
-  updatedAt           DateTime @updatedAt
-  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessExpiresAt      DateTime
+  refreshExpiresAt     DateTime
+  scope                String?
+  tokenType            String?
+  updatedAt            DateTime @updatedAt
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Album {
@@ -536,6 +541,7 @@ model AppSession {
   platform        String?
   clientVersion   String?
   source          String?
+  countryCode     String?   @db.VarChar(2)
   startedAt       DateTime  @default(now())
   lastSeenAt      DateTime  @updatedAt
   endedAt         DateTime?
@@ -545,6 +551,7 @@ model AppSession {
   @@index([startedAt, userId])
   @@index([userId, startedAt])
   @@index([userId, lastSeenAt])
+  @@index([countryCode, startedAt])
 }
 
 model PlaybackSession {

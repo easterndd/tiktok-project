@@ -32,6 +32,7 @@ import {
 import { authorizeSharedPlayback, sharedPlaybackStatus } from '../../services/shared-playback.service';
 import { assertSameMiniAppOrganization, miniAppAdConfig, miniAppKeys, sameMiniAppOrganization, type MiniAppKey } from '../../config/mini-apps';
 import { assertDisplayMetadataOwner, carryBaseTextChanges, displayMetadataInput, findDisplayMetadataAlbum, readDisplayMetadata, retryDisplayMetadata, saveLocalDisplayMetadata, saveSharedDisplayMetadata } from '../../services/display-metadata.service';
+import { listEntryAdIpExemptions, listSharedIpVisits, listSharedIps, normalizeIp, recentViewerIps, removeEntryAdIpExemption, setEntryAdIpExemption } from '../../services/shared-ip.service';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 
@@ -218,6 +219,13 @@ const codeReleaseInput = z.object({
   portalVersion: z.string().trim().max(32).nullable(),
   portalStatus: z.enum(['UNKNOWN', 'PREVIEW', 'IN_REVIEW', 'READY', 'RELEASED'])
 });
+const viewerSearchInput = z.object({ search: z.string().trim().max(128).default(''), limit: z.coerce.number().int().min(1).max(100).default(30) });
+const viewerAdPreferenceInput = z.object({ appEntryAdExempt: z.boolean() });
+const viewerParams = z.object({ userId: z.string().min(1).max(128) });
+const ipSearchInput = z.object({ search: z.string().trim().max(45).default(''), limit: z.coerce.number().int().min(1).max(100).default(30) });
+const ipVisitsInput = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), offset: z.coerce.number().int().min(0).max(1_000_000).default(0) });
+const ipExemptionInput = z.object({ ipAddress: z.string().trim().min(3).max(45), note: z.string().trim().max(500).nullable().default(null) });
+const ipParams = z.object({ ipAddress: z.string().trim().min(3).max(45) });
 
 const componentLabels: Record<z.infer<typeof componentParams>['key'], string> = {
   APP_TOPBAR: '顶部导航',
@@ -467,6 +475,55 @@ async function syncUiComponentRows(tx: Prisma.TransactionClient, items: UiCompon
 }
 
 export async function registerAdminRoutes(app: FastifyInstance) {
+  app.get('/admin/viewers', { preHandler: requirePermission('admin.manage') }, async (request) => {
+    const { search, limit } = viewerSearchInput.parse(request.query);
+    const items = await app.prisma.user.findMany({
+      where: search ? { OR: [{ id: { contains: search } }, { tiktokOpenId: { contains: search } }] } : {},
+      orderBy: { createdAt: 'desc' }, take: limit,
+      select: { id: true, identityType: true, tiktokOpenId: true, appEntryAdExempt: true, createdAt: true, appSessions: { orderBy: { lastSeenAt: 'desc' }, take: 1, select: { lastSeenAt: true, countryCode: true } } }
+    });
+    const ips = await recentViewerIps(app.sharedPrisma, app.config.MINI_APP_KEY, items.map((item) => item.id));
+    return { items: items.map(({ appSessions, ...viewer }) => ({ ...viewer, lastSeenAt: appSessions[0]?.lastSeenAt ?? null, countryCode: appSessions[0]?.countryCode ?? null, ipAddress: ips.get(viewer.id) || null })) };
+  });
+  app.get('/admin/shared/ips', { preHandler: requirePermission('admin.manage') }, async (request) => {
+    const input = ipSearchInput.parse(request.query);
+    return { items: await listSharedIps(app.sharedPrisma, { ...input, secret: app.rootConfig.JWT_SECRET }) };
+  });
+  app.get('/admin/shared/ips/:ipAddress/visits', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
+    const { ipAddress } = ipParams.parse(request.params);
+    const ip = normalizeIp(ipAddress);
+    if (!ip) return reply.code(400).send({ error: { code: 'INVALID_IP', message: 'Invalid IP address.', requestId: request.id } });
+    const { limit, offset } = ipVisitsInput.parse(request.query);
+    return { items: await listSharedIpVisits(app.sharedPrisma, ip, app.rootConfig.JWT_SECRET, limit, offset) };
+  });
+  app.get('/admin/shared/entry-ad-ip-exemptions', { preHandler: requirePermission('admin.manage') }, async () => {
+    return { items: await listEntryAdIpExemptions(app.sharedPrisma) };
+  });
+  app.put('/admin/shared/entry-ad-ip-exemptions', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
+    const input = ipExemptionInput.parse(request.body);
+    const ip = normalizeIp(input.ipAddress);
+    if (!ip) return reply.code(400).send({ error: { code: 'INVALID_IP', message: 'Invalid IP address.', requestId: request.id } });
+    const item = await setEntryAdIpExemption(app.sharedPrisma, ip, input.note, request.user.sub);
+    await audit(app, request.user.sub, 'CREATE', 'SharedEntryAdIpExemption', ip, { note: input.note });
+    return { item };
+  });
+  app.delete('/admin/shared/entry-ad-ip-exemptions/:ipAddress', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
+    const { ipAddress } = ipParams.parse(request.params);
+    const ip = normalizeIp(ipAddress);
+    if (!ip) return reply.code(400).send({ error: { code: 'INVALID_IP', message: 'Invalid IP address.', requestId: request.id } });
+    const count = await removeEntryAdIpExemption(app.sharedPrisma, ip);
+    if (!count) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'IP exemption not found.', requestId: request.id } });
+    await audit(app, request.user.sub, 'DELETE', 'SharedEntryAdIpExemption', ip);
+    return reply.code(204).send();
+  });
+  app.patch('/admin/viewers/:userId/app-entry-ad', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
+    const { userId } = viewerParams.parse(request.params);
+    const input = viewerAdPreferenceInput.parse(request.body);
+    const result = await app.prisma.user.updateMany({ where: { id: userId }, data: input });
+    if (!result.count) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Viewer not found.', requestId: request.id } });
+    await audit(app, request.user.sub, 'UPDATE', 'UserAppEntryAdExemption', userId, input);
+    return { userId, ...input };
+  });
   app.post('/admin/auth/login', {
     config: { rateLimit: { max: 10, timeWindow: '15 minutes' } }
   }, async (request, reply) => {
@@ -1739,6 +1796,22 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       dailyActiveUsers: completeDailySeries(range.from, range.periodDays, dailyActiveRows),
       updatedAt: summary?.updatedAt ?? null
       };
+    });
+  });
+  app.get('/admin/analytics/audience-countries', { preHandler: requireAdmin }, async (request) => {
+    const range = resolveAnalyticsRange(analyticsQuery.parse(request.query));
+    return cachedAnalytics(app, `audience-countries:${range.from}:${range.to}:${range.timezone}`, async () => {
+      const items = await app.prisma.$queryRaw<Array<{ countryCode: string; viewers: number; sessions: number }>>(Prisma.sql`
+        SELECT COALESCE(s."countryCode", 'UNKNOWN') AS "countryCode",
+               COUNT(DISTINCT COALESCE(u."mergedIntoUserId", s."userId"))::int AS viewers,
+               COUNT(DISTINCT s.id)::int AS sessions
+        FROM "AppSession" s
+        JOIN "User" u ON u.id = s."userId"
+        WHERE s."startedAt" >= ${range.start} AND s."startedAt" < ${range.end}
+        GROUP BY 1
+        ORDER BY viewers DESC, sessions DESC
+      `);
+      return { from: range.from, to: range.to, items };
     });
   });
   app.get('/admin/analytics/playback-quality', { preHandler: requireAdmin }, async (request) => {

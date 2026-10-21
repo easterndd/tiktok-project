@@ -86,6 +86,25 @@ describe('entry ad gate flow', () => {
     assert.deepEqual(events, ['show', 'shown-id', 'shown-id']);
   });
 
+  it('honors Retry-After on a limited completion without reopening the ad', async () => {
+    let shows = 0;
+    let completions = 0;
+    const waits = [];
+    await runEntryAdFlow({ ...session, requiredCount: 1 }, {
+      ...base,
+      show: async () => { shows++; return { clientEventId: 'shown-id', isEnded: true }; },
+      complete: async (_sessionId, id) => {
+        assert.equal(id, 'shown-id');
+        if (++completions === 1) throw Object.assign(new Error('rate limited'), { status: 429, retryAfterSeconds: 12 });
+        return { completedCount: 1, shouldContinue: false };
+      },
+      wait: async (ms) => { waits.push(ms); }
+    });
+    assert.equal(shows, 1);
+    assert.equal(completions, 2);
+    assert.deepEqual(waits, [12_000]);
+  });
+
   it('refreshes server progress after a conflict and replays only an unconfirmed ad', async () => {
     let shows = 0;
     let completes = 0;

@@ -18,13 +18,14 @@
 .retryButton:active { transform: scale(.97); }
 .sheetLayer { position: fixed; z-index: 10; inset: 0; display: grid; align-items: end; }
 .sheetBackdrop { position: absolute; inset: 0; width: 100%; min-height: 100%; padding: 0; border: 0; background: rgba(2, 3, 10, .64); backdrop-filter: blur(3px); }
-.episodeSheet { position: relative; z-index: 1; display: grid; max-height: min(76dvh, 660px); gap: 14px; padding: 10px 16px max(20px, env(safe-area-inset-bottom)); overflow: hidden; border: 1px solid rgba(202, 211, 255, .16); border-bottom: 0; border-radius: 26px 26px 0 0; background: linear-gradient(145deg, #1d2340, #101426 52%, #0c0e1d); box-shadow: 0 -22px 60px rgba(0, 0, 0, .38), inset 0 1px rgba(255, 255, 255, .08); animation: sheet-enter 220ms ease-out; }
+.episodeSheet { position: relative; z-index: 1; display: flex; flex-direction: column; width: 100%; height: min(76dvh, 660px); max-height: min(76dvh, 660px); gap: 14px; padding: 10px 16px max(20px, env(safe-area-inset-bottom)); overflow: hidden; border: 1px solid rgba(202, 211, 255, .16); border-bottom: 0; border-radius: 26px 26px 0 0; background: linear-gradient(145deg, #1d2340, #101426 52%, #0c0e1d); box-shadow: 0 -22px 60px rgba(0, 0, 0, .38), inset 0 1px rgba(255, 255, 255, .08); animation: sheet-enter 220ms ease-out; }
+.sheetHandle, .sheetHeader, .sheetStatus, .sheetError, .episodeSheet > .retryButton { flex: 0 0 auto; }
 .sheetHandle { width: 38px; height: 4px; margin: 0 auto; border-radius: 99px; background: rgba(255, 255, 255, .25); }
 .sheetHeader { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .sheetHeader h2 { margin: 4px 0 3px; font-size: 24px; }
 .sheetHeader p { margin: 0; color: var(--muted); font-size: 12px; }
 .closeSheet { display: grid; flex: 0 0 auto; width: 44px; min-height: 44px; padding: 0; place-items: center; color: var(--text); border: 1px solid rgba(255, 255, 255, .14); border-radius: 14px; background: rgba(255, 255, 255, .06); }
-.sheetList { min-height: 0; padding-bottom: 2px; overflow-y: auto; overscroll-behavior: contain; }
+.sheetList { flex: 1 1 0; min-height: 0; padding-bottom: 2px; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
 .sheetStatus, .sheetError { display: inline-flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; }
 .sheetStatus { color: var(--cyan); }
 .sheetError { color: var(--pink-soft); }
@@ -37,4 +38,4 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes sheet-enter { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .episodeSheet { animation: none; } .unlockCard svg { animation: none; } }
-@media (min-width: 681px) { .page { width: min(100%, 480px); margin: 0 auto; box-shadow: 0 0 0 1px rgba(255, 255, 255, .06), 0 0 80px rgba(0, 0, 0, .42); } .sheetLayer { align-items: center; justify-content: center; } .episodeSheet { width: min(100%, 480px); max-height: 76dvh; border-bottom: 1px solid rgba(202, 211, 255, .16); border-radius: 26px; } }
+@media (min-width: 681px) { .page { width: min(100%, 480px); margin: 0 auto; box-shadow: 0 0 0 1px rgba(255, 255, 255, .06), 0 0 80px rgba(0, 0, 0, .42); } .sheetLayer { align-items: center; justify-content: center; } .episodeSheet { width: min(100%, 480px); height: 76dvh; max-height: 76dvh; border-bottom: 1px solid rgba(202, 211, 255, .16); border-radius: 26px; } }

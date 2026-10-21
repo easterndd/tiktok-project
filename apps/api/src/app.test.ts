@@ -3,9 +3,11 @@ import { afterEach, describe, it } from 'node:test';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { buildApp } from './app';
 import type { Env } from './config/env';
+import { loadEnv } from './config/env';
 import { hashPassword } from './services/password';
 import { BytePlusVodService } from './services/byteplus-vod.service';
 import { uploadScope, uploadTags } from './services/local-upload.service';
+import { cleanupSharedIps, recordSharedIpVisit, setEntryAdIpExemption } from './services/shared-ip.service';
 
 const env: Env = {
   NODE_ENV: 'test',
@@ -80,7 +82,7 @@ async function createPrismaStub() {
     album
   };
   const state = {
-    viewer: { id: 'user-1', identityType: 'ANONYMOUS', tiktokOpenId: null as string | null, visitorKeyHash: null as string | null, createdAt: new Date(), updatedAt: new Date() },
+    viewer: { id: 'user-1', identityType: 'ANONYMOUS', appEntryAdExempt: false, tiktokOpenId: null as string | null, visitorKeyHash: null as string | null, createdAt: new Date(), updatedAt: new Date() },
     credentials: new Map<string, any>(),
     likes: new Set<string>(),
     favorites: new Set<string>(),
@@ -91,6 +93,9 @@ async function createPrismaStub() {
     entrySessions: new Map<string, any>(),
     entryCompletions: new Map<string, any>(),
     appSessions: new Map<string, any>(),
+    sharedIps: new Map<string, any>(),
+    sharedVisits: new Map<string, any>(),
+    sharedExemptions: new Map<string, any>(),
     playbackSessions: new Map<string, any>(),
     completionEvents: new Map<string, any>(),
     uiConfigVersions: new Map<number, any>(),
@@ -102,6 +107,7 @@ async function createPrismaStub() {
   const adminPasswordHash = await hashPassword('not-used');
   state.admin.passwordHash = adminPasswordHash;
   const prisma: any = {
+    _state: state,
     miniAppCodeRelease: {
       findMany: async ({ where }: any) => [...state.codeReleases.values()].filter((item) => item.miniAppKey === where.miniAppKey),
       upsert: async ({ where, create, update }: any) => {
@@ -207,12 +213,22 @@ async function createPrismaStub() {
       create: async () => { state.shareCount += 1; return { id: `share-${state.shareCount}` }; }
     },
     searchEvent: { create: async () => ({ id: 'search-1' }), count: async () => 0 },
+    watchProgress: { findMany: async () => [] },
     user: {
-      upsert: async () => ({ id: 'user-1', identityType: 'ANONYMOUS', tiktokOpenId: 'open-1', createdAt: new Date() }),
+      upsert: async ({ where, create, update }: any) => {
+        if (where.visitorKeyHash && state.viewer.visitorKeyHash === where.visitorKeyHash) return state.viewer;
+        if (where.visitorKeyHash) Object.assign(state.viewer, create, update, { visitorKeyHash: where.visitorKeyHash });
+        return state.viewer;
+      },
       findUnique: async ({ where }: any) => where.id ? (where.id === state.viewer.id ? state.viewer : null) : where.tiktokOpenId === state.viewer.tiktokOpenId ? state.viewer : null,
+      findMany: async () => [{ ...state.viewer, appSessions: [...state.appSessions.values()].filter((session) => session.userId === state.viewer.id).slice(-1) }],
+      updateMany: async ({ where, data }: any) => {
+        if (where.id !== state.viewer.id) return { count: 0 };
+        Object.assign(state.viewer, data);
+        return { count: 1 };
+      },
       findUniqueOrThrow: async () => state.viewer,
       update: async ({ data }: any) => Object.assign(state.viewer, data),
-      delete: async () => state.viewer,
       count: async () => 1
     },
     tikTokCredential: {
@@ -229,7 +245,12 @@ async function createPrismaStub() {
         state.appSessions.set(key, session);
         return session;
       },
-      findMany: async () => []
+      findMany: async () => [],
+      groupBy: async () => {
+        const counts = new Map<string | null, number>();
+        for (const session of state.appSessions.values()) counts.set(session.countryCode ?? null, (counts.get(session.countryCode ?? null) ?? 0) + 1);
+        return [...counts].map(([countryCode, count]) => ({ countryCode, _count: { _all: count } }));
+      }
     },
     appEntryAdPolicy: {
       findUnique: async (args: any) => state.entryPolicies.get(args.where.releaseId ?? 'default') ?? null,
@@ -333,14 +354,78 @@ async function createPrismaStub() {
     adRevenue: { findMany: async () => [], upsert: async () => ({ id: 'revenue-1' }) },
     uploadJob: { findMany: async () => [], findUnique: async () => null, findFirst: async () => null, create: async () => ({ id: 'job-1' }), updateMany: async () => ({ count: 1 }) },
     $transaction: async <T>(callback: (tx: typeof prisma) => Promise<T>) => callback(prisma),
-    $queryRaw: async () => [{ '?column?': 1 }]
+    $executeRaw: async (query: any, ...values: any[]) => {
+      const sql = typeof query?.sql === 'string' ? query.sql : Array.isArray(query) ? query.join('?') : String(query);
+      if (sql.includes('INSERT INTO "SharedIpAddress"')) {
+        const [hash, ipAddress, lastMiniAppKey, countryCode] = values;
+        state.sharedIps.set(hash, { ...(state.sharedIps.get(hash) ?? { ipHash: hash, visitCount: 0, firstSeenAt: new Date() }), ipAddress, lastMiniAppKey, countryCode, lastSeenAt: new Date() }); return 1;
+      }
+      if (sql.includes('UPDATE "SharedIpAddress" SET "visitCount"')) { state.sharedIps.get(values[0]).visitCount += 1; return 1; }
+      if (sql.includes('DELETE FROM "SharedIpVisit" v USING "SharedIpAddress"')) {
+        const [cutoff] = values;
+        let deleted = 0;
+        for (const [key, visit] of state.sharedVisits) {
+          const address = state.sharedIps.get(visit.ipHash);
+          if (address?.visitCount < 3 && visit.createdAt < cutoff && !state.sharedExemptions.has(address.ipAddress)) {
+            state.sharedVisits.delete(key); deleted++;
+          }
+        }
+        return deleted;
+      }
+      if (sql.includes('UPDATE "SharedIpAddress" a SET "ipAddress" = NULL')) {
+        const [cutoff] = values;
+        let updated = 0;
+        for (const address of state.sharedIps.values()) {
+          if (address.visitCount < 3 && address.lastSeenAt < cutoff && address.ipAddress !== null && !state.sharedExemptions.has(address.ipAddress)) {
+            address.ipAddress = null; updated++;
+          }
+        }
+        return updated;
+      }
+      if (sql.includes('DELETE FROM "SharedEntryAdIpExemption"')) return state.sharedExemptions.delete(values[0]) ? 1 : 0;
+      return 0;
+    },
+    $queryRaw: async (query: any, ...tagValues: any[]) => {
+      const sql = typeof query?.sql === 'string' ? query.sql : Array.isArray(query) ? query.join('?') : String(query);
+      const values = typeof query?.sql === 'string' ? query.values : tagValues;
+      if (sql.includes('SELECT "ipHash" FROM "SharedIpVisit"')) {
+        const visit = state.sharedVisits.get(values[0]);
+        return visit ? [{ ipHash: visit.ipHash }] : [];
+      }
+      if (sql.includes('INSERT INTO "SharedIpVisit"')) {
+        const [idempotencyKey, ipHash, miniAppKey, userId] = values;
+        if (state.sharedVisits.has(idempotencyKey)) return [];
+        state.sharedVisits.set(idempotencyKey, { idempotencyKey, ipHash, miniAppKey, userId, createdAt: new Date() }); return [{ idempotencyKey }];
+      }
+      if (sql.includes('SELECT EXISTS(SELECT 1 FROM "SharedEntryAdIpExemption"')) return [{ exempt: state.sharedExemptions.has(values[0]) }];
+      if (sql.includes('INSERT INTO "SharedEntryAdIpExemption"')) {
+        const [ipAddress, note, updatedBy] = values;
+        const item = { ...(state.sharedExemptions.get(ipAddress) ?? { ipAddress, createdAt: new Date() }), note, updatedBy, updatedAt: new Date() };
+        state.sharedExemptions.set(ipAddress, item); return [item];
+      }
+      if (sql.includes('FROM "SharedEntryAdIpExemption" ORDER BY')) return [...state.sharedExemptions.values()];
+      if (sql.includes('SELECT DISTINCT ON (v."userId")')) {
+        const [miniAppKey, ...userIds] = values;
+        return userIds.map((userId: string) => { const visit = [...state.sharedVisits.values()].reverse().find((item) => item.miniAppKey === miniAppKey && item.userId === userId); return visit && { userId, ipAddress: state.sharedIps.get(visit.ipHash)?.ipAddress ?? null }; }).filter(Boolean);
+      }
+      if (sql.includes('FROM "SharedIpAddress" a LEFT JOIN')) {
+        const all = [...state.sharedIps.values()].map((item) => ({ ...item, exempt: state.sharedExemptions.has(item.ipAddress) }));
+        return sql.includes('WHERE a."ipHash"') ? all.filter((item) => item.ipHash === values[0]).slice(0, values.at(-1)) : all.slice(0, values.at(-1));
+      }
+      if (sql.includes('FROM "SharedIpVisit"')) return [...state.sharedVisits.values()].filter((item) => item.ipHash === values[0]).slice(values[2], values[2] + values[1]);
+      return [{ '?column?': 1 }];
+    }
   };
   return prisma;
 }
 
-async function createTestApp(envOverrides: Partial<Env> = {}) {
+async function createTestApp(envOverrides: Partial<Env> = {}, options: { miniPrisma?: Partial<Record<'taletv', PrismaClient>>; sharedPrisma?: PrismaClient } = {}) {
   const prisma = await createPrismaStub();
-  const app = await buildApp({ ...env, ...envOverrides }, { prisma: prisma as unknown as PrismaClient, ...(envOverrides.TALETV_DATABASE_URL ? { taletvPrisma: prisma as unknown as PrismaClient } : {}) });
+  const app = await buildApp({ ...env, ...envOverrides }, {
+    prisma: prisma as unknown as PrismaClient,
+    ...(envOverrides.TALETV_DATABASE_URL ? { taletvPrisma: prisma as unknown as PrismaClient } : {}),
+    ...options
+  });
   await app.ready();
   return app;
 }
@@ -356,6 +441,11 @@ describe('QuicK ReeLS API', () => {
   afterEach(async () => {
     globalThis.fetch = originalFetch;
     while (apps.length) await apps.pop()!.close();
+  });
+
+  it('parses the production geo header flag as a real boolean', () => {
+    assert.equal(loadEnv({ ...env, TRUST_GEO_COUNTRY_HEADER: 'false' } as any).TRUST_GEO_COUNTRY_HEADER, false);
+    assert.equal(loadEnv({ ...env, TRUST_GEO_COUNTRY_HEADER: 'true' } as any).TRUST_GEO_COUNTRY_HEADER, true);
   });
 
   it('uses a forwarded client IP only when the immediate proxy is trusted', async () => {
@@ -406,6 +496,16 @@ describe('QuicK ReeLS API', () => {
       assert.equal((await loginApp.inject({ method: 'POST', url: '/api/v1/admin/auth/login', payload: {} })).statusCode, 400);
     }
     assert.equal((await loginApp.inject({ method: 'POST', url: '/api/v1/admin/auth/login', payload: {} })).statusCode, 429);
+  });
+
+  it('isolates anonymous bootstrap from unrelated public API traffic at a shared IP', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    for (let index = 0; index < 120; index += 1) assert.equal((await app.inject({ method: 'GET', url: '/ready' })).statusCode, 200);
+    assert.equal((await app.inject({ method: 'GET', url: '/ready' })).statusCode, 429);
+    const session = await app.inject({ method: 'POST', url: '/api/v1/auth/anonymous/session',
+      payload: { visitorKey: 'c'.repeat(64), clientSessionId: 'shared-ip-test-0001' } });
+    assert.equal(session.statusCode, 200, session.body);
   });
 
   it('replaces an episode VID and clears its old independent cover without deleting shared media', async () => {
@@ -632,7 +732,11 @@ describe('QuicK ReeLS API', () => {
     apps.push(app);
     const home = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { 'x-geo-country': 'US' } });
     assert.equal(home.statusCode, 200);
+    assert.match(String(home.headers['server-timing'] ?? ''), /db;dur=\d+(?:\.\d+)?, app;dur=\d+(?:\.\d+)?/);
     assert.equal(home.json().feed.items[0].title, 'Test Drama');
+    const personalized = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { authorization: `Bearer ${await token(app, 'user')}` } });
+    assert.equal(personalized.statusCode, 200);
+    assert.equal(personalized.json().blocks[0].type, 'CONTINUE_WATCHING');
 
     const search = await app.inject({ method: 'GET', url: '/api/v1/search?q=test' });
     assert.equal(search.statusCode, 200);
@@ -683,7 +787,185 @@ describe('QuicK ReeLS API', () => {
     assert.equal(typeof response.json().accessToken, 'string');
   });
 
-  it('exchanges a TikTok login code and stores encrypted credentials on the viewer', async () => {
+  it('stores the resolved client IP and trusted country for regional analytics', async () => {
+    const app = await createTestApp({ TRUSTED_PROXY_CIDRS: '172.20.0.2/32' });
+    apps.push(app);
+    const response = await app.inject({ method: 'POST', url: '/api/v1/auth/anonymous/session', remoteAddress: '172.20.0.2',
+      headers: { 'x-forwarded-for': '198.51.100.25', 'x-geo-country': 'US' },
+      payload: { visitorKey: 'b'.repeat(64), clientSessionId: 'region-test-001' } });
+    assert.equal(response.statusCode, 200, response.body);
+    const session = (app.prisma as any)._state.appSessions.get('user-1:region-test-001');
+    assert.equal(Object.hasOwn(session, 'ipAddress'), false);
+    assert.equal(session.countryCode, 'US');
+    const entry = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions',
+      headers: { authorization: `Bearer ${response.json().accessToken}`, 'x-forwarded-for': '198.51.100.25', 'x-geo-country': 'US' },
+      remoteAddress: '172.20.0.2', payload: { launchId: 'f6ac6057-1714-45ea-9ac2-cb9d1fe9e210' } });
+    assert.equal(entry.statusCode, 200, entry.body);
+    assert.equal([...((app.sharedPrisma as any)._state.sharedIps.values())][0].ipAddress, '198.51.100.25');
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const viewers = await app.inject({ method: 'GET', url: '/api/v1/admin/viewers?search=user-1', headers: adminHeaders });
+    assert.equal(viewers.statusCode, 200, viewers.body);
+    assert.equal(viewers.json().items[0].ipAddress, '198.51.100.25');
+    assert.equal(viewers.json().items[0].countryCode, 'US');
+    (app.prisma as any).$queryRaw = async () => [{ countryCode: 'US', viewers: 1, sessions: 1 }];
+    const countries = await app.inject({ method: 'GET', url: '/api/v1/admin/analytics/audience-countries?days=7', headers: adminHeaders });
+    assert.equal(countries.statusCode, 200, countries.body);
+    assert.deepEqual(countries.json().items, [{ countryCode: 'US', viewers: 1, sessions: 1 }]);
+  });
+
+  it('ignores a user supplied country header when no trusted proxy is configured', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const response = await app.inject({ method: 'POST', url: '/api/v1/auth/anonymous/session',
+      headers: { 'x-geo-country': 'US' },
+      payload: { visitorKey: 'd'.repeat(64), clientSessionId: 'untrusted-geo-001' } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal((app.prisma as any)._state.appSessions.get('user-1:untrusted-geo-001').countryCode, null);
+  });
+
+  it('ignores a direct country header even when another proxy address is trusted', async () => {
+    const app = await createTestApp({ TRUSTED_PROXY_CIDRS: '172.20.0.2/32' });
+    apps.push(app);
+    const response = await app.inject({ method: 'POST', url: '/api/v1/auth/anonymous/session', remoteAddress: '198.51.100.10',
+      headers: { 'x-forwarded-for': '203.0.113.1', 'x-geo-country': 'US' },
+      payload: { visitorKey: 'e'.repeat(64), clientSessionId: 'direct-geo-test-001' } });
+    assert.equal(response.statusCode, 200, response.body);
+    const session = (app.prisma as any)._state.appSessions.get('user-1:direct-geo-test-001');
+    assert.equal(Object.hasOwn(session, 'ipAddress'), false);
+    assert.equal(session.countryCode, null);
+    const entry = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions',
+      headers: { authorization: `Bearer ${response.json().accessToken}`, 'x-forwarded-for': '203.0.113.1', 'x-geo-country': 'US' },
+      remoteAddress: '198.51.100.10', payload: { launchId: 'e1c1d05f-a0af-4d8b-9520-c5417972bb15' } });
+    assert.equal(entry.statusCode, 200, entry.body);
+    assert.equal([...((app.sharedPrisma as any)._state.sharedIps.values())][0].ipAddress, '198.51.100.10');
+  });
+
+  it('records launches from every mini app in one shared database and counts one launch once', async () => {
+    const taletvPrisma = await createPrismaStub();
+    const sharedPrisma = await createPrismaStub();
+    const app = await createTestApp({ TALETV_DATABASE_URL: 'postgresql://test:test@localhost:5432/taletv' }, {
+      miniPrisma: { taletv: taletvPrisma as unknown as PrismaClient },
+      sharedPrisma: sharedPrisma as unknown as PrismaClient
+    });
+    apps.push(app);
+    const mainToken = await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'main' });
+    const taletvToken = await app.jwt.sign({ sub: 'taletv-user-1', kind: 'user', appKey: 'taletv' });
+    const sharedIp = '198.51.100.40';
+    const launchId = 'bb2f05a1-285a-4f84-8c6d-2b6dd97fa1c1';
+    const mainHeaders = { authorization: `Bearer ${mainToken}` };
+    const first = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: mainHeaders, remoteAddress: sharedIp, payload: { launchId } });
+    const retry = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: mainHeaders, remoteAddress: sharedIp, payload: { launchId } });
+    const taletv = await app.inject({ method: 'POST', url: '/api/taletv/v1/app-entry-ad-sessions', headers: { authorization: `Bearer ${taletvToken}` }, remoteAddress: sharedIp,
+      payload: { launchId: '6cb54d6e-5042-4e47-96e9-53fa9eb5cf3b' } });
+
+    assert.equal(first.statusCode, 200, first.body);
+    assert.equal(retry.statusCode, 200, retry.body);
+    assert.equal(taletv.statusCode, 200, taletv.body);
+    const registry = (sharedPrisma as any)._state;
+    assert.equal(registry.sharedIps.size, 1);
+    assert.equal([...registry.sharedIps.values()][0].visitCount, 2);
+    assert.deepEqual([...registry.sharedVisits.values()].map((visit: any) => visit.miniAppKey).sort(), ['main', 'taletv']);
+    assert.equal((app.prisma as any)._state.sharedIps.size, 0);
+    assert.equal((taletvPrisma as any)._state.sharedIps.size, 0);
+  });
+
+  it('persists exempt IPs, skips only entry ads, and keeps repeated launch counting idempotent', async () => {
+    const app = await createTestApp({ TRUST_GEO_COUNTRY_HEADER: true });
+    apps.push(app);
+    const owner = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const viewer = { authorization: `Bearer ${await token(app, 'user')}` };
+    const ip = '203.0.113.44';
+    const policy = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: owner,
+      payload: { enabled: true, mode: 'INTERSTITIAL', placementId: 'entry-ad', requiredCount: 1, onUnavailable: 'ALLOW' } });
+    assert.equal(policy.statusCode, 200, policy.body);
+    const exemption = await app.inject({ method: 'PUT', url: '/api/v1/admin/shared/entry-ad-ip-exemptions', headers: owner,
+      payload: { ipAddress: ip, note: 'trusted office' } });
+    assert.equal(exemption.statusCode, 200, exemption.body);
+    const launchId = 'bf85110f-c79c-4cb9-9cf4-2f34bf52c014';
+    const entry = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: viewer, remoteAddress: ip, payload: { launchId } });
+    const retry = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: viewer, remoteAddress: ip, payload: { launchId } });
+    assert.deepEqual(entry.json(), { required: false });
+    assert.deepEqual(retry.json(), { required: false });
+
+    const episodeReward = await app.inject({ method: 'POST', url: '/api/v1/episodes/episode-1/reward-session', headers: { ...viewer, 'x-geo-country': 'US' }, remoteAddress: ip, payload: {} });
+    assert.equal(episodeReward.statusCode, 200, episodeReward.body);
+    assert.equal(typeof episodeReward.json().sessionId, 'string');
+
+    const registry = (app.sharedPrisma as any)._state;
+    assert.equal([...registry.sharedIps.values()][0].visitCount, 1);
+    assert.equal(registry.sharedExemptions.has(ip), true);
+    const search = await app.inject({ method: 'GET', url: `/api/v1/admin/shared/ips?search=${encodeURIComponent(ip)}`, headers: owner });
+    assert.equal(search.statusCode, 200, search.body);
+    assert.equal(search.json().items[0].exempt, true);
+    const history = await app.inject({ method: 'GET', url: `/api/v1/admin/shared/ips/${encodeURIComponent(ip)}/visits`, headers: owner });
+    assert.equal(history.statusCode, 200, history.body);
+    assert.equal(history.json().items.length, 1);
+  });
+
+  it('clears stale raw IPs after 30 days but retains exemptions and IPs with three visits', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const db = app.sharedPrisma;
+    const secret = env.JWT_SECRET;
+    const staleAt = new Date('2026-07-01T00:00:00.000Z');
+    const addVisits = async (ipAddress: string, count: number, prefix: string) => {
+      for (let index = 0; index < count; index++) {
+        await recordSharedIpVisit(db, { ipAddress, miniAppKey: 'main', userId: `${prefix}-user`, clientSessionId: `${prefix}-${index}`, countryCode: null, secret });
+      }
+      const address = [...(db as any)._state.sharedIps.values()].find((item: any) => item.ipAddress === ipAddress);
+      address.lastSeenAt = staleAt;
+      for (const visit of (db as any)._state.sharedVisits.values()) if (visit.ipHash === address.ipHash) visit.createdAt = staleAt;
+    };
+    await addVisits('192.0.2.20', 2, 'short-lived');
+    await addVisits('192.0.2.21', 1, 'exempt');
+    await setEntryAdIpExemption(db, '192.0.2.21', 'keep', 'admin-1');
+    await addVisits('192.0.2.22', 3, 'repeat');
+
+    await cleanupSharedIps(db, new Date('2026-08-01T00:00:00.000Z'));
+
+    const state = (db as any)._state;
+    const shortLivedAddress = [...state.sharedIps.values()].find((item: any) => item.visitCount === 2);
+    const exemptVisit = [...state.sharedVisits.values()].find((item: any) => item.userId === 'exempt-user');
+    const repeatVisit = [...state.sharedVisits.values()].find((item: any) => item.userId === 'repeat-user');
+    assert.equal(shortLivedAddress?.ipAddress, null);
+    assert.equal([...state.sharedVisits.values()].filter((visit: any) => visit.ipHash === shortLivedAddress?.ipHash).length, 0);
+    assert.equal(state.sharedIps.get(exemptVisit?.ipHash)?.ipAddress, '192.0.2.21');
+    assert.equal(state.sharedIps.get(repeatVisit?.ipHash)?.ipAddress, '192.0.2.22');
+    assert.equal([...state.sharedVisits.values()].filter((visit: any) => visit.userId === 'repeat-user').length, 3);
+    assert.equal([...state.sharedVisits.values()].filter((visit: any) => visit.userId === 'exempt-user').length, 1);
+  });
+
+  it('lets an owner exempt a selected user from entry ads without affecting other ad flows', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const owner = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const viewer = { authorization: `Bearer ${await token(app, 'user')}` };
+    const enabled = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: owner,
+      payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 2, onUnavailable: 'ALLOW' } });
+    assert.equal(enabled.statusCode, 200, enabled.body);
+    const first = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: viewer, payload: { launchId: '28be20a3-72fa-4f22-9da4-9a6d0563932f' } });
+    assert.equal(first.json().required, true);
+    const update = await app.inject({ method: 'PATCH', url: '/api/v1/admin/viewers/user-1/app-entry-ad', headers: owner, payload: { appEntryAdExempt: true } });
+    assert.equal(update.statusCode, 200, update.body);
+    const listed = await app.inject({ method: 'GET', url: '/api/v1/admin/viewers?search=user-1', headers: owner });
+    assert.equal(listed.statusCode, 200, listed.body);
+    assert.equal(listed.json().items[0].appEntryAdExempt, true);
+    const exempt = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: viewer, payload: { launchId: 'bc0b327e-03fb-46d2-ae67-a25d9fe58b8b' } });
+    assert.deepEqual(exempt.json(), { required: false });
+    const restore = await app.inject({ method: 'PATCH', url: '/api/v1/admin/viewers/user-1/app-entry-ad', headers: owner, payload: { appEntryAdExempt: false } });
+    assert.equal(restore.statusCode, 200);
+    const resumed = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: viewer, payload: { launchId: '01cc8998-6433-43a6-83da-c8c3e781702a' } });
+    assert.equal(resumed.json().required, true);
+    const missing = await app.inject({ method: 'PATCH', url: '/api/v1/admin/viewers/absent/app-entry-ad', headers: owner, payload: { appEntryAdExempt: true } });
+    assert.equal(missing.statusCode, 404);
+    await app.prisma.adminUser.update({ where: { id: 'admin-1' }, data: { role: 'EDITOR' } });
+    const editorWrite = await app.inject({ method: 'PATCH', url: '/api/v1/admin/viewers/user-1/app-entry-ad', headers: owner, payload: { appEntryAdExempt: true } });
+    assert.equal(editorWrite.statusCode, 403);
+    const editorList = await app.inject({ method: 'GET', url: '/api/v1/admin/viewers', headers: owner });
+    assert.equal(editorList.statusCode, 403);
+  });
+
+  it('exchanges a TikTok login code, links the OpenID and stores OAuth credentials encrypted', async () => {
     const app = await createTestApp({ TIKTOK_CLIENT_KEY: 'test-client-key', TIKTOK_CLIENT_SECRET: 'test-client-secret' });
     apps.push(app);
     let requestBody: URLSearchParams | undefined;
@@ -705,6 +987,7 @@ describe('QuicK ReeLS API', () => {
     assert.equal(requestBody?.get('client_key'), 'test-client-key');
     assert.equal(requestBody?.get('client_secret'), 'test-client-secret');
     assert.equal(requestBody?.get('code'), 'one-time-code-123');
+    const state = (app.prisma as any)._state;
     assert.equal(state.viewer.tiktokOpenId, 'tiktok-open-id');
     assert.equal(state.viewer.identityType, 'TIKTOK');
     assert.notEqual(state.credentials.get('user-1').accessTokenEncrypted, 'sensitive-access-token');

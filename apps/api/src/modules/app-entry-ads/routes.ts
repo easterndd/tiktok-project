@@ -3,6 +3,9 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
 import { miniAppAdConfig } from '../../config/mini-apps';
+import { measureDatabase } from '../../lib/request-performance';
+import { isEntryAdIpExempt, recordSharedIpVisit } from '../../services/shared-ip.service';
+import { requestCountry } from '../../lib/content-visibility';
 
 const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
@@ -54,40 +57,52 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
     const { launchId, releaseId } = startInput.parse(request.body);
-    const saved = await app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } });
+    await measureDatabase(request, () => recordSharedIpVisit(app.sharedPrisma, {
+      ipAddress: request.ip, miniAppKey: app.config.MINI_APP_KEY, userId: request.user.sub, clientSessionId: launchId,
+      countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
+      secret: app.rootConfig.JWT_SECRET
+    }));
+    const saved = await measureDatabase(request, () => app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } }));
     let policy = saved ?? disabledPolicy(app, releaseId);
     if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
       try {
-        policy = await app.prisma.appEntryAdPolicy.create({ data: { ...disabledPolicy(app, releaseId), firstSeenAt: new Date() } });
+        policy = await measureDatabase(request, () => app.prisma.appEntryAdPolicy.create({ data: { ...disabledPolicy(app, releaseId), firstSeenAt: new Date() } }));
       } catch (error) {
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
-        policy = await readAppEntryAdPolicy(app, releaseId);
+        policy = await measureDatabase(request, () => readAppEntryAdPolicy(app, releaseId));
       }
     }
-    if (saved && !saved.firstSeenAt) await app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } });
+    if (saved && !saved.firstSeenAt) await measureDatabase(request, () => app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } }));
     if (!policy.enabled) return { required: false as const };
+    if (await measureDatabase(request, () => isEntryAdIpExempt(app.sharedPrisma, request.ip))) return { required: false as const };
+    const viewer = await measureDatabase(request, () => app.prisma.user.findUnique({ where: { id: request.user.sub }, select: { appEntryAdExempt: true, mergedIntoUserId: true } }));
+    if (viewer?.appEntryAdExempt) return { required: false as const };
+    if (viewer?.mergedIntoUserId) {
+      const canonical = await measureDatabase(request, () => app.prisma.user.findUnique({ where: { id: viewer.mergedIntoUserId! }, select: { appEntryAdExempt: true } }));
+      if (canonical?.appEntryAdExempt) return { required: false as const };
+    }
     const now = new Date();
 
-    const existing = await app.prisma.appEntryAdSession.findUnique({
+    const existing = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({
       where: { userId_releaseId_launchId: { userId: request.user.sub, releaseId, launchId } }
-    });
+    }));
     if (existing) {
       if (existing.status === 'COMPLETED' || existing.completedCount >= existing.requiredCount) return sessionResponse(existing, policy.onUnavailable);
       if (existing.expiresAt > now && existing.status === 'ACTIVE') return sessionResponse(existing, policy.onUnavailable);
 
-      const renewed = await app.prisma.appEntryAdSession.update({
+      const renewed = await measureDatabase(request, () => app.prisma.appEntryAdSession.update({
         where: { id: existing.id },
         data: {
           status: 'ACTIVE',
           expiresAt: new Date(now.getTime() + sessionTtlMs)
         }
-      });
+      }));
       return sessionResponse(renewed, policy.onUnavailable);
     }
 
     let session;
     try {
-      session = await app.prisma.appEntryAdSession.create({
+      session = await measureDatabase(request, () => app.prisma.appEntryAdSession.create({
         data: {
           userId: request.user.sub,
           releaseId,
@@ -99,10 +114,10 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
           countMode: policy.countMode,
           expiresAt: new Date(now.getTime() + sessionTtlMs)
         }
-      });
+      }));
     } catch (error) {
       if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
-      session = await app.prisma.appEntryAdSession.findUnique({ where: { userId_releaseId_launchId: { userId: request.user.sub, releaseId, launchId } } });
+      session = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({ where: { userId_releaseId_launchId: { userId: request.user.sub, releaseId, launchId } } }));
       if (!session) throw error;
     }
     return sessionResponse(session, policy.onUnavailable);
@@ -167,7 +182,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     let result: Awaited<ReturnType<typeof transact>> | undefined;
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        result = await transact();
+        result = await measureDatabase(request, transact);
         break;
       } catch (error) {
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt === 4) throw error;

@@ -4,6 +4,15 @@ type Diagnostic = {
   kind: 'STARTUP' | 'API' | 'SCRIPT' | 'AD' | 'PLAYBACK'; phase: string; message: string;
   path?: string; requestId?: string; statusCode?: number; durationMs?: number;
 };
+
+export function reportPerformance(phase: string, path: string, durationMs: number, details: Record<string, string | number | boolean | null | undefined> = {}) {
+  console.info('[MiniPerf]', {
+    phase,
+    path: path.split(/[?#]/, 1)[0].slice(0, 160),
+    durationMs: Number(Math.max(0, durationMs).toFixed(1)),
+    ...details
+  });
+}
 const recent = new Map<string, number>();
 let windowStart = 0;
 let sent = 0;

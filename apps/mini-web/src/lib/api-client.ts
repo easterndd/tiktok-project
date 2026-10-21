@@ -1,12 +1,23 @@
 import type { ApiErrorResponse } from '@quickreels/shared-types';
 import { mockApiRequest } from './mock-api';
 import { getSessionToken } from './storage';
-import { reportDiagnostic } from './diagnostics';
+import { reportDiagnostic, reportPerformance } from './diagnostics';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
   ?? (import.meta.env.VITE_APP_KEY && import.meta.env.VITE_APP_KEY !== 'main' ? `http://localhost:3000/api/${import.meta.env.VITE_APP_KEY}/v1` : 'http://localhost:3000/api/v1');
 const useMockApi = import.meta.env.VITE_USE_MOCK_API === 'true' || import.meta.env.VITE_DEMO_MODE === 'true';
 const enableMockFallback = import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
+
+function shouldMeasureRequest(path: string) {
+  const route = path.split('?', 1)[0];
+  return route === '/home'
+    || route === '/auth/anonymous/session'
+    || route === '/app-entry-ad-sessions'
+    || /^\/app-entry-ad-sessions\/[^/]+\/complete$/.test(route)
+    || route === '/ad-events'
+    || route === '/episode-interstitial/config'
+    || /\/episodes\/[^/]+\/reward-session(?:\/[^/]+\/complete)?$/.test(route);
+}
 
 type UnauthorizedHandler = () => Promise<void>;
 let unauthorizedHandler: UnauthorizedHandler | null = null;
@@ -21,7 +32,8 @@ export class ApiError extends Error {
     message: string,
     public readonly status: number,
     public readonly code?: string,
-    public readonly requestId?: string
+    public readonly requestId?: string,
+    public readonly retryAfterSeconds?: number
   ) {
     super(message);
     this.name = 'ApiError';
@@ -64,11 +76,18 @@ class ApiClient {
           body?.error.message ?? 'The request could not be completed.',
           response.status,
           body?.error.code,
-          body?.error.requestId
+          body?.error.requestId,
+          response.status === 429 ? parseRetryAfter(response.headers.get('Retry-After')) : undefined
         );
       }
-      if (response.status === 204) return undefined as T;
-      return await response.json() as T;
+      const data = response.status === 204 ? undefined as T : await response.json() as T;
+      if (shouldMeasureRequest(path)) {
+        reportPerformance('API_RESPONSE', `${method} ${path}`, Date.now() - startedAt, {
+          statusCode: response.status,
+          serverTiming: response.headers.get('server-timing')
+        });
+      }
+      return data;
     } catch (error) {
       if (!/\/(ad-events|playback-quality-events|runtime-errors)(?:\?|$)/.test(path) && (timedOut || !controller.signal.aborted)) {
         reportDiagnostic({ kind: path.includes('/auth/') || path.includes('/app-entry-ad-sessions') ? 'STARTUP' : path.includes('/episodes') ? 'PLAYBACK' : 'API',
@@ -89,6 +108,15 @@ class ApiClient {
   post<T>(path: string, body: unknown) { return this.request<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
   put<T>(path: string, body: unknown) { return this.request<T>(path, { method: 'PUT', body: JSON.stringify(body) }); }
   patch<T>(path: string, body: unknown) { return this.request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }); }
+}
+
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(300, Math.ceil(seconds));
+  const date = Date.parse(value);
+  if (Number.isNaN(date)) return undefined;
+  return Math.min(300, Math.max(0, Math.ceil((date - Date.now()) / 1000)));
 }
 
 export const apiClient = new ApiClient();

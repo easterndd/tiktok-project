@@ -6,6 +6,7 @@ import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { defaultUiComponents } from '../ui/routes';
 import { isAlbumVisibleInCountry, isPlatformPublished, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
 import { coverThumbnailUrl } from '../../lib/cover-thumbnail';
+import { addDatabaseDuration } from '../../lib/request-performance';
 
 const querySchema = z.object({ locale: publicLocaleSchema.default(defaultLocale) });
 
@@ -20,19 +21,57 @@ function translatedText(
 export async function registerHomeRoutes(app: FastifyInstance) {
   app.get('/home', async (request): Promise<HomeResponse> => {
     const { locale } = querySchema.parse(request.query);
-    const user = await optionalUser(request);
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
-    const components = await app.prisma.uiComponent.findMany({ orderBy: { key: 'asc' } });
-    const albums = await app.prisma.album.findMany({
-      where: publicAlbumWhere(app.config),
-      orderBy: { updatedAt: 'desc' },
-      take: 20,
-      include: {
-        episodes: { where: { status: 'ONLINE' }, select: { id: true } },
-        translations: true,
-        genres: { include: { genre: { select: { slug: true } } } }
-      }
-    });
+    const now = new Date();
+    const userPromise = optionalUser(request);
+    const catalogStartedAt = performance.now();
+    const [user, components, albums, genres, configuredBlocks, progress] = await Promise.all([
+      userPromise,
+      app.prisma.uiComponent.findMany({ orderBy: { key: 'asc' } }),
+      app.prisma.album.findMany({
+        where: publicAlbumWhere(app.config),
+        orderBy: { updatedAt: 'desc' },
+        take: 20,
+        include: {
+          episodes: { where: { status: 'ONLINE' }, select: { id: true } },
+          translations: true,
+          genres: { include: { genre: { select: { slug: true } } } }
+        }
+      }),
+      app.prisma.genre.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { albums: { where: { album: publicAlbumWhere(app.config) } } } } } }),
+      app.prisma.homeBlock.findMany({
+        where: {
+          enabled: true,
+          AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gte: now } }] }]
+        },
+        orderBy: { sortOrder: 'asc' },
+        include: {
+          items: {
+            where: {
+              AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gte: now } }] }]
+            },
+            orderBy: { sortOrder: 'asc' },
+            include: {
+              album: {
+                include: {
+                  episodes: { where: { status: 'ONLINE' }, select: { id: true } },
+                  translations: true,
+                  genres: { include: { genre: { select: { slug: true } } } }
+                }
+              },
+              targetEpisode: { select: { albumId: true, status: true, localPlaybackUrl: true } }
+            }
+          }
+        }
+      }),
+      userPromise.then((user) => user ? app.prisma.watchProgress.findMany({
+        where: { userId: user.sub, completed: false, episode: { status: 'ONLINE', album: publicAlbumWhere(app.config) } },
+        orderBy: { updatedAt: 'desc' },
+        take: 6,
+        include: { episode: { include: { album: { include: { translations: true } } } } }
+      }) : [])
+    ]);
+    addDatabaseDuration(request, performance.now() - catalogStartedAt);
     const visibleAlbums = albums.filter((album) => isAlbumVisibleInCountry(album.regions, country));
     const summaries = visibleAlbums.map((album) => ({
       id: album.id,
@@ -45,7 +84,6 @@ export async function registerHomeRoutes(app: FastifyInstance) {
       genres: (album.genres ?? []).map(({ genre }) => genre.slug),
       status: 'ONLINE' as const
     }));
-    const genres = await app.prisma.genre.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { albums: { where: { album: publicAlbumWhere(app.config) } } } } } });
     const localizedGenres = genres.map((genre) => {
       const translations = genre.translations && typeof genre.translations === 'object' && !Array.isArray(genre.translations)
         ? genre.translations as Record<string, unknown>
@@ -55,32 +93,6 @@ export async function registerHomeRoutes(app: FastifyInstance) {
         name: typeof translations[locale] === 'string' ? translations[locale] : genre.name,
         count: genre._count.albums
       };
-    });
-    const now = new Date();
-    const configuredBlocks = await app.prisma.homeBlock.findMany({
-      where: {
-        enabled: true,
-        AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gte: now } }] }]
-      },
-      orderBy: { sortOrder: 'asc' },
-      include: {
-        items: {
-          where: {
-            AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gte: now } }] }]
-          },
-          orderBy: { sortOrder: 'asc' },
-          include: {
-            album: {
-              include: {
-                episodes: { where: { status: 'ONLINE' }, select: { id: true } },
-                translations: true,
-                genres: { include: { genre: { select: { slug: true } } } }
-              }
-            },
-            targetEpisode: { select: { albumId: true, status: true, localPlaybackUrl: true } }
-          }
-        }
-      }
     });
     const configured: HomeResponse['blocks'] = [];
     for (const block of configuredBlocks) {
@@ -125,12 +137,6 @@ export async function registerHomeRoutes(app: FastifyInstance) {
       { type: 'NEW_RELEASES', title: 'Fresh episodes', items: summaries.slice(0, 8) }
     ];
     if (user) {
-      const progress = await app.prisma.watchProgress.findMany({
-        where: { userId: user.sub, completed: false, episode: { status: 'ONLINE', album: publicAlbumWhere(app.config) } },
-        orderBy: { updatedAt: 'desc' },
-        take: 6,
-        include: { episode: { include: { album: { include: { translations: true } } } } }
-      });
       blocks.unshift({
         type: 'CONTINUE_WATCHING',
         title: 'Continue watching',

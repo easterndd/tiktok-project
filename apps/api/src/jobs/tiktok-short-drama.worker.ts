@@ -1,4 +1,5 @@
 import { PrismaClient, type UploadJob } from '@prisma/client';
+import { cleanupSharedIps } from '../services/shared-ip.service';
 import { loadEnv } from '../config/env';
 import { configuredMiniAppKeys, miniAppEnvironment } from '../config/mini-apps';
 import { runtimeDatabaseUrl } from '../config/database-pool';
@@ -293,6 +294,8 @@ export async function startUploadWorker() {
           await context.prisma.miniAppRuntimeError.deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 86_400_000) } } });
         } catch (error) { console.error(`${context.env.MINI_APP_KEY} analytics summary refresh failed.`, error); }
       }
+      try { await cleanupSharedIps(sharedPrisma); }
+      catch (error) { console.error('Shared IP retention cleanup failed.', error); }
     } finally { analyticsRunning = false; }
   };
   void refreshAnalytics();

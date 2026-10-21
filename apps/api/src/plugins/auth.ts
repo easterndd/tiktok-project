@@ -29,6 +29,8 @@ function permissionForRequest(request: FastifyRequest): AdminPermission {
   if (path.startsWith('/admin/admin-users')) return 'admin.manage';
   if (path.startsWith('/admin/audit-logs')) return 'audit.read';
   if (path.startsWith('/admin/analytics')) return 'analytics.read';
+  if (path.startsWith('/admin/viewers')) return 'admin.manage';
+  if (path.startsWith('/admin/shared/ips') || path.startsWith('/admin/shared/entry-ad-ip-exemptions')) return 'admin.manage';
   if (path.startsWith('/admin/app-entry-ad-policy') || path === '/admin/app-entry-ad-policies' || path.startsWith('/admin/app-entry-ad-releases/')) return request.method === 'GET' ? 'ads.read' : 'ads.write';
   if (path.startsWith('/admin/ui-components')) return request.method === 'GET' ? 'settings.read' : 'settings.write';
   return request.method === 'GET' ? 'content.read' : 'content.write';

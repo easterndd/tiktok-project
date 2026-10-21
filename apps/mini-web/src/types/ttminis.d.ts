@@ -60,6 +60,7 @@ declare global {
 
   interface InterstitialAd {
     show(): Promise<void>;
+    destroy?(): void;
     onClose(callback: () => void): void;
     offClose(callback: () => void): void;
     onError(callback: (error: unknown) => void): void;

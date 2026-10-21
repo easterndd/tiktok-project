@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, type ReactNode } from 'react';
 import { EntryAdGate } from '../components/EntryAdGate';
+import { startAppEntryAdSession } from '../features/ads/app-entry-ad';
 import { ensureAnonymousSession, ensureTikTokSession } from '../features/auth/anonymous-session';
 import { appKey } from '../lib/app-brand';
 
@@ -17,7 +18,9 @@ const queryClient = new QueryClient({
 
 function AnonymousSessionBootstrap() {
   useEffect(() => {
-    void ensureAnonymousSession().catch(() => undefined);
+    void ensureAnonymousSession()
+      .then(() => appKey === 'storyland' ? startAppEntryAdSession() : undefined)
+      .catch(() => undefined);
   }, []);
   return null;
 }
