@@ -44,6 +44,7 @@ const initialApp: MiniApp = savedApp && savedApp in miniAppNames ? savedApp as M
 const primaryApi = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/api/v1';
 const env = import.meta.env as Record<string, string | undefined>;
 function createAdminWorkspace(activeApp: MiniApp, onSelect: (value: MiniApp) => void) {
+const organizationApps = miniAppOrganization(activeApp).apps.map((key) => ({ key, name: miniAppNames[key] }));
 const appPrefix = activeApp === 'main' ? '' : miniAppEnvPrefixes[activeApp];
 const API = activeApp === 'main'
   ? primaryApi
@@ -233,7 +234,7 @@ function rangeStart(days: number) {
   return inputDate(value);
 }
 
-const api = createAdminApi(API, adminTokenStorageKey, platformSubmissionStorageKey, () => onSelect(activeApp));
+const api = createAdminApi(API, adminTokenStorageKey, platformSubmissionStorageKey, () => onSelect(activeApp), miniAppOrganization(activeApp).apps);
 
 function Login({ onLogin }: { onLogin: () => void }) {
   const [email, setEmail] = useState('');
@@ -1395,8 +1396,8 @@ function AdminApp() {
         <div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => { const mode = event.target.value as AppEntryAdPolicy['mode']; return { ...policy, mode, placementId: entryAdPlacementDefaults[mode] }; })}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>广告位 ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required={entryAdPolicy.enabled} /></label><label>所需广告次数<input type="number" min="1" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>计数规则<select value={entryAdPolicy.countMode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, countMode: event.target.value as AppEntryAdPolicy['countMode'] }))}><option value="COMPLETED">完成激励后计数</option><option value="SHOWN">成功弹出即计数</option></select></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入</option></select></label></div>
         <p className="form-help">正在编辑：{entryAdPolicy.releaseId} · 策略版本 {entryAdPolicy.version}。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy || entryAdPolicy.releaseId !== entryAdReleaseId}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存进入广告策略</>}</button></form></Panel>}
       {tab === 'audience' && !audience && !resourceStatus.audience?.error && <p className="load-placeholder">正在加载观众数据...</p>}
-      {tab === 'ads' && currentAdmin?.role === 'OWNER' && <ViewerAdControls api={api} canEdit />}
-        {tab === 'ads' && currentAdmin?.role === 'OWNER' && <SharedIpControls api={api} canEdit />}
+      {tab === 'ads' && currentAdmin?.role === 'OWNER' && <ViewerAdControls api={api} canEdit miniApps={organizationApps} currentMiniApp={activeApp} />}
+      {tab === 'ads' && currentAdmin?.role === 'OWNER' && <SharedIpControls api={api} canEdit miniApps={Object.entries(miniAppNames).map(([key, name]) => ({ key, name }))} />}
       {tab === 'audience' && audience && <AudiencePage audience={audience} />}
       {tab === 'audience' && audience && <AudienceCountries api={api} from={analyticsFrom} to={analyticsTo} timezone={analyticsTimezone} />}
       {tab === 'playback' && !playback && !resourceStatus.playback?.error && <p className="load-placeholder">正在加载播放质量...</p>}

@@ -3,6 +3,7 @@ import { afterEach, describe, it } from 'node:test';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { buildApp } from './app';
 import type { Env } from './config/env';
+import type { MiniAppKey } from './config/mini-apps';
 import { loadEnv } from './config/env';
 import { hashPassword } from './services/password';
 import { BytePlusVodService } from './services/byteplus-vod.service';
@@ -223,7 +224,8 @@ async function createPrismaStub() {
       findUnique: async ({ where }: any) => where.id ? (where.id === state.viewer.id ? state.viewer : null) : where.tiktokOpenId === state.viewer.tiktokOpenId ? state.viewer : null,
       findMany: async () => [{ ...state.viewer, appSessions: [...state.appSessions.values()].filter((session) => session.userId === state.viewer.id).slice(-1) }],
       updateMany: async ({ where, data }: any) => {
-        if (where.id !== state.viewer.id) return { count: 0 };
+        const ids = Array.isArray(where.id?.in) ? where.id.in : [where.id];
+        if (!ids.includes(state.viewer.id)) return { count: 0 };
         Object.assign(state.viewer, data);
         return { count: 1 };
       },
@@ -408,18 +410,31 @@ async function createPrismaStub() {
         const [miniAppKey, ...userIds] = values;
         return userIds.map((userId: string) => { const visit = [...state.sharedVisits.values()].reverse().find((item) => item.miniAppKey === miniAppKey && item.userId === userId); return visit && { userId, ipAddress: state.sharedIps.get(visit.ipHash)?.ipAddress ?? null }; }).filter(Boolean);
       }
+      if (sql.includes('SELECT DISTINCT "userId" FROM "SharedIpVisit"')) {
+        const [miniAppKey, hash] = values;
+        return [...state.sharedVisits.values()].filter((item) => item.miniAppKey === miniAppKey && item.ipHash === hash).map((item) => ({ userId: item.userId }));
+      }
       if (sql.includes('FROM "SharedIpAddress" a LEFT JOIN')) {
         const all = [...state.sharedIps.values()].map((item) => ({ ...item, exempt: state.sharedExemptions.has(item.ipAddress) }));
-        return sql.includes('WHERE a."ipHash"') ? all.filter((item) => item.ipHash === values[0]).slice(0, values.at(-1)) : all.slice(0, values.at(-1));
+        const searched = sql.includes('WHERE a."ipHash"') ? all.filter((item) => item.ipHash === values.find((value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value as string))) : all;
+        const miniAppKey = values.find((value: unknown) => ['main', 'taletv', 'cinereels', 'talereels'].includes(String(value)));
+        const filtered = miniAppKey ? searched.filter((address) => [...state.sharedVisits.values()].some((visit) => visit.ipHash === address.ipHash && visit.miniAppKey === miniAppKey)) : searched;
+        return filtered.slice(0, values.at(-1));
       }
-      if (sql.includes('FROM "SharedIpVisit"')) return [...state.sharedVisits.values()].filter((item) => item.ipHash === values[0]).slice(values[2], values[2] + values[1]);
+      if (sql.includes('FROM "SharedIpVisit"')) {
+        const [hash, ...rest] = values;
+        const miniAppKey = rest.length === 3 ? rest[0] : undefined;
+        const limit = rest.at(-2);
+        const offset = rest.at(-1);
+        return [...state.sharedVisits.values()].filter((item) => item.ipHash === hash && (!miniAppKey || item.miniAppKey === miniAppKey)).slice(offset, offset + limit);
+      }
       return [{ '?column?': 1 }];
     }
   };
   return prisma;
 }
 
-async function createTestApp(envOverrides: Partial<Env> = {}, options: { miniPrisma?: Partial<Record<'taletv', PrismaClient>>; sharedPrisma?: PrismaClient } = {}) {
+async function createTestApp(envOverrides: Partial<Env> = {}, options: { miniPrisma?: Partial<Record<MiniAppKey, PrismaClient>>; sharedPrisma?: PrismaClient } = {}) {
   const prisma = await createPrismaStub();
   const app = await buildApp({ ...env, ...envOverrides }, {
     prisma: prisma as unknown as PrismaClient,
@@ -900,6 +915,77 @@ describe('QuicK ReeLS API', () => {
     const history = await app.inject({ method: 'GET', url: `/api/v1/admin/shared/ips/${encodeURIComponent(ip)}/visits`, headers: owner });
     assert.equal(history.statusCode, 200, history.body);
     assert.equal(history.json().items.length, 1);
+  });
+
+  it('filters viewers by exact IP and mini app and bulk updates entry-ad exemptions', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const owner = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const ip = '198.51.100.77';
+    await recordSharedIpVisit(app.sharedPrisma, { ipAddress: ip, miniAppKey: 'main', userId: 'user-1', clientSessionId: 'search-ip-session', countryCode: null, secret: env.JWT_SECRET });
+    await recordSharedIpVisit(app.sharedPrisma, { ipAddress: ip, miniAppKey: 'taletv', userId: 'other-app-user', clientSessionId: 'other-app-session', countryCode: null, secret: env.JWT_SECRET });
+
+    const viewers = await app.inject({ method: 'GET', url: `/api/v1/admin/viewers?ipAddress=${encodeURIComponent(ip)}`, headers: owner });
+    assert.equal(viewers.statusCode, 200, viewers.body);
+    assert.deepEqual(viewers.json().items.map((item: any) => item.id), ['user-1']);
+    const invalidIp = await app.inject({ method: 'GET', url: '/api/v1/admin/viewers?ipAddress=not-an-ip', headers: owner });
+    assert.equal(invalidIp.statusCode, 400);
+
+    const exemptViewer = await app.inject({ method: 'PATCH', url: '/api/v1/admin/viewers/app-entry-ad/batch', headers: owner, payload: { userIds: ['user-1'], appEntryAdExempt: true } });
+    assert.equal(exemptViewer.statusCode, 200, exemptViewer.body);
+    assert.equal(exemptViewer.json().count, 1);
+    assert.equal((app as any).prisma._state.viewer.appEntryAdExempt, true);
+    const normalViewer = await app.inject({ method: 'PATCH', url: '/api/v1/admin/viewers/app-entry-ad/batch', headers: owner, payload: { userIds: ['user-1'], appEntryAdExempt: false } });
+    assert.equal(normalViewer.statusCode, 200, normalViewer.body);
+    assert.equal((app as any).prisma._state.viewer.appEntryAdExempt, false);
+
+    const exemptIp = await app.inject({ method: 'POST', url: '/api/v1/admin/shared/entry-ad-ip-exemptions/batch', headers: owner, payload: { ipAddresses: [ip], exempt: true } });
+    assert.equal(exemptIp.statusCode, 200, exemptIp.body);
+    assert.equal(exemptIp.json().count, 1);
+    const filteredIps = await app.inject({ method: 'GET', url: '/api/v1/admin/shared/ips?miniAppKey=main', headers: owner });
+    assert.equal(filteredIps.json().items.length, 1, filteredIps.body);
+    assert.equal(filteredIps.json().items[0].exempt, true);
+    const visits = await app.inject({ method: 'GET', url: `/api/v1/admin/shared/ips/${encodeURIComponent(ip)}/visits?miniAppKey=main`, headers: owner });
+    assert.equal(visits.statusCode, 200, visits.body);
+    assert.deepEqual(visits.json().items.map((item: any) => item.miniAppKey), ['main']);
+    const normalIp = await app.inject({ method: 'POST', url: '/api/v1/admin/shared/entry-ad-ip-exemptions/batch', headers: owner, payload: { ipAddresses: [ip], exempt: false } });
+    assert.equal(normalIp.statusCode, 200, normalIp.body);
+    assert.equal((app as any).sharedPrisma._state.sharedExemptions.has(ip), false);
+  });
+
+  it('requires an active target owner and same-organization access for cross-app viewer operations', async () => {
+    const sourcePrisma = await createPrismaStub();
+    const targetPrisma = await createPrismaStub();
+    (targetPrisma as any)._state.viewer.id = 'storyshort-viewer';
+    (targetPrisma as any)._state.viewer.tiktokOpenId = 'storyshort-open-id';
+    const app = await createTestApp({
+      TALEFLICK_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=taleflick',
+      STORYSHORT_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=storyshort'
+    }, { miniPrisma: { taleflick: sourcePrisma as unknown as PrismaClient, storyshort: targetPrisma as unknown as PrismaClient } });
+    apps.push(app);
+    const currentToken = await app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: 'taleflick', role: 'OWNER', tokenVersion: 0 });
+    const targetToken = await app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: 'storyshort', role: 'OWNER', tokenVersion: 0 });
+    const headers = {
+      authorization: `Bearer ${currentToken}`,
+      'x-multi-app-tokens': JSON.stringify({ storyshort: targetToken })
+    };
+
+    const unauthorized = await app.inject({ method: 'GET', url: '/api/taleflick/v1/admin/shared/viewers?miniAppKey=storyshort', headers: { authorization: `Bearer ${currentToken}` } });
+    assert.equal(unauthorized.statusCode, 403, unauthorized.body);
+
+    const viewers = await app.inject({ method: 'GET', url: '/api/taleflick/v1/admin/shared/viewers?miniAppKey=storyshort&search=storyshort-open-id', headers });
+    assert.equal(viewers.statusCode, 200, viewers.body);
+    assert.equal(viewers.json().items[0].id, 'storyshort-viewer');
+    assert.equal(viewers.json().items[0].miniAppKey, 'storyshort');
+
+    const updated = await app.inject({ method: 'PATCH', url: '/api/taleflick/v1/admin/shared/viewers/app-entry-ad/batch', headers,
+      payload: { miniAppKey: 'storyshort', userIds: ['storyshort-viewer'], appEntryAdExempt: true } });
+    assert.equal(updated.statusCode, 200, updated.body);
+    assert.equal(updated.json().count, 1);
+    assert.equal((targetPrisma as any)._state.viewer.appEntryAdExempt, true);
+
+    const crossOrganization = await app.inject({ method: 'GET', url: '/api/taleflick/v1/admin/shared/viewers?miniAppKey=crownrush', headers });
+    assert.equal(crossOrganization.statusCode, 409, crossOrganization.body);
   });
 
   it('clears stale raw IPs after 30 days but retains exemptions and IPs with three visits', async () => {

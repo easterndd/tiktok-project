@@ -1,8 +1,10 @@
 import { createHmac } from 'node:crypto';
 import { isIP } from 'node:net';
 import { Prisma, type PrismaClient } from '@prisma/client';
+import type { MiniAppKey } from '../config/mini-apps';
 
 const rawIpRetentionMs = 30 * 86_400_000;
+type SharedIpDb = Pick<PrismaClient, '$queryRaw' | '$executeRaw'>;
 
 export function normalizeIp(value: string): string | null {
   const candidate = value.trim();
@@ -49,10 +51,14 @@ export async function recordSharedIpVisit(db: PrismaClient, input: { ipAddress: 
 
 export type SharedIpRow = { ipAddress: string | null; ipHash: string; visitCount: number; firstSeenAt: Date; lastSeenAt: Date; lastMiniAppKey: string; countryCode: string | null; exempt: boolean };
 
-export async function listSharedIps(db: PrismaClient, input: { search: string; limit: number; secret: string }) {
+export async function listSharedIps(db: PrismaClient, input: { search: string; miniAppKey?: MiniAppKey; limit: number; secret: string }) {
   const normalized = input.search ? normalizeIp(input.search) : null;
   if (input.search && !normalized) return [];
-  const filter = normalized ? Prisma.sql`WHERE a."ipHash" = ${ipHash(normalized, input.secret)}` : Prisma.empty;
+  const filters = [
+    normalized ? Prisma.sql`a."ipHash" = ${ipHash(normalized, input.secret)}` : Prisma.empty,
+    input.miniAppKey ? Prisma.sql`EXISTS (SELECT 1 FROM "SharedIpVisit" v WHERE v."ipHash" = a."ipHash" AND v."miniAppKey" = ${input.miniAppKey})` : Prisma.empty
+  ].filter((part) => part !== Prisma.empty);
+  const filter = filters.length ? Prisma.sql`WHERE ${Prisma.join(filters, ' AND ')}` : Prisma.empty;
   return db.$queryRaw<SharedIpRow[]>(Prisma.sql`
     SELECT a."ipAddress", a."ipHash", a."visitCount", a."firstSeenAt", a."lastSeenAt",
            a."lastMiniAppKey", a."countryCode", (e."ipAddress" IS NOT NULL) AS exempt
@@ -61,10 +67,18 @@ export async function listSharedIps(db: PrismaClient, input: { search: string; l
     ORDER BY a."lastSeenAt" DESC LIMIT ${input.limit}`);
 }
 
-export async function listSharedIpVisits(db: PrismaClient, ip: string, secret: string, limit: number, offset: number) {
-  return db.$queryRaw<Array<{ miniAppKey: string; userId: string; createdAt: Date }>>`
+export async function listViewerIdsForIp(db: PrismaClient, miniAppKey: MiniAppKey, ip: string, secret: string) {
+  return db.$queryRaw<Array<{ userId: string }>>(Prisma.sql`
+    SELECT DISTINCT "userId" FROM "SharedIpVisit"
+    WHERE "miniAppKey" = ${miniAppKey} AND "ipHash" = ${ipHash(ip, secret)}
+    ORDER BY "userId" LIMIT 5000`);
+}
+
+export async function listSharedIpVisits(db: PrismaClient, ip: string, secret: string, limit: number, offset: number, miniAppKey?: MiniAppKey) {
+  return db.$queryRaw<Array<{ miniAppKey: string; userId: string; createdAt: Date }>>(Prisma.sql`
     SELECT "miniAppKey", "userId", "createdAt" FROM "SharedIpVisit"
-    WHERE "ipHash" = ${ipHash(ip, secret)} ORDER BY "createdAt" DESC LIMIT ${limit} OFFSET ${offset}`;
+    WHERE "ipHash" = ${ipHash(ip, secret)} ${miniAppKey ? Prisma.sql`AND "miniAppKey" = ${miniAppKey}` : Prisma.empty}
+    ORDER BY "createdAt" DESC LIMIT ${limit} OFFSET ${offset}`);
 }
 
 export async function recentViewerIps(db: PrismaClient, miniAppKey: string, userIds: string[]) {
@@ -91,7 +105,7 @@ export async function listEntryAdIpExemptions(db: PrismaClient) {
     FROM "SharedEntryAdIpExemption" ORDER BY "updatedAt" DESC LIMIT 500`;
 }
 
-export async function setEntryAdIpExemption(db: PrismaClient, ip: string, note: string | null, admin: string) {
+export async function setEntryAdIpExemption(db: SharedIpDb, ip: string, note: string | null, admin: string) {
   const rows = await db.$queryRaw<Array<{ ipAddress: string; note: string | null; createdAt: Date; updatedAt: Date; updatedBy: string }>>`
     INSERT INTO "SharedEntryAdIpExemption" ("ipAddress", "note", "updatedBy") VALUES (${ip}, ${note}, ${admin})
     ON CONFLICT ("ipAddress") DO UPDATE SET "note" = EXCLUDED."note", "updatedBy" = EXCLUDED."updatedBy", "updatedAt" = CURRENT_TIMESTAMP
@@ -99,8 +113,18 @@ export async function setEntryAdIpExemption(db: PrismaClient, ip: string, note: 
   return rows[0];
 }
 
-export async function removeEntryAdIpExemption(db: PrismaClient, ip: string) {
+export async function removeEntryAdIpExemption(db: SharedIpDb, ip: string) {
   return db.$executeRaw`DELETE FROM "SharedEntryAdIpExemption" WHERE "ipAddress" = ${ip}`;
+}
+
+export async function setEntryAdIpExemptions(db: PrismaClient, input: { ips: string[]; exempt: boolean; note: string | null; admin: string }) {
+  return db.$transaction(async (tx) => {
+    for (const ip of input.ips) {
+      if (input.exempt) await setEntryAdIpExemption(tx, ip, input.note, input.admin);
+      else await removeEntryAdIpExemption(tx, ip);
+    }
+    return input.ips.length;
+  });
 }
 
 export async function cleanupSharedIps(db: PrismaClient, now = new Date()) {

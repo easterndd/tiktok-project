@@ -1,7 +1,12 @@
-export function createAdminApi(API: string, adminTokenStorageKey: string, platformSubmissionStorageKey: string, onUnauthorized: () => void) {
+export function createAdminApi(API: string, adminTokenStorageKey: string, platformSubmissionStorageKey: string, onUnauthorized: () => void, multiAppKeys: readonly string[] = []) {
 let adminSessionRecoveryStarted = false;
 async function api<T>(path: string, options: RequestInit = {}) {
   const token = sessionStorage.getItem(adminTokenStorageKey);
+  const appTokens = Object.fromEntries(multiAppKeys.filter((key) => key !== (adminTokenStorageKey === 'quickreels_admin_token' ? 'main' : adminTokenStorageKey.slice('quickreels_'.length, -'_admin_token'.length))).flatMap((miniAppKey) => {
+    const storageKey = miniAppKey === 'main' ? 'quickreels_admin_token' : `quickreels_${miniAppKey}_admin_token`;
+    const value = sessionStorage.getItem(storageKey);
+    return value ? [[miniAppKey, value]] : [];
+  }));
   const isFormData = options.body instanceof FormData;
   let response: Response;
   try {
@@ -11,6 +16,7 @@ async function api<T>(path: string, options: RequestInit = {}) {
         Accept: 'application/json',
         ...(isFormData || options.body == null ? {} : { 'Content-Type': 'application/json' }),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(Object.keys(appTokens).length ? { 'X-Multi-App-Tokens': JSON.stringify(appTokens) } : {}),
         ...options.headers
       }
     };
