@@ -1,13 +1,18 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { completeAppEntryAd, showAppEntryAd, startAppEntryAdSession } from '../features/ads/app-entry-ad';
 import { runEntryAdFlow } from '../features/ads/entry-ad-flow';
 import { ensureAnonymousSession, ensureTikTokSession } from '../features/auth/anonymous-session';
-import { appName } from '../lib/app-brand';
 import { reportDiagnostic } from '../lib/diagnostics';
+import { ApiError } from '../lib/api-client';
 import styles from './EntryAdGate.module.css';
 
 type GateState = 'LOADING' | 'READY' | 'ERROR';
 type GateStep = 'ANONYMOUS_SESSION' | 'ENTRY_AD_POLICY' | 'ENTRY_AD_PLAYBACK';
+const EntryAdReadyContext = createContext(true);
+
+export function useEntryAdReady() {
+  return useContext(EntryAdReadyContext);
+}
 
 function formatGateError(step: GateStep, cause: unknown) {
   const detail = cause instanceof Error && cause.message ? `: ${cause.message}` : '';
@@ -25,7 +30,6 @@ function formatGateError(step: GateStep, cause: unknown) {
 
 export function EntryAdGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GateState>('LOADING');
-  const [hasShownAd, setHasShownAd] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -57,7 +61,7 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
           if (controller.signal.aborted) return;
           if (session.required) {
             step = 'ENTRY_AD_PLAYBACK';
-            await runEntryAdFlow(session, { show: showAppEntryAd, complete: completeAppEntryAd, refreshSession: startAppEntryAdSession, wait, isActive: () => !controller.signal.aborted, onAdShown: () => { if (!controller.signal.aborted) setHasShownAd(true); }, onError: (cause) => {
+            await runEntryAdFlow(session, { show: showAppEntryAd, complete: completeAppEntryAd, refreshSession: startAppEntryAdSession, wait, isActive: () => !controller.signal.aborted, onError: (cause) => {
               reportDiagnostic({ kind: 'AD', phase: 'ENTRY_AD_PLAYBACK', message: cause instanceof Error ? cause.message : String(cause) });
               console.warn('[EntryAdGate] entry ad unavailable; retrying', cause);
             } });
@@ -79,16 +83,16 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
             setState('ERROR');
             return;
           }
-          await wait(2000);
+          await wait(cause instanceof ApiError && cause.status === 429 && cause.retryAfterSeconds !== undefined
+            ? Math.min(300_000, Math.max(1_000, cause.retryAfterSeconds * 1_000)) : 2_000);
         }
       }
     };
     void run();
     return () => { controller.abort(); window.clearTimeout(startupTimer); };
   }, [attempt]);
-  if (state === 'READY') return <>{children}</>;
-  return <main className={styles.gate} aria-busy={state === 'LOADING'}><section className={styles.surface} aria-live="polite">
-    {state === 'LOADING' && <span className={styles.spinner} style={hasShownAd ? { visibility: 'hidden' } : undefined} aria-hidden="true" />}<h1>{appName}</h1><p>{state === 'ERROR' ? errorMessage : 'Preparing your next story'}</p>
-    {state === 'ERROR' && <button onClick={() => { setState('LOADING'); setAttempt((value) => value + 1); }}>Try again</button>}
-  </section></main>;
+  return <EntryAdReadyContext.Provider value={state === 'READY'}>
+    {children}
+    {state === 'ERROR' && <aside className={styles.notice} role="alert"><p>{errorMessage}</p><button onClick={() => { setState('LOADING'); setAttempt((value) => value + 1); }}>Try again</button></aside>}
+  </EntryAdReadyContext.Provider>;
 }

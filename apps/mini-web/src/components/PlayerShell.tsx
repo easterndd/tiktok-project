@@ -3,7 +3,7 @@ import { AlertCircle, Play } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { DramaPlayerController } from '../features/player/drama-player-controller';
 import { apiClient } from '../lib/api-client';
-import { reportDiagnostic } from '../lib/diagnostics';
+import { reportDiagnostic, reportPerformance } from '../lib/diagnostics';
 import { t } from '../lib/i18n';
 import { useLocale } from '../lib/storage';
 import styles from './PlayerShell.module.css';
@@ -27,7 +27,7 @@ function errorCodeFromEvent(event: unknown) {
 
 const createPlaybackSessionId = () => typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `play-${Date.now()}`;
 
-export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [], onEpisodeEnded, onRetry, immersive = false }: {
+export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [], onEpisodeEnded, onRetry, immersive = false, transitionTiming }: {
   message?: string;
   coverUrl?: string | null;
   title?: string;
@@ -36,6 +36,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
   onEpisodeEnded?: () => void;
   onRetry?: () => void;
   immersive?: boolean;
+  transitionTiming?: { kind: 'REWARDED' | 'EPISODE_INTERSTITIAL'; closedAt: number };
 }) {
   const locale = useLocale();
   const mount = useRef<HTMLDivElement>(null);
@@ -45,6 +46,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
   const endedHandlerRef = useRef(onEpisodeEnded);
   const [playerError, setPlayerError] = useState('');
   const [playbackAttempt, setPlaybackAttempt] = useState(0);
+  const reportedTransition = useRef<string | null>(null);
   const isLocalPlayback = playInfo?.playbackMode === 'LOCAL' && Boolean(playInfo.sourceUrl);
   playlistRef.current = playlist;
   endedHandlerRef.current = onEpisodeEnded;
@@ -83,7 +85,15 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       lastPositionMs = playInfo.durationMs ? Math.min(positionMs, playInfo.durationMs) : positionMs;
       reportProgress();
     };
-    const onPlay = () => { startedPlayback = true; };
+    const onPlay = () => {
+      startedPlayback = true;
+      const key = transitionTiming ? `${playInfo.localEpisodeId}:${transitionTiming.kind}:${transitionTiming.closedAt}` : '';
+      const now = performance.timeOrigin + performance.now();
+      if (transitionTiming && transitionTiming.closedAt >= performance.timeOrigin && reportedTransition.current !== key) {
+        reportedTransition.current = key;
+        reportPerformance(`${transitionTiming.kind}_CLOSE_TO_NEXT_EPISODE_PLAY`, `/episodes/${playInfo.localEpisodeId}`, now - transitionTiming.closedAt);
+      }
+    };
     const onPause = () => reportProgress(false, true);
     const onLoadStart = () => {
       if (firstFrameRecorded) return;

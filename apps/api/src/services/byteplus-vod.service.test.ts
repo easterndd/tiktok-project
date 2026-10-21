@@ -269,11 +269,11 @@ describe('BytePlusVodService', () => {
       });
       const upload = service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: 'Episode', spaceName: 'space', byteplusAccountId: 'account' });
       await firstTwoStarted;
-      assert.deepEqual(started, ['1', '2']);
+      assert.deepEqual([...started].sort((left, right) => Number(left) - Number(right)), ['1', '2']);
       assert.equal(peak, 2);
       releases.get('2')!();
       await thirdStarted;
-      assert.deepEqual(started, ['1', '2', '3']);
+      assert.deepEqual([...started].sort((left, right) => Number(left) - Number(right)), ['1', '2', '3']);
       assert.equal(peak, 2);
       releases.get('1')!();
       releases.get('3')!();

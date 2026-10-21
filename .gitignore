@@ -13,6 +13,8 @@ dist/
 *.p12
 *.pfx
 key.txt
+sshkey.txt
+inter_data.txt
 credentials.*
 secrets.*
 coverage/

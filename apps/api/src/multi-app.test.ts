@@ -25,6 +25,21 @@ const env = loadEnv({
 function databaseFor(name: string) {
   const entryPolicies = new Map<string, any>();
   const codeReleases = new Map<string, any>();
+  const sharedVisitKeys = new Set<string>();
+  const sharedTransaction = {
+    $queryRaw: async (query: any, ...tagValues: any[]) => {
+      const sql = typeof query?.sql === 'string' ? query.sql : Array.isArray(query) ? query.join('?') : String(query);
+      const values = typeof query?.sql === 'string' ? query.values : tagValues;
+      if (sql.includes('SELECT "ipHash" FROM "SharedIpVisit"')) return sharedVisitKeys.has(values[0]) ? [{ ipHash: 'test-hash' }] : [];
+      if (sql.includes('INSERT INTO "SharedIpVisit"')) {
+        if (sharedVisitKeys.has(values[0])) return [];
+        sharedVisitKeys.add(values[0]);
+        return [{ idempotencyKey: values[0] }];
+      }
+      return [];
+    },
+    $executeRaw: async () => 1
+  };
   const album = {
     id: name,
     title: name,
@@ -39,6 +54,7 @@ function databaseFor(name: string) {
     genres: []
   };
   return {
+    $transaction: async (callback: (transaction: typeof sharedTransaction) => Promise<unknown>) => callback(sharedTransaction),
     miniAppCodeRelease: {
       findMany: async ({ where }: any) => [...codeReleases.values()].filter((item) => item.miniAppKey === where.miniAppKey),
       upsert: async ({ where, create, update }: any) => {
@@ -87,6 +103,22 @@ it('serves separate content and rejects tokens from the other mini app', async (
   } finally {
     await app.close();
   }
+});
+
+it('keeps episode interstitial placements independent and disabled when missing', async () => {
+  const app = await buildApp({ ...env, EPISODE_INTERSTITIAL_PLACEMENT_ID: 'main-interstitial' }, {
+    prisma: databaseFor('main-album'), taletvPrisma: databaseFor('taletv-album')
+  });
+  try {
+    await app.ready();
+    const mainToken = await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'main' });
+    const taletvToken = await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'taletv' });
+    const main = await app.inject({ url: '/api/v1/episode-interstitial/config', headers: { authorization: `Bearer ${mainToken}` } });
+    const taletv = await app.inject({ url: '/api/taletv/v1/episode-interstitial/config', headers: { authorization: `Bearer ${taletvToken}` } });
+    assert.deepEqual(main.json(), { enabled: true, placementId: 'main-interstitial' });
+    assert.deepEqual(taletv.json(), { enabled: false, placementId: null });
+    assert.equal((await app.inject({ url: '/api/taletv/v1/episode-interstitial/config', headers: { authorization: `Bearer ${mainToken}` } })).statusCode, 401);
+  } finally { await app.close(); }
 });
 
 it('uses independent ad placement defaults for each mini app admin context', async () => {

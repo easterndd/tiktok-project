@@ -5,5 +5,8 @@
 .surface svg { color: var(--pink); }
 .surface button { display: inline-flex; min-height: 44px; align-items: center; gap: 8px; margin-top: 6px; padding: 0 16px; color: #0a0d14; border: 0; border-radius: 8px; background: var(--pink); font-weight: 800; }
 .spinner { width: 26px; height: 26px; border: 2px solid rgba(255, 255, 255, .16); border-top-color: var(--pink); border-radius: 50%; animation: spin .8s linear infinite; }
+.notice { position: fixed; z-index: 80; top: max(10px, env(safe-area-inset-top)); left: 12px; right: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; color: var(--text); border: 1px solid rgba(255, 255, 255, .14); border-radius: 8px; background: #171b25; box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }
+.notice p { min-width: 0; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.notice button { flex: 0 0 auto; min-height: 38px; padding: 0 12px; color: #0a0d14; border: 0; border-radius: 6px; background: var(--pink); font-weight: 700; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

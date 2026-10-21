@@ -6,7 +6,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "pnpm --filter mini-web lint && vite build",
     "build:minis": "ttdx minis build --prod",
-    "build:minis:release": "pnpm build && ttdx minis build --prod && ttdx minis check --output && node ../mini-web/scripts/check-release.mjs && node ../mini-web/scripts/package-minis-archive.mjs",
+    "build:minis:release": "node ../mini-web/scripts/build-minis-release.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "export:legal": "node ../mini-web/scripts/export-legal-pages.mjs taleflick",
     "lint": "tsc --noEmit -p tsconfig.json"

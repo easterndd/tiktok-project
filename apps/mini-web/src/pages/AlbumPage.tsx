@@ -5,7 +5,8 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { EpisodeList } from '../components/EpisodeList';
 import { LoadingState } from '../components/LoadingState';
-import { unlockEpisodeByRewardedAd } from '../features/ads/rewarded-ad';
+import { useEntryAdReady } from '../components/EntryAdGate';
+import { prepareRewardedUnlockSession, unlockEpisodeByRewardedAd } from '../features/ads/rewarded-ad';
 import { apiClient } from '../lib/api-client';
 import { formatCompactNumber } from '../lib/format';
 import { t } from '../lib/i18n';
@@ -18,11 +19,16 @@ export function AlbumPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const locale = useLocale();
+  const entryAdReady = useEntryAdReady();
   const components = useUiComponents();
   const ui = components.data?.items;
   const [favoriteNotice, setFavoriteNotice] = useState('');
   const album = useQuery({ queryKey: ['album', albumId, locale], queryFn: () => apiClient.get<AlbumDetail>(`/albums/${albumId}?locale=${encodeURIComponent(locale)}`) });
   const episodes = useQuery({ queryKey: ['episodes', albumId, locale], queryFn: () => apiClient.get<{ items: EpisodeSummary[] }>(`/albums/${albumId}/episodes?locale=${encodeURIComponent(locale)}`) });
+  const firstLockedEpisode = episodes.data?.items.find((episode) => episode.access === 'REWARDED_AD_REQUIRED');
+  useEffect(() => {
+    if (entryAdReady && firstLockedEpisode) void prepareRewardedUnlockSession(firstLockedEpisode.id).catch(() => undefined);
+  }, [entryAdReady, firstLockedEpisode?.id]);
   const mutateInteraction = useMutation({
     mutationFn: async ({ action, active }: { action: 'favorite'; active: boolean }) => {
       return apiClient.put<InteractionResponse>(`/albums/${albumId}/${action}`, { active });
@@ -34,10 +40,13 @@ export function AlbumPage() {
   });
   const unlock = useMutation({
     mutationFn: async (episode: EpisodeSummary) => {
-      await unlockEpisodeByRewardedAd(episode.id);
-      return episode;
+      const closedAt = await unlockEpisodeByRewardedAd(episode.id);
+      return { episode, closedAt };
     },
-    onSuccess: (episode) => { void queryClient.invalidateQueries({ queryKey: ['episodes', albumId] }); navigate(`/watch/${albumId}/${episode.id}`); }
+    onSuccess: ({ episode, closedAt }) => {
+      void queryClient.invalidateQueries({ queryKey: ['episodes', albumId] });
+      navigate(`/watch/${albumId}/${episode.id}`, { state: closedAt === undefined ? null : { transitionTiming: { kind: 'REWARDED', closedAt } } });
+    }
   });
 
   useEffect(() => {
@@ -57,7 +66,7 @@ export function AlbumPage() {
       <div className={styles.backdrop} style={{ backgroundImage: `url("${detail.backdropUrl ?? detail.coverUrl}")` }} />
       <img className={styles.cover} src={detail.coverUrl} alt={`${detail.title} cover`} decoding="async" onError={(event) => { event.currentTarget.src = '/fallback-cover.svg'; }} />
       <div className={styles.copy}><p className="eyebrow">{t(locale, 'details')}</p><h1>{detail.title}</h1><p>{detail.description}</p><div className={styles.stats}><span><Star size={14} fill="currentColor" aria-hidden="true" /> {detail.rating?.toFixed(1) ?? '9.0'}</span><span>{formatCompactNumber(detail.views ?? 0)} {t(locale, 'views')}</span><span>{detail.episodeCount} {t(locale, 'episodes')}</span></div><div className={styles.actions}>
-        {firstPlayable && <button className={styles.primary} onClick={() => firstPlayable.access === 'PLAYABLE' ? navigate(`/watch/${albumId}/${firstPlayable.id}`) : unlock.mutate(firstPlayable)}><Play size={17} fill="currentColor" aria-hidden="true" /> {firstPlayable.access === 'PLAYABLE' ? t(locale, 'watchNow') : t(locale, 'watchAd')}</button>}
+        {firstPlayable && <button className={styles.primary} disabled={!entryAdReady} onClick={() => firstPlayable.access === 'PLAYABLE' ? navigate(`/watch/${albumId}/${firstPlayable.id}`) : unlock.mutate(firstPlayable)}><Play size={17} fill="currentColor" aria-hidden="true" /> {firstPlayable.access === 'PLAYABLE' ? t(locale, 'watchNow') : t(locale, 'watchAd')}</button>}
         <button className={styles.iconAction} onClick={() => mutateInteraction.mutate({ action: 'favorite', active: !detail.userState?.favorited })} aria-label={detail.userState?.favorited ? t(locale, 'saved') : t(locale, 'save')} title={detail.userState?.favorited ? t(locale, 'saved') : t(locale, 'save')}><Heart size={18} fill={detail.userState?.favorited ? 'currentColor' : 'none'} /></button>
       </div></div>
     </header>
@@ -67,6 +76,6 @@ export function AlbumPage() {
     {mutateInteraction.isError && <div className={styles.errorStatus}>{mutateInteraction.error instanceof Error ? mutateInteraction.error.message : t(locale, 'unavailable')}</div>}
     {detail.tags?.length ? <div className={styles.tags}>{detail.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
     {componentIsEnabled(ui, 'ALBUM_DESCRIPTION') && <section className={styles.about}><h2>{t(locale, 'about')}</h2><p>{detail.description}</p></section>}
-    <section id="episodes" className={styles.episodes}><div className={styles.sectionHeader}><h2>{t(locale, 'episodes')}</h2><span>{episodes.data?.items.length ?? 0} / {detail.episodeCount}</span></div><EpisodeList albumId={albumId} episodes={episodes.data?.items ?? []} onLocked={(episode) => unlock.mutate(episode)} /></section>
+    <section id="episodes" className={styles.episodes}><div className={styles.sectionHeader}><h2>{t(locale, 'episodes')}</h2><span>{episodes.data?.items.length ?? 0} / {detail.episodeCount}</span></div><EpisodeList albumId={albumId} episodes={episodes.data?.items ?? []} onLocked={(episode) => { if (entryAdReady) unlock.mutate(episode); }} /></section>
   </section>;
 }

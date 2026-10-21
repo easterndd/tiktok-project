@@ -127,6 +127,7 @@ export type MiniAppAdConfig = {
   key: MiniAppKey;
   rewardedPlacementId: string;
   appEntryPlacementId: string;
+  episodeInterstitialPlacementId: string;
 };
 
 export function taletvEnvironment(env: Env): Env | null {
@@ -175,9 +176,16 @@ export function miniAppAdConfig(env: Env, key: MiniAppKey = env.MINI_APP_KEY): M
     return {
       key,
       rewardedPlacementId: env.REWARDED_PLACEMENT_ID,
-      appEntryPlacementId: env.APP_ENTRY_PLACEMENT_ID
+      appEntryPlacementId: env.APP_ENTRY_PLACEMENT_ID,
+      episodeInterstitialPlacementId: env.EPISODE_INTERSTITIAL_PLACEMENT_ID ?? ''
     };
   }
   const definition = secondaryMiniApps[key];
-  return { key, rewardedPlacementId: valueOf(env, definition.rewardedPlacementEnv) ?? '', appEntryPlacementId: valueOf(env, definition.entryPlacementEnv) ?? '' };
+  const placement = valueOf(env, `${key.toUpperCase()}_EPISODE_INTERSTITIAL_PLACEMENT_ID` as keyof Env);
+  return {
+    key,
+    rewardedPlacementId: valueOf(env, definition.rewardedPlacementEnv) ?? '',
+    appEntryPlacementId: valueOf(env, definition.entryPlacementEnv) ?? '',
+    episodeInterstitialPlacementId: typeof placement === 'string' ? placement.trim() : ''
+  };
 }

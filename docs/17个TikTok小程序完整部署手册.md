@@ -344,6 +344,8 @@ unset ADMIN_EMAIL ADMIN_PASSWORD
 
 ## 9. 启动容器与 API 验收
 
+共享 IP 汇总和入场强弹豁免表的数据库配置及单次 SQL 初始化见[共享 IP 汇总与入场强弹豁免部署说明](共享IP汇总与入场强弹豁免部署说明.md)。
+
 数据库迁移及管理员均完成后，更新 API、Worker 和管理后台；Postgres 不需要重建：
 
 ```bash
@@ -397,6 +399,7 @@ $apps = @(
   'taleflick','dramashort','storyshort','storyflicks','dramaflicks'
 )
 foreach ($key in $apps) {
+  $env:VITE_MINI_RELEASE_ID = "$key-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
   pnpm --filter $key build:minis:release
   if ($LASTEXITCODE -ne 0) { throw "$key 正式构建失败，停止上传" }
   if (-not (Test-Path -LiteralPath "apps/$key/dist/minis.config.zip")) {

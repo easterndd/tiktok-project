@@ -10,6 +10,13 @@ function httpStatus(cause: unknown) {
   return typeof status === 'number' ? status : undefined;
 }
 
+function retryDelayMs(cause: unknown, fallbackMs: number) {
+  if (httpStatus(cause) !== 429 || !cause || typeof cause !== 'object' || !('retryAfterSeconds' in cause)) return fallbackMs;
+  const seconds = cause.retryAfterSeconds;
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0
+    ? Math.min(300_000, Math.max(1_000, seconds * 1_000)) : fallbackMs;
+}
+
 export async function runEntryAdFlow(session: AppEntryAdSession, actions: {
   show: (input: ShowInput) => Promise<Playback>;
   complete: (sessionId: string, clientEventId: string, isEnded: boolean) => Promise<Progress>;
@@ -36,7 +43,7 @@ export async function runEntryAdFlow(session: AppEntryAdSession, actions: {
         if (session.onUnavailable === 'ALLOW') return;
         throw cause;
       }
-      await actions.wait(Math.min(failures, 5) * 500);
+      await actions.wait(retryDelayMs(cause, Math.min(failures, 5) * 500));
       continue;
     }
     if (!actions.isActive()) return;
@@ -70,9 +77,9 @@ export async function runEntryAdFlow(session: AppEntryAdSession, actions: {
           refreshRequired = true;
           break;
         }
-        if (status !== undefined && status >= 400 && status < 500) throw cause;
+        if (status !== undefined && status >= 400 && status < 500 && status !== 429) throw cause;
         if (failures >= 3) throw cause;
-        await actions.wait(Math.min(failures, 5) * 500);
+        await actions.wait(retryDelayMs(cause, Math.min(failures, 5) * 500));
       }
       if (refreshRequired) break;
     }

@@ -2,6 +2,9 @@ import { createCipheriv, createHmac, createHash, randomBytes } from 'node:crypto
 import type { Prisma } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { requestCountry } from '../../lib/content-visibility';
+import { requireUser } from '../../plugins/auth';
+import { addDatabaseDuration } from '../../lib/request-performance';
 
 const anonymousSessionInput = z.object({
   visitorKey: z.string().min(32).max(512),
@@ -19,10 +22,10 @@ const tikTokSessionInput = z.object({
 
 type TikTokTokenResponse = {
   access_token?: unknown;
+  open_id?: unknown;
   refresh_token?: unknown;
   expires_in?: unknown;
   refresh_expires_in?: unknown;
-  open_id?: unknown;
   scope?: unknown;
   token_type?: unknown;
   error?: unknown;
@@ -64,7 +67,7 @@ async function exchangeTikTokCode(app: FastifyInstance, code: string) {
     throw Object.assign(new Error('TikTok login could not reach the authorization service.'), { statusCode: 502 });
   }
   const token = await response.json().catch(() => null) as TikTokTokenResponse | null;
-  if (!response.ok || typeof token?.open_id !== 'string' || typeof token.access_token !== 'string' || typeof token.refresh_token !== 'string') {
+  if (!response.ok || typeof token?.open_id !== 'string' || !token.open_id || typeof token.access_token !== 'string' || typeof token.refresh_token !== 'string') {
     throw Object.assign(new Error('TikTok could not verify this login. Please retry.'), { statusCode: 401 });
   }
   return token;
@@ -72,55 +75,58 @@ async function exchangeTikTokCode(app: FastifyInstance, code: string) {
 
 export async function registerAuthRoutes(app: FastifyInstance) {
   app.post('/auth/anonymous/session', {
-    config: { rateLimit: { max: 30, timeWindow: '1 minute' } }
+    // Shared NATs can contain many real viewers; keep this above the global
+    // per-IP API budget while still rejecting abnormal bootstrap bursts.
+    config: { rateLimit: { max: 120, timeWindow: '1 minute' } }
   }, async (request) => {
     const { visitorKey, clientSessionId, platform, clientVersion, source } = anonymousSessionInput.parse(request.body);
+    const countryCode = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress);
     const visitorKeyHash = createHmac('sha256', app.config.JWT_SECRET).update(visitorKey).digest('base64url');
-    const user = await app.prisma.user.upsert({
+    const databaseStartedAt = performance.now();
+    let user = await app.prisma.user.upsert({
       where: { visitorKeyHash },
       create: { identityType: 'ANONYMOUS', visitorKeyHash },
       update: {}
     });
+    if (user.mergedIntoUserId) user = await app.prisma.user.findUniqueOrThrow({ where: { id: user.mergedIntoUserId } });
     await app.prisma.appSession.upsert({
       where: { userId_clientSessionId: { userId: user.id, clientSessionId } },
-      create: { userId: user.id, clientSessionId, platform, clientVersion, source },
-      update: { platform, clientVersion, source }
+      create: { userId: user.id, clientSessionId, platform, clientVersion, source, countryCode },
+      update: { platform, clientVersion, source, countryCode }
     });
+    addDatabaseDuration(request, performance.now() - databaseStartedAt);
     const accessToken = await app.jwt.sign({ sub: user.id, kind: 'user', appKey: app.config.MINI_APP_KEY }, { expiresIn: app.config.USER_JWT_EXPIRES_IN });
     return {
       accessToken,
       expiresIn: app.config.USER_JWT_EXPIRES_IN,
-      viewer: { id: user.id, type: 'ANONYMOUS' as const }
+      viewer: { id: user.id, type: user.identityType }
     };
   });
 
   app.post('/auth/tiktok/session', {
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } }
+    preHandler: requireUser,
+    config: { rateLimit: { max: 10, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request, reply) => {
     const input = tikTokSessionInput.parse(request.body);
-    try {
-      await request.jwtVerify();
-    } catch {
-      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Create a viewer session before TikTok login.', requestId: request.id } });
-    }
-    if (request.user.kind !== 'user' || request.user.appKey !== app.config.MINI_APP_KEY) {
-      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Viewer session is unavailable.', requestId: request.id } });
-    }
+    const countryCode = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress);
 
     const token = await exchangeTikTokCode(app, input.code);
     const openId = token.open_id as string;
-    const accessToken = token.access_token as string;
-    const refreshToken = token.refresh_token as string;
+    const oauthAccessToken = token.access_token as string;
+    const oauthRefreshToken = token.refresh_token as string;
     const now = new Date();
     const accessExpiresAt = new Date(now.getTime() + positiveSeconds(token.expires_in, 7_200) * 1_000);
     const refreshExpiresAt = new Date(now.getTime() + positiveSeconds(token.refresh_expires_in, 31_536_000) * 1_000);
     const credentialKey = app.config.USER_DATA_ENCRYPTION_KEY ?? app.config.JWT_SECRET;
-    const encryptedAccessToken = encryptCredential(accessToken, credentialKey, app.config.MINI_APP_KEY);
-    const encryptedRefreshToken = encryptCredential(refreshToken, credentialKey, app.config.MINI_APP_KEY);
-
-  const viewer = await app.prisma.$transaction(async (tx) => {
-      const currentUser = await tx.user.findUnique({ where: { id: request.user.sub } });
+    const encryptedAccessToken = encryptCredential(oauthAccessToken, credentialKey, app.config.MINI_APP_KEY);
+    const encryptedRefreshToken = encryptCredential(oauthRefreshToken, credentialKey, app.config.MINI_APP_KEY);
+    const viewer = await app.prisma.$transaction(async (tx) => {
+      let currentUser = await tx.user.findUnique({ where: { id: request.user.sub } });
       if (!currentUser) throw Object.assign(new Error('Viewer session is unavailable.'), { statusCode: 401 });
+      if (currentUser.mergedIntoUserId) {
+        currentUser = await tx.user.findUnique({ where: { id: currentUser.mergedIntoUserId } });
+        if (!currentUser) throw Object.assign(new Error('Viewer session is unavailable.'), { statusCode: 401 });
+      }
       if (currentUser.identityType === 'TIKTOK' && currentUser.tiktokOpenId && currentUser.tiktokOpenId !== openId) {
         throw Object.assign(new Error('This viewer session is linked to another TikTok account.'), { statusCode: 409 });
       }
@@ -128,7 +134,9 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       let user = await tx.user.findUnique({ where: { tiktokOpenId: openId } });
       if (user && user.id !== currentUser.id) {
         await mergeViewerData(tx, currentUser.id, user.id);
-        user = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
+        if (currentUser.appEntryAdExempt && !user.appEntryAdExempt) user = await tx.user.update({ where: { id: user.id }, data: { appEntryAdExempt: true } });
+        user = await tx.user.update({ where: { id: currentUser.id }, data: { mergedIntoUserId: user.id } });
+        user = await tx.user.findUniqueOrThrow({ where: { id: user.mergedIntoUserId! } });
       } else if (!user) {
         user = await tx.user.update({
           where: { id: currentUser.id },
@@ -156,15 +164,16 @@ export async function registerAuthRoutes(app: FastifyInstance) {
           tokenType: typeof token.token_type === 'string' ? token.token_type : null
         }
       });
+
       if (input.clientSessionId) {
         await tx.appSession.upsert({
           where: { userId_clientSessionId: { userId: user.id, clientSessionId: input.clientSessionId } },
-          create: { userId: user.id, clientSessionId: input.clientSessionId, platform: 'TIKTOK_MINIS', clientVersion: input.clientVersion, source: 'TIKTOK_SILENT_LOGIN' },
-          update: { platform: 'TIKTOK_MINIS', clientVersion: input.clientVersion, source: 'TIKTOK_SILENT_LOGIN' }
+          create: { userId: user.id, clientSessionId: input.clientSessionId, platform: 'TIKTOK_MINIS', clientVersion: input.clientVersion, source: 'TIKTOK_SILENT_LOGIN', countryCode },
+          update: { platform: 'TIKTOK_MINIS', clientVersion: input.clientVersion, source: 'TIKTOK_SILENT_LOGIN', countryCode }
         });
       }
       return user;
-  }, { isolationLevel: 'Serializable' });
+    }, { isolationLevel: 'Serializable' });
 
     const accessToken = await app.jwt.sign({ sub: viewer.id, kind: 'user', appKey: app.config.MINI_APP_KEY }, { expiresIn: app.config.USER_JWT_EXPIRES_IN });
     return {
@@ -265,5 +274,4 @@ async function mergeViewerData(tx: Prisma.TransactionClient, sourceUserId: strin
     }
   }
 
-  await tx.user.delete({ where: { id: sourceUserId } });
 }

@@ -2,11 +2,13 @@ import type { AlbumDetail, EpisodeSummary, PlayInfo } from '@quickreels/shared-t
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, RefreshCw, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { EpisodeList } from '../components/EpisodeList';
 import { PlayerShell } from '../components/PlayerShell';
 import { LoadingState } from '../components/LoadingState';
-import { unlockEpisodeByRewardedAd } from '../features/ads/rewarded-ad';
+import { useEntryAdReady } from '../components/EntryAdGate';
+import { prepareRewardedUnlockSession, unlockEpisodeByRewardedAd } from '../features/ads/rewarded-ad';
+import { prepareEpisodeInterstitial, showEpisodeTransitionInterstitial } from '../features/ads/episode-interstitial';
 import { apiClient } from '../lib/api-client';
 import { t } from '../lib/i18n';
 import { useLocale } from '../lib/storage';
@@ -15,37 +17,70 @@ import styles from './WatchPage.module.css';
 
 export function WatchPage() {
   const { albumId = '', episodeId } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const locale = useLocale();
+  const entryAdReady = useEntryAdReady();
+  const locationState = location.state && typeof location.state === 'object' ? location.state as { transitionTiming?: { kind?: unknown; closedAt?: unknown } } : null;
+  const transitionTiming = locationState?.transitionTiming
+    && (locationState.transitionTiming.kind === 'REWARDED' || locationState.transitionTiming.kind === 'EPISODE_INTERSTITIAL')
+    && typeof locationState.transitionTiming.closedAt === 'number'
+    ? { kind: locationState.transitionTiming.kind, closedAt: locationState.transitionTiming.closedAt } as { kind: 'REWARDED' | 'EPISODE_INTERSTITIAL'; closedAt: number }
+    : undefined;
   const [episodePickerOpen, setEpisodePickerOpen] = useState(false);
   const [unlockTarget, setUnlockTarget] = useState<EpisodeSummary | null>(null);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
-  const album = useQuery({ queryKey: ['album', albumId, locale], queryFn: () => apiClient.get<AlbumDetail>(`/albums/${albumId}?locale=${encodeURIComponent(locale)}`) });
-  const episodes = useQuery({ queryKey: ['episodes', albumId, locale], queryFn: () => apiClient.get<{ items: EpisodeSummary[] }>(`/albums/${albumId}/episodes?locale=${encodeURIComponent(locale)}`) });
-  const playInfo = useQuery({ queryKey: ['play', episodeId, locale], queryFn: () => apiClient.get<PlayInfo>(`/episodes/${episodeId}/play?locale=${encodeURIComponent(locale)}`), enabled: Boolean(episodeId) });
+  const transitionPending = useRef(false);
+  const lastNaturalTransitionFrom = useRef<string | null>(null);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => {
+    lastNaturalTransitionFrom.current = null;
+    transitionPending.current = false;
+  }, [episodeId]);
+  const interstitialConfig = useQuery({
+    queryKey: ['episode-interstitial-config'],
+    queryFn: () => apiClient.get<{ enabled: boolean; placementId: string | null }>('/episode-interstitial/config'),
+    staleTime: 5 * 60_000,
+    retry: false,
+    enabled: entryAdReady
+  });
+  const interstitialPlacementId = interstitialConfig.data?.enabled ? interstitialConfig.data.placementId : null;
+  useEffect(() => { prepareEpisodeInterstitial(interstitialPlacementId); }, [interstitialPlacementId]);
+  const album = useQuery({ queryKey: ['album', albumId, locale], queryFn: () => apiClient.get<AlbumDetail>(`/albums/${albumId}?locale=${encodeURIComponent(locale)}`), enabled: entryAdReady });
+  const episodes = useQuery({ queryKey: ['episodes', albumId, locale], queryFn: () => apiClient.get<{ items: EpisodeSummary[] }>(`/albums/${albumId}/episodes?locale=${encodeURIComponent(locale)}`), enabled: entryAdReady });
+  const playInfo = useQuery({ queryKey: ['play', episodeId, locale], queryFn: () => apiClient.get<PlayInfo>(`/episodes/${episodeId}/play?locale=${encodeURIComponent(locale)}`), enabled: entryAdReady && Boolean(episodeId) });
   const episodeItems = episodes.data?.items ?? [];
   const currentIndex = episodeItems.findIndex((episode) => episode.id === episodeId);
   const nextEpisode = currentIndex >= 0 ? episodeItems[currentIndex + 1] : undefined;
+  useEffect(() => {
+    if (nextEpisode?.access === 'REWARDED_AD_REQUIRED') {
+      void prepareRewardedUnlockSession(nextEpisode.id).catch(() => undefined);
+    }
+  }, [nextEpisode?.access, nextEpisode?.id]);
   const preloadEpisodeIds = [episodeId, nextEpisode?.access === 'PLAYABLE' ? nextEpisode.id : undefined].filter((id): id is string => Boolean(id));
   const preloadQueries = useQueries({
     queries: preloadEpisodeIds.map((id) => ({
       queryKey: ['play', id, locale],
       queryFn: () => apiClient.get<PlayInfo>(`/episodes/${id}/play?locale=${encodeURIComponent(locale)}`),
-      enabled: Boolean(id)
+      enabled: entryAdReady && Boolean(id)
     }))
   });
   const playerPlaylist = preloadQueries.flatMap((query) => query.data ? [query.data] : []);
   const unlock = useMutation({
     mutationFn: async (episode: EpisodeSummary) => {
-      await unlockEpisodeByRewardedAd(episode.id);
-      return episode;
+      const closedAt = await unlockEpisodeByRewardedAd(episode.id);
+      return { episode, closedAt };
     },
-    onSuccess: (episode) => {
+    onSuccess: ({ episode, closedAt }) => {
       setUnlockTarget(null);
       setEpisodePickerOpen(false);
       void queryClient.invalidateQueries({ queryKey: ['episodes', albumId] });
-      navigate(`/watch/${albumId}/${episode.id}`, { replace: true });
+      navigate(`/watch/${albumId}/${episode.id}`, { replace: true, state: closedAt === undefined ? null : { transitionTiming: { kind: 'REWARDED', closedAt } } });
     }
   });
   const defaultEpisode = episodeItems.find((episode) => episode.access === 'PLAYABLE') ?? episodeItems[0];
@@ -55,6 +90,7 @@ export function WatchPage() {
     navigate(`/watch/${albumId}/${defaultEpisode.id}`, { replace: true });
   }, [albumId, defaultEpisode, episodeId, navigate]);
 
+  if (!entryAdReady) return <section className={styles.resolving}><LoadingState label="Preparing your next story" /></section>;
   if (album.isError || episodes.isError) return <section className={styles.resolving}><div className="state"><p>{t(locale, 'unavailable')}</p><button className={styles.retryButton} onClick={() => { void Promise.all([album.refetch(), episodes.refetch()]); }}>{t(locale, 'retry')}</button><Link to="/">{t(locale, 'back')}</Link></div></section>;
   if (album.isLoading || episodes.isLoading) return <section className={styles.resolving}><LoadingState label={t(locale, 'preparingEpisode')} /></section>;
   if (!album.data || !defaultEpisode) return <section className={styles.resolving}><div className="state"><p>{t(locale, 'unavailable')}</p><Link to="/">{t(locale, 'back')}</Link></div></section>;
@@ -68,11 +104,20 @@ export function WatchPage() {
   const message = playInfo.isError ? t(locale, 'episodeLocked') : byteplusPlayback && !platformReady ? t(locale, 'platformCopy') : undefined;
   const goBack = () => window.history.length > 1 ? navigate(-1) : navigate('/');
   const previousEpisode = currentIndex > 0 ? episodeItems[currentIndex - 1] : undefined;
-  const requestEpisode = (episode: EpisodeSummary | undefined) => {
-    if (!episode || episode.id === episodeId || unlock.isPending) return;
+  const requestEpisode = (episode: EpisodeSummary | undefined, naturalTransition = false) => {
+    if (!episode || episode.id === episodeId || unlock.isPending || transitionPending.current) return;
+    if (naturalTransition && lastNaturalTransitionFrom.current === episodeId) return;
     if (episode.access === 'PLAYABLE') {
+      if (naturalTransition) lastNaturalTransitionFrom.current = episodeId ?? null;
       setEpisodePickerOpen(false);
-      navigate(`/watch/${albumId}/${episode.id}`, { replace: true });
+      if (naturalTransition && interstitialPlacementId) {
+        transitionPending.current = true;
+        void showEpisodeTransitionInterstitial(interstitialPlacementId).catch(() => undefined).then((closedAt) => {
+          if (mounted.current) navigate(`/watch/${albumId}/${episode.id}`, { replace: true, state: closedAt === undefined ? null : { transitionTiming: { kind: 'EPISODE_INTERSTITIAL', closedAt } } });
+        }).finally(() => {
+          transitionPending.current = false;
+        });
+      } else navigate(`/watch/${albumId}/${episode.id}`, { replace: true });
       return;
     }
     setUnlockTarget(episode);
@@ -94,7 +139,7 @@ export function WatchPage() {
     const deltaY = touch.clientY - start.y;
     const verticalDistance = Math.abs(deltaY);
     if (verticalDistance < 72 || verticalDistance < Math.abs(deltaX) * 1.2) return;
-    requestEpisode(deltaY < 0 ? nextEpisode : previousEpisode);
+    requestEpisode(deltaY < 0 ? nextEpisode : previousEpisode, true);
   };
 
   return <section className={styles.page} onTouchStartCapture={handleTouchStart} onTouchEndCapture={handleTouchEnd} onTouchCancelCapture={() => { touchStart.current = null; }}>
@@ -103,7 +148,8 @@ export function WatchPage() {
       onRetry={playInfo.isError ? () => { void playInfo.refetch(); } : undefined}
       playInfo={playInfo.data}
       playlist={playerPlaylist}
-      onEpisodeEnded={() => requestEpisode(nextEpisode)}
+      onEpisodeEnded={() => requestEpisode(nextEpisode, true)}
+      transitionTiming={transitionTiming}
       coverUrl={playInfo.data?.coverUrl ?? detail.backdropUrl ?? detail.coverUrl}
       title={playInfo.data?.title ?? currentEpisode?.title ?? detail.title}
       immersive

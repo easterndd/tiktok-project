@@ -81,5 +81,5 @@ export async function ensureTikTokSession() {
 registerUnauthorizedHandler(async () => {
   clearSessionToken();
   await ensureAnonymousSession({ force: true });
-  await ensureTikTokSession();
+  await ensureTikTokSession().catch(() => undefined);
 });

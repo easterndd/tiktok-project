@@ -26,6 +26,7 @@ import { registerAdminRoutes } from './modules/admin/routes';
 import { registerUiRoutes } from './modules/ui/routes';
 import { registerErrorHandler } from './plugins/error-handler';
 import { registerPrisma } from './plugins/prisma';
+import { getDatabaseDuration } from './lib/request-performance';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -70,6 +71,8 @@ function isAllowedCorsOrigin(origin: string | undefined, configuredOrigins: stri
 }
 
 const miniBootstrapPath = new RegExp(`^/api/(?:(?:${miniAppKeys.filter((key) => key !== 'main').join('|')})/)?v1/(?:auth/anonymous/session|app-entry-ad-sessions)$`);
+const miniPerformancePath = /\/(?:auth\/anonymous\/session|app-entry-ad-sessions(?:\/[^/]+\/complete)?|home|ad-events|episode-interstitial\/config|episodes\/[^/]+\/reward-session(?:\/[^/]+\/complete)?)$/;
+const requestStartedAt = new WeakMap<object, number>();
 
 function isMiniBootstrapRequest(url: string) {
   return miniBootstrapPath.test(url.split('?', 1)[0]);
@@ -83,6 +86,7 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
   const configuredCorsOrigins = env.API_CORS_ORIGIN.split(',');
   // Log before CORS can finish an OPTIONS request, including every Mini App prefix.
   app.addHook('onRequest', (request, _reply, done) => {
+    if (miniPerformancePath.test(request.url.split('?', 1)[0])) requestStartedAt.set(request, performance.now());
     if (isMiniBootstrapRequest(request.url)) {
       request.log.info({
         method: request.method,
@@ -98,16 +102,33 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
   await app.register(cors, {
     origin: (origin, callback) => callback(null, isAllowedCorsOrigin(origin, configuredCorsOrigins)),
     credentials: true,
-    exposedHeaders: ['Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
+    exposedHeaders: ['Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Server-Timing'],
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
   });
-  app.addHook('onSend', async (_request, reply) => {
+  app.addHook('onSend', async (request, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('X-Frame-Options', 'DENY');
     reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
     reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    if (miniPerformancePath.test(request.url.split('?', 1)[0])) {
+      const databaseMs = getDatabaseDuration(request);
+      const startedAt = requestStartedAt.get(request) ?? performance.now();
+      reply.header('Server-Timing', `${databaseMs === undefined ? '' : `db;dur=${databaseMs.toFixed(1)}, `}app;dur=${Math.max(0, performance.now() - startedAt).toFixed(1)}`);
+    }
   });
   app.addHook('onResponse', (request, reply, done) => {
+    const startedAt = requestStartedAt.get(request);
+    if (startedAt !== undefined) {
+      const databaseMs = getDatabaseDuration(request);
+      request.log.info({
+        method: request.method,
+        path: request.url.split('?', 1)[0],
+        statusCode: reply.statusCode,
+        durationMs: Number((performance.now() - startedAt).toFixed(1)),
+        databaseMs: databaseMs === undefined ? null : Number(databaseMs.toFixed(1))
+      }, 'Mini performance response');
+      requestStartedAt.delete(request);
+    }
     if (isMiniBootstrapRequest(request.url)) {
       request.log.info({
         method: request.method,
@@ -129,7 +150,10 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
       const parts = request.url.split('?', 1)[0].split('/');
       const appKey = parts[1] === 'api' && parts[2] === 'v1' ? 'main' : parts[1] === 'api' && parts[3] === 'v1' ? parts[2] : 'system';
       const ipKey = `ip:${appKey}:${request.ip}`;
-      if (request.url.split('?', 1)[0].endsWith('/auth/login') || request.url.split('?', 1)[0].endsWith('/auth/anonymous/session')) return ipKey;
+      // The anonymous bootstrap runs before a bearer token exists. Keep the
+      // stricter login endpoint separate from other unauthenticated traffic.
+      if (request.url.split('?', 1)[0].endsWith('/auth/login')) return `admin-login:${appKey}:${request.ip}`;
+      if (request.url.split('?', 1)[0].endsWith('/auth/anonymous/session')) return `anonymous-login:${appKey}:${request.ip}`;
       const authorization = request.headers.authorization;
       if (authorization?.startsWith('Bearer ')) {
         try {

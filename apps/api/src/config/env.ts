@@ -30,7 +30,7 @@ const environment = z.object({
   TRUSTED_PROXY_CIDRS: z.string().default(''),
   // Enable only when the public API is behind a proxy that removes client
   // supplied X-Geo-Country and writes a verified ISO 3166-1 alpha-2 value.
-  TRUST_GEO_COUNTRY_HEADER: z.coerce.boolean().default(false),
+  TRUST_GEO_COUNTRY_HEADER: z.union([z.boolean(), z.stringbool()]).default(false),
   JWT_SECRET: z.string().min(32),
   USER_DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
   USER_JWT_EXPIRES_IN: z.coerce.number().int().positive().default(3_600),
@@ -58,6 +58,8 @@ const environment = z.object({
   REWARDED_PLACEMENT_ID: z.string().min(1).default('ad7686459794040702993'),
   TALETV_REWARDED_PLACEMENT_ID: z.string().min(1).default('ad7688599028879722512'),
   APP_ENTRY_PLACEMENT_ID: z.string().default('ad7686459458972829697'),
+  // Optional per-app placement for natural episode transitions; empty disables it.
+  EPISODE_INTERSTITIAL_PLACEMENT_ID: z.string().trim().optional(),
   TALETV_APP_ENTRY_PLACEMENT_ID: z.string().default(''),
   CINEREELS_REWARDED_PLACEMENT_ID: z.string().optional(),
   CINEREELS_APP_ENTRY_PLACEMENT_ID: z.string().optional(),
@@ -91,6 +93,12 @@ export function loadEnv(source = process.env): Env {
     const databaseUrl = parsed.data[`${key.toUpperCase()}_DATABASE_URL`];
     if (databaseUrl && (typeof databaseUrl !== 'string' || !URL.canParse(databaseUrl))) {
       throw new Error(`Invalid environment configuration: ${key.toUpperCase()}_DATABASE_URL`);
+    }
+  }
+  for (const key of miniAppKeys.slice(1)) {
+    const placement = parsed.data[`${key.toUpperCase()}_EPISODE_INTERSTITIAL_PLACEMENT_ID`];
+    if (placement !== undefined && typeof placement !== 'string') {
+      throw new Error(`Invalid environment configuration: ${key.toUpperCase()}_EPISODE_INTERSTITIAL_PLACEMENT_ID`);
     }
   }
   return parsed.data;
