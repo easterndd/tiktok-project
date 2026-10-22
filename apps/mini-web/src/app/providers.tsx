@@ -15,23 +15,8 @@ const queryClient = new QueryClient({
     }
   }
 });
-let sdkLaunchListenerInstalled = false;
-
 function AnonymousSessionBootstrap() {
   useEffect(() => {
-    const minis = window.TTMinis;
-    if (!sdkLaunchListenerInstalled && minis?.onShow && minis.canIUse?.('onShow.callback')) {
-      try {
-        minis.onShow((payload) => {
-          if (payload === undefined) return;
-          try {
-            const raw = JSON.stringify(payload);
-            if (raw && raw.length <= 32768) void recordMiniLaunch(raw).catch(() => undefined);
-          } catch { /* Some SDK payloads cannot be serialized. */ }
-        });
-        sdkLaunchListenerInstalled = true;
-      } catch { /* onShow is optional on older TikTok clients. */ }
-    }
     void ensureAnonymousSession()
       .then(async () => {
         await recordMiniLaunch();

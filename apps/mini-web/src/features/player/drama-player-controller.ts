@@ -44,6 +44,8 @@ export class DramaPlayerController {
   private VePlayer: VePlayerConstructor | undefined;
   private player: DramaPlayer | undefined;
   private current: PlayInfo | undefined;
+  private generation = 0;
+  private operation: Promise<void> = Promise.resolve();
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -55,31 +57,56 @@ export class DramaPlayerController {
     return this.VePlayer?.Events;
   }
 
-  async start(info: PlayInfo, playlist: PlayInfo[], preload = true) {
-    this.VePlayer = await getDramaPlayerConstructor();
-    if (preload) await preparePreload(this.VePlayer, playlist.length ? playlist : [info]);
-    this.player = await createDramaPlayer(this.root, info);
-    this.current = info;
-    return this.player;
+  start(info: PlayInfo, playlist: PlayInfo[], preload = true) {
+    return this.load(info, playlist, preload, false);
   }
 
-  async switchTo(info: PlayInfo, playlist: PlayInfo[], preload = true) {
-    if (!this.player || !this.current) return this.start(info, playlist, preload);
-    if (preload) await preparePreload(this.VePlayer!, playlist.length ? playlist : [info]);
-    if (this.current.albumId === info.albumId && this.player.playNext) {
-      try {
-        await this.player.playNext({ ...toPlayerSource(info), lang: getStoredLocale() });
-        this.current = info;
-        return this.player;
-      } catch {
-        // Fall through to one controlled rebuild when the SDK cannot switch this episode in place.
-      }
-    }
+  switchTo(info: PlayInfo, playlist: PlayInfo[], preload = true) {
+    return this.load(info, playlist, preload, true);
+  }
 
-    this.player.destroy();
-    this.player = undefined;
-    this.current = undefined;
-    return this.start(info, playlist, preload);
+  private load(info: PlayInfo, playlist: PlayInfo[], preload: boolean, reuse: boolean) {
+    const generation = ++this.generation;
+    const assertActive = () => {
+      if (generation !== this.generation) throw new Error('PLAYER_OPERATION_CANCELLED');
+    };
+    // A pending playNext must finish before a newer episode touches the same SDK instance.
+    const operation = this.operation.then(async () => {
+      assertActive();
+      this.VePlayer = await getDramaPlayerConstructor();
+      assertActive();
+      if (preload) void preparePreload(this.VePlayer, playlist.length ? playlist : [info]);
+      if (reuse && this.player && this.current?.albumId === info.albumId && this.player.playNext) {
+        try {
+          await this.player.playNext({ ...toPlayerSource(info), lang: getStoredLocale() });
+          assertActive();
+          this.current = info;
+          return this.player;
+        } catch (error) {
+          assertActive();
+          // Rebuild once when the SDK cannot switch this episode in place.
+          void error;
+        }
+      }
+
+      this.player?.destroy();
+      this.player = undefined;
+      this.current = undefined;
+      const player = await createDramaPlayer(this.root, info);
+      if (generation !== this.generation) {
+        player.destroy();
+        assertActive();
+      }
+      this.player = player;
+      this.current = info;
+      return player;
+    });
+    this.operation = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  cancelPending() {
+    this.generation += 1;
   }
 
   async updatePreload(playlist: PlayInfo[], enabled = true) {
@@ -88,6 +115,7 @@ export class DramaPlayerController {
   }
 
   destroy() {
+    this.cancelPending();
     this.player?.destroy();
     this.player = undefined;
     this.current = undefined;

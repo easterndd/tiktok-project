@@ -98,12 +98,19 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
       select: { id: true, metadata: true }
     });
     if (existing) {
-      if (context.sdkPayloadRaw) {
-        const metadata = existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? existing.metadata : {};
-        await app.prisma.audienceActivityEvent.update({ where: { id: existing.id }, data: {
-          metadata: { ...metadata, sdkPayloadRaw: context.sdkPayloadRaw } as Prisma.InputJsonValue
-        } });
-      }
+      const metadata = existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? existing.metadata as Record<string, unknown> : {};
+      const existingQuery = metadata.launchQuery && typeof metadata.launchQuery === 'object' && !Array.isArray(metadata.launchQuery)
+        ? metadata.launchQuery as Record<string, string> : {};
+      await app.prisma.audienceActivityEvent.update({ where: { id: existing.id }, data: {
+        metadata: {
+          ...metadata,
+          rawUrl: context.rawUrl ?? metadata.rawUrl,
+          sdkPayloadRaw: context.sdkPayloadRaw ?? metadata.sdkPayloadRaw,
+          launchScene: context.launchScene ?? metadata.launchScene,
+          launchPath: context.launchPath ?? metadata.launchPath,
+          launchQuery: { ...existingQuery, ...launchQuery }
+        } as Prisma.InputJsonValue
+      } });
       return true;
     }
     await app.prisma.audienceActivityEvent.create({ data: {

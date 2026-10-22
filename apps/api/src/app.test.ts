@@ -835,7 +835,7 @@ describe('QuicK ReeLS API', () => {
     const viewerId = session.json().viewer.id;
     const userHeaders = { authorization: `Bearer ${session.json().accessToken}` };
     const duplicate = await app.inject({ method: 'POST', url: '/api/v1/auth/launch-context', headers: userHeaders,
-      payload: { entryId, rawUrl: previewUrl, sdkPayloadRaw: '{"query":{"source":"preview"},"launch_from":"anchor"}' } });
+      payload: { entryId, rawUrl: previewUrl, launchQuery: { campaign: 'spring' }, sdkPayloadRaw: '{"query":{"source":"preview"},"launch_from":"anchor"}' } });
     assert.equal(duplicate.statusCode, 200, duplicate.body);
     const later = await app.inject({ method: 'POST', url: '/api/v1/auth/launch-context', headers: userHeaders,
       payload: { entryId: 'paid-entry-0002', rawUrl: adUrl, launchPath: '/', launchQuery: { campaign_id: '123' } } });
@@ -851,6 +851,7 @@ describe('QuicK ReeLS API', () => {
     const older = await app.inject({ method: 'GET', url: `${path}&offset=1`, headers: ownerHeaders });
     assert.equal(older.json().items[0].metadata.rawUrl, previewUrl);
     assert.equal(older.json().items[0].metadata.sdkPayloadRaw, '{"query":{"source":"preview"},"launch_from":"anchor"}');
+    assert.deepEqual(older.json().items[0].metadata.launchQuery, { src: 'preview', campaign: 'spring' });
     assert.equal(older.json().hasMore, false);
   });
 

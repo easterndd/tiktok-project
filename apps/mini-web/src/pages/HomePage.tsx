@@ -1,7 +1,7 @@
 import type { AlbumSummary, HomeResponse, SearchResponse } from '@quickreels/shared-types';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Flame, Play, RefreshCw, Search as SearchIcon, Sparkles, X } from 'lucide-react';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AlbumCard } from '../components/AlbumCard';
 import { StoryLandEntryAd } from '../components/StoryLandEntryAd';
@@ -9,7 +9,7 @@ import { LoadingState } from '../components/LoadingState';
 import { useEntryAdReady } from '../components/EntryAdGate';
 import { getMockHome } from '../data/mock-data';
 import { apiClient } from '../lib/api-client';
-import { appKey } from '../lib/app-brand';
+import { appKey, storagePrefix } from '../lib/app-brand';
 import { t } from '../lib/i18n';
 import { useLocale, isDemoMode, getSessionToken, subscribeToSession } from '../lib/storage';
 import { componentIsEnabled, useUiComponents } from '../features/cms/ui-components';
@@ -17,6 +17,34 @@ import styles from './HomePage.module.css';
 
 function AlbumGrid({ title, items, locale }: { title: string; items: AlbumSummary[]; locale: import('@quickreels/shared-types').Locale }) {
   return <section className={styles.section}><div className={styles.sectionHeading}><h2>{title}</h2><span>{items.length} {t(locale, 'stories')}</span></div><div className={styles.posterGrid}>{items.map((album) => <AlbumCard key={album.id} album={album} locale={locale} presentation="poster" />)}</div></section>;
+}
+
+function readCachedHome(locale: HomeResponse['locale']) {
+  try {
+    const value = localStorage.getItem(`${storagePrefix}_public_home_${locale}`);
+    if (!value) return undefined;
+    const cached = JSON.parse(value) as { savedAt?: unknown; data?: HomeResponse };
+    if (typeof cached.savedAt !== 'number' || !cached.data || !Array.isArray(cached.data.blocks) || !cached.data.feed) return undefined;
+    return { savedAt: cached.savedAt, data: cached.data };
+  } catch {
+    return undefined;
+  }
+}
+
+function publicHomeSnapshot(data: HomeResponse): HomeResponse {
+  return { ...data, blocks: data.blocks.filter((block) => block.type !== 'CONTINUE_WATCHING') };
+}
+
+function HomeLoadingSkeleton({ label }: { label: string }) {
+  return <div className={`${styles.page} ${styles.homeSkeleton}`} role="status" aria-label={label}>
+    <span className={styles.skeletonLabel}>{label}</span>
+    <div className={styles.skeletonRail} aria-hidden="true"><span /><span /></div>
+    <div className={styles.skeletonHero} aria-hidden="true"><span /><span /><span /></div>
+    <section className={styles.section} aria-hidden="true">
+      <div className={styles.skeletonHeading}><span /><span /></div>
+      <div className={styles.posterGrid}>{Array.from({ length: 6 }, (_, index) => <div className={styles.skeletonPoster} key={index} />)}</div>
+    </section>
+  </div>;
 }
 
 export function HomePage() {
@@ -28,6 +56,8 @@ export function HomePage() {
   const [heroIndex, setHeroIndex] = useState(0);
   const [searchInput, setSearchInput] = useState(params.get('q') ?? '');
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const homeRequestToken = useRef<string | null>(null);
+  const cachedHome = useMemo(() => readCachedHome(locale), [locale]);
   const components = useUiComponents();
   const ui = components.data?.items;
   const query = params.get('q')?.trim() ?? '';
@@ -35,8 +65,13 @@ export function HomePage() {
   const activeChannel = requestedChannel === 'new' ? 'new' : 'hot';
   const isSearchOpen = params.get('search') === '1' || Boolean(query);
   const home = useQuery({
-    queryKey: ['home', locale, Boolean(sessionToken)],
-    queryFn: () => apiClient.get<HomeResponse>(`/home?locale=${encodeURIComponent(locale)}`),
+    queryKey: ['home', locale],
+    initialData: cachedHome?.data,
+    initialDataUpdatedAt: cachedHome?.savedAt ?? 0,
+    queryFn: () => {
+      homeRequestToken.current = getSessionToken();
+      return apiClient.get<HomeResponse>(`/home?locale=${encodeURIComponent(locale)}`);
+    },
     placeholderData: (previous) => previous ?? (isDemoMode() ? getMockHome(locale) : undefined)
   });
   const search = useQuery({
@@ -84,6 +119,17 @@ export function HomePage() {
   const isFiltering = Boolean(query);
   const searchItems = search.data?.items ?? [];
   const fallbackItems = search.data?.fallbackItems ?? [];
+  useEffect(() => {
+    if (sessionToken && home.isSuccess && homeRequestToken.current !== sessionToken) void home.refetch();
+  }, [home.isSuccess, home.refetch, sessionToken]);
+  useEffect(() => {
+    if (!home.isSuccess || !home.data) return;
+    try {
+      localStorage.setItem(`${storagePrefix}_public_home_${locale}`, JSON.stringify({ savedAt: Date.now(), data: publicHomeSnapshot(home.data) }));
+    } catch {
+      // The live response remains usable when persistent browser storage is full or unavailable.
+    }
+  }, [home.data, home.isSuccess, locale]);
   const closeSearch = () => {
     setSearchInput('');
     const next = new URLSearchParams(params);
@@ -125,7 +171,7 @@ export function HomePage() {
     return () => window.clearInterval(timer);
   }, [activeChannel, heroItems.length, isFiltering]);
 
-  if (home.isLoading && !home.data) return <LoadingState label={t(locale, 'loadingReel')} />;
+  if (home.isLoading && !home.data) return <HomeLoadingSkeleton label={t(locale, 'loadingReel')} />;
   if (home.isError && !home.data) return <section className="state"><p>{t(locale, 'unavailable')}</p><button onClick={() => void home.refetch()}><RefreshCw size={17} aria-hidden="true" /> {t(locale, 'retry')}</button></section>;
 
   return <div className={styles.page}>

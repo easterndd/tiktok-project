@@ -2,6 +2,7 @@ import type { PlayInfo } from '@quickreels/shared-types';
 import { AlertCircle, Play } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { DramaPlayerController } from '../features/player/drama-player-controller';
+import { createPlayerAutoplay } from '../features/player/player-autoplay';
 import { apiClient } from '../lib/api-client';
 import { reportDiagnostic, reportPerformance } from '../lib/diagnostics';
 import { t } from '../lib/i18n';
@@ -45,6 +46,8 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
   const playlistRef = useRef(playlist);
   const endedHandlerRef = useRef(onEpisodeEnded);
   const [playerError, setPlayerError] = useState('');
+  const [playerStarting, setPlayerStarting] = useState(true);
+  const [showPlayFallback, setShowPlayFallback] = useState(false);
   const [playbackAttempt, setPlaybackAttempt] = useState(0);
   const reportedTransition = useRef<string | null>(null);
   const isLocalPlayback = playInfo?.playbackMode === 'LOCAL' && Boolean(playInfo.sourceUrl);
@@ -66,6 +69,37 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     let lastReportedMs = 0;
     let startedPlayback = false;
     let firstFrameRecorded = false;
+    let playFallbackTimer = 0;
+    let playReadyTimer = 0;
+    const recordFirstFrame = () => {
+      if (firstFrameRecorded) return;
+      firstFrameRecorded = true;
+      void apiClient.post('/playback-quality-events', {
+        episodeId: playInfo.localEpisodeId,
+        sessionId,
+        eventType: 'FIRST_FRAME',
+        startupMs: Math.round(performance.now() - startedAt)
+      }).catch(() => undefined);
+    };
+    const markPlaybackStarted = () => {
+      if (startedPlayback) return;
+      startedPlayback = true;
+      window.clearInterval(playReadyTimer);
+      const key = transitionTiming ? `${playInfo.localEpisodeId}:${transitionTiming.kind}:${transitionTiming.closedAt}` : '';
+      const now = performance.timeOrigin + performance.now();
+      if (transitionTiming && transitionTiming.closedAt >= performance.timeOrigin && reportedTransition.current !== key) {
+        reportedTransition.current = key;
+        reportPerformance(`${transitionTiming.kind}_CLOSE_TO_NEXT_EPISODE_PLAY`, `/episodes/${playInfo.localEpisodeId}`, now - transitionTiming.closedAt);
+      }
+    };
+    const autoplay = createPlayerAutoplay(
+      () => instance?.player,
+      markPlaybackStarted,
+      () => { if (!disposed) setShowPlayFallback(true); }
+    );
+    const attemptPlay = () => {
+      if (!disposed) autoplay.attempt();
+    };
     const reportProgress = (completed = false, force = false) => {
       if (!startedPlayback && !completed) return;
       if (!force && Math.abs(lastPositionMs - lastReportedMs) < 10_000) return;
@@ -82,28 +116,20 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
         ? Math.round(event.currentTarget.currentTime * 1_000)
         : positionFromEvent(event);
       if (positionMs === null) return;
+      if (positionMs > 0) {
+        recordFirstFrame();
+        autoplay.markStarted();
+        window.clearTimeout(playFallbackTimer);
+        setPlayerStarting(false);
+        setShowPlayFallback(false);
+      }
       lastPositionMs = playInfo.durationMs ? Math.min(positionMs, playInfo.durationMs) : positionMs;
       reportProgress();
     };
-    const onPlay = () => {
-      startedPlayback = true;
-      const key = transitionTiming ? `${playInfo.localEpisodeId}:${transitionTiming.kind}:${transitionTiming.closedAt}` : '';
-      const now = performance.timeOrigin + performance.now();
-      if (transitionTiming && transitionTiming.closedAt >= performance.timeOrigin && reportedTransition.current !== key) {
-        reportedTransition.current = key;
-        reportPerformance(`${transitionTiming.kind}_CLOSE_TO_NEXT_EPISODE_PLAY`, `/episodes/${playInfo.localEpisodeId}`, now - transitionTiming.closedAt);
-      }
-    };
+    const onPlay = () => autoplay.markStarted();
     const onPause = () => reportProgress(false, true);
     const onLoadStart = () => {
-      if (firstFrameRecorded) return;
-      firstFrameRecorded = true;
-      void apiClient.post('/playback-quality-events', {
-        episodeId: playInfo.localEpisodeId,
-        sessionId,
-        eventType: 'FIRST_FRAME',
-        startupMs: Math.round(performance.now() - startedAt)
-      }).catch(() => undefined);
+      reportPerformance('PLAYER_LOAD_START', `/episodes/${playInfo.localEpisodeId}`, performance.now() - startedAt);
     };
     const onEnded = () => {
       startedPlayback = true;
@@ -138,6 +164,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       instance.off?.(events.TIME_UPDATE, onTimeUpdate);
       instance.off?.(events.PLAY, onPlay);
       instance.off?.(events.PAUSE, onPause);
+      instance.off?.(events.READY, attemptPlay);
       instance.off?.(events.LOAD_START, onLoadStart);
       instance.off?.(events.ENDED, onEnded);
       instance.off?.(events.ERROR, onError);
@@ -153,6 +180,8 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     };
 
     setPlayerError('');
+    setPlayerStarting(true);
+    setShowPlayFallback(false);
     if (isLocalPlayback) {
       controller.current?.destroy();
       controller.current = undefined;
@@ -182,9 +211,17 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
         instance.on(events.TIME_UPDATE, onTimeUpdate);
         instance.on(events.PLAY, onPlay);
         instance.on(events.PAUSE, onPause);
+        instance.on(events.READY, attemptPlay);
         instance.on(events.LOAD_START, onLoadStart);
         instance.on(events.ENDED, onEnded);
         instance.on(events.ERROR, onError);
+        attemptPlay();
+        // READY can fire before start/playNext resolves; keep checking for the async kernel.
+        playReadyTimer = window.setInterval(attemptPlay, 100);
+        playFallbackTimer = window.setTimeout(() => {
+          window.clearInterval(playReadyTimer);
+          if (!firstFrameRecorded && !disposed) setShowPlayFallback(true);
+        }, 4_000);
       } catch (error) {
         if (disposed) return;
         reportDiagnostic({ kind: 'PLAYBACK', phase: 'PLAYER_INIT_FAILED', message: error instanceof Error ? error.message : String(error), path: `/episodes/${playInfo.localEpisodeId}` });
@@ -203,7 +240,11 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       reportProgress(false, true);
       if (isLocalPlayback && localVideo.current) detachLocalVideo(localVideo.current);
       else detach();
+      controller.current?.cancelPending();
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.clearTimeout(playFallbackTimer);
+      window.clearInterval(playReadyTimer);
+      autoplay.dispose();
     };
   }, [playInfo?.localEpisodeId, isLocalPlayback, playbackAttempt]);
 
@@ -217,12 +258,19 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     setPlaybackAttempt((attempt) => attempt + 1);
     onRetry?.();
   };
+  const playManually = () => {
+    const play = controller.current?.instance?.player?.play;
+    if (!play) return;
+    try { void Promise.resolve(play.call(controller.current?.instance?.player)).catch(() => setPlayerError('Playback could not start. Please try again.')); }
+    catch { setPlayerError('Playback could not start. Please try again.'); }
+  };
   return <section className={`${styles.shell} ${immersive ? styles.immersive : ''}`} aria-label={t(locale, 'watchEpisode')}>
     {coverUrl && <img src={coverUrl} alt="" className={styles.poster} onError={(event) => { event.currentTarget.src = '/fallback-cover.svg'; }} />}
     <div className={styles.scrim} />
     {playInfo && !visibleMessage && (isLocalPlayback
       ? <video ref={localVideo} className={styles.localVideo} src={playInfo.sourceUrl ?? undefined} poster={coverUrl ?? undefined} controls playsInline autoPlay preload="auto" />
       : <div className={styles.playerMount} ref={mount} />)}
+    {playInfo && !isLocalPlayback && !visibleMessage && playerStarting && <div className={styles.playerLoading} role="status"><span className={styles.spinner} aria-hidden="true" /><span className={styles.playerLoadingLabel}>{t(locale, 'preparingPlayer')}</span>{showPlayFallback && <button type="button" onClick={playManually}><Play size={16} fill="currentColor" aria-hidden="true" /> Play episode</button>}</div>}
     {visibleMessage ? <div className={styles.message}><AlertCircle size={20} aria-hidden="true" /><strong>{title}</strong><span>{visibleMessage}</span>{(playerError || onRetry) && <button className={styles.retryButton} onClick={retryPlayback}>{t(locale, 'retry')}</button>}</div> : !playInfo ? <div className={styles.message}><Play size={24} aria-hidden="true" /><strong>{title}</strong><span>{t(locale, 'preparingPlayer')}</span></div> : null}
   </section>;
 }

@@ -1,7 +1,7 @@
 import type { AlbumDetail, EpisodeSummary, PlayInfo } from '@quickreels/shared-types';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, RefreshCw, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { EpisodeList } from '../components/EpisodeList';
 import { PlayerShell } from '../components/PlayerShell';
@@ -10,8 +10,9 @@ import { useEntryAdReady } from '../components/EntryAdGate';
 import { prepareRewardedUnlockSession, unlockEpisodeByRewardedAd } from '../features/ads/rewarded-ad';
 import { prepareEpisodeInterstitial, showEpisodeTransitionInterstitial } from '../features/ads/episode-interstitial';
 import { apiClient } from '../lib/api-client';
+import { reportDiagnostic } from '../lib/diagnostics';
 import { t } from '../lib/i18n';
-import { useLocale } from '../lib/storage';
+import { getSessionToken, subscribeToSession, useLocale } from '../lib/storage';
 import { hasTikTokMinis } from '../lib/ttminis';
 import styles from './WatchPage.module.css';
 
@@ -21,6 +22,7 @@ export function WatchPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const locale = useLocale();
+  const sessionToken = useSyncExternalStore(subscribeToSession, getSessionToken, () => null);
   const entryAdReady = useEntryAdReady();
   const locationState = location.state && typeof location.state === 'object' ? location.state as { transitionTiming?: { kind?: unknown; closedAt?: unknown } } : null;
   const transitionTiming = locationState?.transitionTiming
@@ -47,13 +49,18 @@ export function WatchPage() {
     queryFn: () => apiClient.get<{ enabled: boolean; placementId: string | null }>('/episode-interstitial/config'),
     staleTime: 5 * 60_000,
     retry: false,
-    enabled: entryAdReady
+    enabled: Boolean(sessionToken)
   });
   const interstitialPlacementId = interstitialConfig.data?.enabled ? interstitialConfig.data.placementId : null;
   useEffect(() => { prepareEpisodeInterstitial(interstitialPlacementId); }, [interstitialPlacementId]);
-  const album = useQuery({ queryKey: ['album', albumId, locale], queryFn: () => apiClient.get<AlbumDetail>(`/albums/${albumId}?locale=${encodeURIComponent(locale)}`), enabled: entryAdReady });
-  const episodes = useQuery({ queryKey: ['episodes', albumId, locale], queryFn: () => apiClient.get<{ items: EpisodeSummary[] }>(`/albums/${albumId}/episodes?locale=${encodeURIComponent(locale)}`), enabled: entryAdReady });
-  const playInfo = useQuery({ queryKey: ['play', episodeId, locale], queryFn: () => apiClient.get<PlayInfo>(`/episodes/${episodeId}/play?locale=${encodeURIComponent(locale)}`), enabled: entryAdReady && Boolean(episodeId) });
+  useEffect(() => {
+    if (interstitialConfig.isSuccess && !interstitialConfig.data.enabled) {
+      reportDiagnostic({ kind: 'AD', phase: 'EPISODE_INTERSTITIAL_DISABLED', message: 'No episode interstitial placement configured', path: '/episode-interstitial/config' });
+    }
+  }, [interstitialConfig.data, interstitialConfig.isSuccess]);
+  const album = useQuery({ queryKey: ['album', albumId, locale], queryFn: () => apiClient.get<AlbumDetail>(`/albums/${albumId}?locale=${encodeURIComponent(locale)}`) });
+  const episodes = useQuery({ queryKey: ['episodes', albumId, locale], queryFn: () => apiClient.get<{ items: EpisodeSummary[] }>(`/albums/${albumId}/episodes?locale=${encodeURIComponent(locale)}`) });
+  const playInfo = useQuery({ queryKey: ['play', episodeId, locale], queryFn: () => apiClient.get<PlayInfo>(`/episodes/${episodeId}/play?locale=${encodeURIComponent(locale)}`), enabled: Boolean(episodeId) });
   const episodeItems = episodes.data?.items ?? [];
   const currentIndex = episodeItems.findIndex((episode) => episode.id === episodeId);
   const nextEpisode = currentIndex >= 0 ? episodeItems[currentIndex + 1] : undefined;
@@ -67,7 +74,7 @@ export function WatchPage() {
     queries: preloadEpisodeIds.map((id) => ({
       queryKey: ['play', id, locale],
       queryFn: () => apiClient.get<PlayInfo>(`/episodes/${id}/play?locale=${encodeURIComponent(locale)}`),
-      enabled: entryAdReady && Boolean(id)
+      enabled: Boolean(id)
     }))
   });
   const playerPlaylist = preloadQueries.flatMap((query) => query.data ? [query.data] : []);

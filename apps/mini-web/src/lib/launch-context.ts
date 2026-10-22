@@ -1,6 +1,21 @@
 const sensitiveParameter = /(?:token|auth|secret|password|email|phone|openid|open_id|user.?id|username|uid|visitor|session|credential|code|url|redirect|callback)/i;
 const maxQueryEntries = 32;
 let initialWebviewUrl = typeof window === 'undefined' ? '' : window.location.href;
+let sdkLaunchPayload: TikTokMiniDramaShowPayload | undefined;
+
+export function rememberSdkLaunchPayload(payload: unknown) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+  sdkLaunchPayload = payload as TikTokMiniDramaShowPayload;
+}
+
+export function stringifySdkPayload(payload: unknown) {
+  try {
+    const raw = JSON.stringify(payload);
+    return raw && raw.length <= 32768 ? raw : '';
+  } catch {
+    return '';
+  }
+}
 
 function safeQuery(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -17,15 +32,8 @@ function safeQuery(value: unknown) {
 
 export function getMiniLaunchContext() {
   initialWebviewUrl ||= window.location.href;
-  let options: { scene?: unknown; query?: unknown } | undefined;
-  try {
-    options = window.TTMinis?.game?.getLaunchOptionsSync?.()
-      ?? window.TTMinis?.game?.getEnterOptionsSync?.();
-  } catch {
-    options = undefined;
-  }
-  const scene = typeof options?.scene === 'string' ? options.scene.trim().slice(0, 64) : '';
-  const query = safeQuery(options?.query);
+  const scene = typeof sdkLaunchPayload?.launch_from === 'string' ? sdkLaunchPayload.launch_from.trim().slice(0, 64) : '';
+  const query = safeQuery(sdkLaunchPayload?.query);
   try {
     for (const [key, value] of new URLSearchParams(window.location.search)) {
       if (!(key in query)) Object.assign(query, safeQuery({ [key]: value }));

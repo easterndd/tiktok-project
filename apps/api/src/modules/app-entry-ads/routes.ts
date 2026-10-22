@@ -57,12 +57,14 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
     const { launchId, releaseId } = startInput.parse(request.body);
-    await measureDatabase(request, () => recordSharedIpVisit(app.sharedPrisma, {
-      ipAddress: request.ip, miniAppKey: app.config.MINI_APP_KEY, userId: request.user.sub, clientSessionId: launchId,
-      countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
-      secret: app.rootConfig.JWT_SECRET
-    }));
-    const saved = await measureDatabase(request, () => app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } }));
+    const [_, saved] = await Promise.all([
+      measureDatabase(request, () => recordSharedIpVisit(app.sharedPrisma, {
+        ipAddress: request.ip, miniAppKey: app.config.MINI_APP_KEY, userId: request.user.sub, clientSessionId: launchId,
+        countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
+        secret: app.rootConfig.JWT_SECRET
+      })),
+      measureDatabase(request, () => app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } }))
+    ]);
     let policy = saved ?? disabledPolicy(app, releaseId);
     if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
       try {
@@ -74,8 +76,11 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     }
     if (saved && !saved.firstSeenAt) await measureDatabase(request, () => app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } }));
     if (!policy.enabled) return { required: false as const };
-    if (await measureDatabase(request, () => isEntryAdIpExempt(app.sharedPrisma, request.ip))) return { required: false as const };
-    const viewer = await measureDatabase(request, () => app.prisma.user.findUnique({ where: { id: request.user.sub }, select: { appEntryAdExempt: true, mergedIntoUserId: true } }));
+    const [ipExempt, viewer] = await Promise.all([
+      measureDatabase(request, () => isEntryAdIpExempt(app.sharedPrisma, request.ip)),
+      measureDatabase(request, () => app.prisma.user.findUnique({ where: { id: request.user.sub }, select: { appEntryAdExempt: true, mergedIntoUserId: true } }))
+    ]);
+    if (ipExempt) return { required: false as const };
     if (viewer?.appEntryAdExempt) return { required: false as const };
     if (viewer?.mergedIntoUserId) {
       const canonical = await measureDatabase(request, () => app.prisma.user.findUnique({ where: { id: viewer.mergedIntoUserId! }, select: { appEntryAdExempt: true } }));

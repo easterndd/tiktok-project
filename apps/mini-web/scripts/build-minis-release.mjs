@@ -28,8 +28,8 @@ function run(command, args) {
 
 console.log(`Building ${appKey} with code version ${releaseId}`);
 run('pnpm', ['build']);
-run('ttdx', ['minis', 'build', '--prod']);
-run('ttdx', ['minis', 'check', '--output']);
+run('pnpm', ['exec', 'ttdx', 'minis', 'build', '--prod']);
+run('pnpm', ['exec', 'ttdx', 'minis', 'check', '--output']);
 run('node', ['../mini-web/scripts/check-release.mjs']);
 
 const dist = join(appRoot, 'dist');

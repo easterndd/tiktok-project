@@ -5,10 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0f172a" />
     <title>TaleFlick</title>
-    <script src="https://connect.tiktok-minis.com/drama/sdk.js"></script>
+    <style>
+      html,body,#root{width:100%;min-height:100%;margin:0;background:#090a13;color:#f8fafc;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+      .boot-screen{position:fixed;inset:0;display:grid;align-content:center;justify-items:center;gap:18px;background:#090a13;color:#f8fafc}
+      .boot-mark{display:grid;width:56px;height:56px;place-items:center;border:1px solid rgba(255,255,255,.16);border-radius:16px;background:#171b25;color:#ff5878;font-size:24px;font-weight:800}
+      .boot-label{margin:0;color:#a2abc0;font-size:14px}
+      .boot-spinner{width:26px;height:26px;border:2px solid rgba(255,255,255,.16);border-top-color:#ff5878;border-radius:50%;animation:boot-spin .8s linear infinite}
+      @keyframes boot-spin{to{transform:rotate(360deg)}}
+      @media(prefers-reduced-motion:reduce){.boot-spinner{animation:none}}
+    </style>
+    <link rel="preconnect" href="https://connect.tiktok-minis.com" crossorigin />
+    <script fetchpriority="high" src="https://connect.tiktok-minis.com/drama/sdk.js"></script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><main class="boot-screen" role="status" aria-live="polite"><span class="boot-mark" aria-hidden="true">T</span><span class="boot-spinner" aria-hidden="true"></span><p class="boot-label">Preparing your next story</p></main></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

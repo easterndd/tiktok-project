@@ -1,14 +1,17 @@
 declare global {
+  type TikTokMiniDramaShowPayload = {
+    query?: unknown;
+    launch_from?: unknown;
+    [key: string]: unknown;
+  };
+
   interface Window {
     TTMinis?: {
       init(options: { clientKey: string }): void;
-      login(options?: { success?: (result: { code: string }) => void; fail?: (error: unknown) => void; complete?: () => void }): Promise<{ code: string }> | void;
+      login(options?: { success?: (result: { code?: string; authResponse?: { code?: string } }) => void; fail?: (error: unknown) => void; complete?: () => void }): Promise<{ code?: string; authResponse?: { code?: string } }> | void;
       canIUse(apiName: string): boolean;
-      onShow?(callback: (params: unknown) => void): void;
-      game?: {
-        getLaunchOptionsSync?(): { scene?: unknown; query?: unknown };
-        getEnterOptionsSync?(): { scene?: unknown; query?: unknown };
-      };
+      onShow?(callback: (params?: TikTokMiniDramaShowPayload) => void): string | void;
+      on?(event: 'minis.show', callback: (params?: TikTokMiniDramaShowPayload) => void): string | void;
       getPlayer?(channel?: 'byteplus'): Promise<VePlayerConstructor>;
       createRewardedVideoAd(options: { adUnitId: string }): RewardedVideoAd;
       createInterstitialAd(options: { adUnitId: string }): InterstitialAd;

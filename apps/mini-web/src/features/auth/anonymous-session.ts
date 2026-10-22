@@ -1,13 +1,32 @@
 import { apiClient, registerUnauthorizedHandler } from '../../lib/api-client';
 import { clearSessionToken, getOrCreateVisitorKey, getSessionToken, isDemoMode, setSessionToken } from '../../lib/storage';
 import { storagePrefix } from '../../lib/app-brand';
-import { getMiniLaunchContext } from '../../lib/launch-context';
+import { getMiniLaunchContext, rememberSdkLaunchPayload, stringifySdkPayload } from '../../lib/launch-context';
 
 let pendingSession: Promise<void> | null = null;
 let pendingTikTokSession: Promise<void> | null = null;
 let pendingLaunchRecord: Promise<void> | null = null;
 const entryId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `entry-${Date.now()}-${Math.random()}`;
 let lastSdkPayloadRaw = '';
+let sdkLaunchListenerInstalled = false;
+
+export function installTikTokLaunchListener() {
+  if (sdkLaunchListenerInstalled || typeof window === 'undefined') return;
+  const minis = window.TTMinis;
+  const listener = (payload?: TikTokMiniDramaShowPayload) => {
+    if (payload !== undefined) rememberSdkLaunchPayload(payload);
+    const raw = stringifySdkPayload(payload);
+    if (raw) void recordMiniLaunch(raw).catch(() => undefined);
+  };
+  let onShowSupported = typeof minis?.onShow === 'function';
+  try { onShowSupported = onShowSupported && (typeof minis?.canIUse !== 'function' || minis.canIUse('onShow.callback') !== false); } catch { /* Older drama clients may not expose canIUse. */ }
+  try {
+    if (onShowSupported) minis!.onShow!(listener);
+    else if (typeof minis?.on === 'function') minis.on('minis.show', listener);
+    else return;
+    sdkLaunchListenerInstalled = true;
+  } catch { /* The SDK can be injected without lifecycle support in browser previews. */ }
+}
 
 function createLaunchEntryId() {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `entry-${Date.now()}-${Math.random()}`;
@@ -78,11 +97,11 @@ function getTikTokLoginCode() {
     const timeout = window.setTimeout(() => finish(new Error('TIKTOK_LOGIN_TIMEOUT')), 12_000);
     try {
       const result = login.call(window.TTMinis, {
-        success: (value) => finish(undefined, value?.code),
+      success: (value) => finish(undefined, value?.authResponse?.code ?? value?.code),
         fail: (error) => finish(error)
       });
       if (result && typeof result.then === 'function') {
-        void result.then((value) => finish(undefined, value?.code), (error: unknown) => finish(error));
+        void result.then((value) => finish(undefined, value?.authResponse?.code ?? value?.code), (error: unknown) => finish(error));
       }
     } catch (error) {
       finish(error);

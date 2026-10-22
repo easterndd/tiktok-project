@@ -41,10 +41,12 @@ export function getLaunchId() {
 
 export async function startAppEntryAdSession(): Promise<AppEntryAdSession> {
   if (isDemoMode()) return { required: false };
+  const startedAt = performance.now();
   const session = await apiClient.post<AppEntryAdSession>('/app-entry-ad-sessions', {
     launchId: getLaunchId(),
     releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default'
   });
+  reportPerformance('ENTRY_AD_POLICY_RESPONSE', '/app-entry-ad-sessions', performance.now() - startedAt, { required: session.required, mode: session.mode ?? 'NONE' });
   if (session.required && session.placementId) {
     if (session.mode === 'INTERSTITIAL') prewarmInterstitialAd(session.placementId);
     else if (session.mode === 'REWARDED_GATED') prewarmRewardedAd(session.placementId);
@@ -150,11 +152,13 @@ export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_G
       reject(new Error(adErrorMessage(error)));
     };
     const timeout = adTimeout(onError);
+    const showStartedAt = performance.now();
     ad.onClose(onClose);
     ad.onError(onError);
     void runAdShow(() => ad.show(), async () => {
       if (settled) return;
       timeout.shown();
+      reportPerformance('ENTRY_AD_SHOW_ACCEPTED', '/native-ads/entry', performance.now() - showStartedAt, { adType, adIndex });
       // Overlap SHOWN acknowledgement with viewing. Completion still waits for
       // this exact impression to be recorded before asking the server to count it.
       shownAcknowledgements.set(key, createShownAcknowledgement(() => recordAppEntryAdEvent({

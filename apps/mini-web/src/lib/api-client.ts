@@ -16,6 +16,9 @@ function shouldMeasureRequest(path: string) {
     || /^\/app-entry-ad-sessions\/[^/]+\/complete$/.test(route)
     || route === '/ad-events'
     || route === '/episode-interstitial/config'
+    || /^\/albums\/[^/]+$/.test(route)
+    || /^\/albums\/[^/]+\/episodes$/.test(route)
+    || /^\/episodes\/[^/]+\/play$/.test(route)
     || /\/episodes\/[^/]+\/reward-session(?:\/[^/]+\/complete)?$/.test(route);
 }
 

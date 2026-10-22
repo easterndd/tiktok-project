@@ -15,7 +15,10 @@ export function prepareEpisodeInterstitial(placementId: string | null | undefine
 }
 
 export async function showEpisodeTransitionInterstitial(placementId: string | null | undefined): Promise<number | undefined> {
-  if (!placementId) return;
+  if (!placementId) {
+    reportDiagnostic({ kind: 'AD', phase: 'EPISODE_INTERSTITIAL_NO_PLACEMENT', message: 'No episode interstitial placement was supplied' });
+    return;
+  }
   transitionCount += 1;
   // Allow the first two episode transitions to play without interruption.
   if (transitionCount < 3 || transitionCount % 3 !== 0 || shownCount >= maxPerSession
@@ -23,7 +26,10 @@ export async function showEpisodeTransitionInterstitial(placementId: string | nu
     || rewardedEndedRecently(rewardedCooldownMs) || nativeAdActive()) return;
   let supported = false;
   try { supported = Boolean(window.TTMinis?.canIUse('createInterstitialAd')); } catch { /* Unsupported runtime. */ }
-  if (!supported) return;
+  if (!supported) {
+    reportDiagnostic({ kind: 'AD', phase: 'EPISODE_INTERSTITIAL_UNSUPPORTED', message: 'Interstitial ads are not available in this runtime' });
+    return;
+  }
   const releaseActivity = claimNativeAd('episode-interstitial');
   if (!releaseActivity) return;
   let ad: InterstitialAd;

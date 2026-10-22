@@ -148,7 +148,9 @@ async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; s
 }
 
 export async function unlockEpisodeByRewardedAd(episodeId: string): Promise<number | undefined> {
+  const sessionWaitStartedAt = performance.now();
   const session = await prepareRewardedUnlockSession(episodeId);
+  reportPerformance('REWARDED_UNLOCK_SESSION_READY', `/episodes/${episodeId}/reward-session`, performance.now() - sessionWaitStartedAt, { access: session.access });
   if (session.access === 'PLAYABLE') return undefined;
   if (!session.sessionId || !session.placementId) throw new Error('REWARDED_SESSION_UNAVAILABLE');
 
