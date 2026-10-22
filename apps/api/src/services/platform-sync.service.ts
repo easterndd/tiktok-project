@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import type { Env } from '../config/env';
 import {
@@ -25,6 +25,7 @@ type AlbumSnapshot = {
   albumId: string;
   albumInfo: TikTokAlbumInfoInput;
   episodes: Array<TikTokEpisodeInfoInput & { localEpisodeId: string }>;
+  retryOfJobId?: string;
 };
 
 type PlatformJobInput = {
@@ -170,6 +171,9 @@ export async function buildAlbumSnapshot(prisma: Db, albumId: string): Promise<A
     }
   });
   if (!album) throw Object.assign(new Error('剧目不存在。'), { statusCode: 404 });
+  if (typeof album.description !== 'string' || !album.description.trim()) {
+    throw workflowConflict('剧目缺少 TikTok 所需的剧情简介，请先编辑并保存简介。');
+  }
   if (!album.coverAsset?.providerImageId) throw workflowConflict('专辑封面尚未同步到 TikTok。');
   if (!album.releaseYear || !album.dramaType || tags(album.tagList).length < 1 || tags(album.tagList).length > 3) {
     throw workflowConflict('剧目缺少 TikTok 所需的年份、剧目类型或 1 至 3 个标签。');
@@ -246,7 +250,7 @@ export async function enqueuePlatformSyncJob(prisma: Db, input: PlatformJobInput
 }
 
 export async function enqueueAlbumVersionSync(prisma: Db, albumId: string, createdByAdminUserId?: string) {
-  const album = await prisma.album.findUnique({ where: { id: albumId }, select: { reviewStatus: true } });
+  const album = await prisma.album.findUnique({ where: { id: albumId }, select: { reviewStatus: true, tiktokAlbumId: true, tiktokVersion: true } });
   if (['REVIEWING', '1'].includes(album?.reviewStatus ?? '')) throw workflowConflict('当前版本正在审核，请等待审核结束后再同步新版本。');
   const snapshot = await buildAlbumSnapshot(prisma, albumId);
   const snapshotHash = hashSnapshot({ ...snapshot, episodes: snapshot.episodes.map(({ episode_id: _platformId, ...episode }) => episode) });
@@ -256,6 +260,30 @@ export async function enqueueAlbumVersionSync(prisma: Db, albumId: string, creat
     return active;
   }
   await requireReconciledConflict(prisma, albumId, 'ALBUM_VERSION');
+  const dedupeKey = `ALBUM_VERSION:${albumId}:${snapshotHash}`;
+  const previous = await prisma.platformSyncJob.findUnique({ where: { dedupeKey } });
+  if (previous?.status === 'CONFLICT') {
+    const completed = await prisma.platformSyncJob.findFirst({
+      where: { albumId, kind: 'ALBUM_VERSION', status: 'SUCCEEDED', snapshotHash },
+      orderBy: { completedAt: 'desc' }
+    });
+    if (completed) return completed;
+    const reconciliation = await prisma.platformSyncJob.findFirst({
+      where: { albumId, kind: 'RECONCILE', status: 'SUCCEEDED', completedAt: { gt: previous.completedAt ?? previous.createdAt } },
+      orderBy: { completedAt: 'desc' }
+    });
+    const response = record(reconciliation?.providerResponse);
+    if (!reconciliation || record(reconciliation.snapshotJson).platformAlbumId !== album?.tiktokAlbumId
+      || album?.tiktokVersion || numberValue(response.current_version)
+      || !Array.isArray(response.album_version_list) || response.album_version_list.length) {
+      throw workflowConflict('上次同步版本结果未知；对账未确认当前 TikTok 剧目无版本，请重新对账后核实平台状态。');
+    }
+    return enqueuePlatformSyncJob(prisma, {
+      kind: 'ALBUM_VERSION', targetId: albumId, albumId, createdByAdminUserId,
+      snapshotHash, snapshotJson: { ...snapshot, retryOfJobId: previous.id },
+      dedupeKey: `${dedupeKey}:retry:${randomUUID()}`
+    });
+  }
   return enqueuePlatformSyncJob(prisma, {
     kind: 'ALBUM_VERSION',
     targetId: albumId,
@@ -263,7 +291,7 @@ export async function enqueueAlbumVersionSync(prisma: Db, albumId: string, creat
     createdByAdminUserId,
     snapshotHash,
     snapshotJson: snapshot,
-    dedupeKey: `ALBUM_VERSION:${albumId}:${snapshotHash}`
+    dedupeKey
   });
 }
 
@@ -480,6 +508,10 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
     try {
       const queried = await api.queryAlbum({ albumId: platformAlbumId });
       const current = numberValue(queried.data.current_version);
+      const versions = record(queried.data).album_version_list;
+      if (snapshot.retryOfJobId && (current || (Array.isArray(versions) && versions.length))) {
+        throw workflowConflict('重试前 TikTok 已出现版本，已停止重复同步；请先对账确认版本和分集。');
+      }
       if (current) expectedVersion = current;
     } catch (error) {
       if (!isTikTokAlbumNotFound(error)) throw error;

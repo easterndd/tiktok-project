@@ -12,12 +12,14 @@ const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
 
 function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
+  const placements = miniAppAdConfig(app.config);
+  const mode = placements.appEntryPlacementId ? 'INTERSTITIAL' as const : 'REWARDED_GATED' as const;
   return {
     id: releaseId === 'default' ? policyId : `release:${releaseId}`,
     releaseId,
     enabled: false,
-    mode: 'INTERSTITIAL' as const,
-    placementId: miniAppAdConfig(app.config).appEntryPlacementId,
+    mode,
+    placementId: mode === 'INTERSTITIAL' ? placements.appEntryPlacementId : placements.rewardedPlacementId,
     requiredCount: 1,
     countMode: 'COMPLETED' as const,
     onUnavailable: 'ALLOW' as const,
@@ -52,7 +54,17 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
     const { launchId, releaseId } = startInput.parse(request.body);
-    const policy = await readAppEntryAdPolicy(app, releaseId);
+    const saved = await app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } });
+    let policy = saved ?? disabledPolicy(app, releaseId);
+    if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
+      try {
+        policy = await app.prisma.appEntryAdPolicy.create({ data: { ...disabledPolicy(app, releaseId), firstSeenAt: new Date() } });
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+        policy = await readAppEntryAdPolicy(app, releaseId);
+      }
+    }
+    if (saved && !saved.firstSeenAt) await app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } });
     if (!policy.enabled) return { required: false as const };
     const now = new Date();
 
@@ -110,12 +122,9 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       if (completion) {
         return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: session.completedCount < session.requiredCount, retryCurrent: false };
       }
-      if (session.status !== 'ACTIVE' || session.expiresAt <= new Date()) return null;
-
-      const adIndex = session.completedCount + 1;
       if (!isEnded && session.countMode === 'COMPLETED') {
         const closed = await tx.adEvent.findFirst({
-          where: { userId: request.user.sub, clientEventId, scope: 'APP_ENTRY', eventType: 'CLOSED_INCOMPLETE', appEntrySessionId: sessionId, adIndex, adType: 'REWARDED', placementId: session.placementId },
+          where: { userId: request.user.sub, clientEventId, scope: 'APP_ENTRY', eventType: 'CLOSED_INCOMPLETE', appEntrySessionId: sessionId, adType: 'REWARDED', placementId: session.placementId },
           select: { id: true }
         });
         if (closed) return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: true, retryCurrent: true };
@@ -127,13 +136,19 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
           scope: 'APP_ENTRY',
           eventType: 'SHOWN',
           appEntrySessionId: sessionId,
-          adIndex,
           adType: session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED',
           placementId: session.placementId
         },
-        select: { id: true }
+        select: { id: true, adIndex: true }
       });
       if (!shown) return null;
+      const adIndex = shown.adIndex;
+      if (adIndex == null) return null;
+      const indexCompletion = await tx.appEntryAdCompletion.findUnique({ where: { sessionId_adIndex: { sessionId, adIndex } } });
+      if (indexCompletion) {
+        return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: session.completedCount < session.requiredCount, retryCurrent: false };
+      }
+      if (session.status !== 'ACTIVE' || session.expiresAt <= new Date() || adIndex !== session.completedCount + 1) return null;
       if (!isEnded && session.countMode === 'COMPLETED') {
         await tx.adEvent.update({ where: { id: shown.id }, data: { eventType: 'CLOSED_INCOMPLETE' } });
         return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: true, retryCurrent: true };
@@ -146,16 +161,17 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       await tx.appEntryAdCompletion.create({ data: { sessionId, clientEventId, adIndex, adEventId: event.id } });
       const completedCount = adIndex;
       const status = completedCount >= session.requiredCount ? 'COMPLETED' as const : 'ACTIVE' as const;
-      await tx.appEntryAdSession.update({ where: { id: sessionId }, data: { completedCount, status } });
+      await tx.appEntryAdSession.update({ where: { id: sessionId }, data: { completedCount, status, expiresAt: new Date(Date.now() + sessionTtlMs) } });
       return { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE', retryCurrent: false };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     let result: Awaited<ReturnType<typeof transact>> | undefined;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 5; attempt++) {
       try {
         result = await transact();
         break;
       } catch (error) {
-        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt === 2) throw error;
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt === 4) throw error;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(200, 25 * 2 ** attempt)));
       }
     }
 

@@ -23,6 +23,8 @@ const env = loadEnv({
 });
 
 function databaseFor(name: string) {
+  const entryPolicies = new Map<string, any>();
+  const codeReleases = new Map<string, any>();
   const album = {
     id: name,
     title: name,
@@ -37,13 +39,26 @@ function databaseFor(name: string) {
     genres: []
   };
   return {
+    miniAppCodeRelease: {
+      findMany: async ({ where }: any) => [...codeReleases.values()].filter((item) => item.miniAppKey === where.miniAppKey),
+      upsert: async ({ where, create, update }: any) => {
+        const key = `${where.miniAppKey_releaseId.miniAppKey}:${where.miniAppKey_releaseId.releaseId}`;
+        const item = { ...(codeReleases.get(key) ?? create), ...update };
+        codeReleases.set(key, item);
+        return item;
+      }
+    },
     miniAppAlbumAuthorization: { findMany: async () => [], findFirst: async () => null },
     album: {
       findMany: async () => [album],
       update: async (args: { data: Record<string, unknown> }) => Object.assign(album, args.data)
     },
     adminUser: { findUnique: async () => ({ role: 'OWNER', status: 'ACTIVE', tokenVersion: 0 }) },
-    appEntryAdPolicy: { findUnique: async () => null },
+    appEntryAdPolicy: {
+      findUnique: async ({ where }: any) => entryPolicies.get(where.releaseId) ?? null,
+      findMany: async () => [...entryPolicies.values()],
+      create: async ({ data }: any) => { entryPolicies.set(data.releaseId, data); return data; }
+    },
     auditLog: { create: async () => ({ id: 'audit-1' }) },
     coverAsset: { findUnique: async () => null },
     watchProgress: { findMany: async () => [] }
@@ -86,7 +101,19 @@ it('uses independent ad placement defaults for each mini app admin context', asy
     assert.equal(mainEntry.statusCode, 200);
     assert.equal(taletvEntry.statusCode, 200);
     assert.equal(mainEntry.json().placementId, 'main-entry-placement');
-    assert.equal(taletvEntry.json().placementId, '');
+    assert.equal(taletvEntry.json().mode, 'REWARDED_GATED');
+    assert.equal(taletvEntry.json().placementId, 'ad7688599028879722512');
+
+    const mainUserToken = await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'main' });
+    const taletvUserToken = await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'taletv' });
+    await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: { authorization: `Bearer ${mainUserToken}` },
+      payload: { launchId: '8be2272a-32fd-4f65-b3f5-9414b5d5d943', releaseId: 'main-review-v7' } });
+    await app.inject({ method: 'POST', url: '/api/taletv/v1/app-entry-ad-sessions', headers: { authorization: `Bearer ${taletvUserToken}` },
+      payload: { launchId: '83ef9af1-5ab5-48b9-a365-295d8f9773c2', releaseId: 'taletv-v6' } });
+    const mainVersions = await app.inject({ url: '/api/v1/admin/app-entry-ad-policies', headers: { authorization: `Bearer ${mainAdminToken}` } });
+    const taletvVersions = await app.inject({ url: '/api/taletv/v1/admin/app-entry-ad-policies', headers: { authorization: `Bearer ${taletvAdminToken}` } });
+    assert.deepEqual(mainVersions.json().items.map((item: { releaseId: string }) => item.releaseId), ['main-review-v7', 'default']);
+    assert.deepEqual(taletvVersions.json().items.map((item: { releaseId: string }) => item.releaseId), ['taletv-v6', 'default']);
 
     const update = await app.inject({
       method: 'PATCH',
@@ -207,11 +234,13 @@ it('registers all new Mini routes with separate databases and app-bound admin to
 });
 
 it('keeps mini apps in the configured organization groups and rejects cross-organization sharing', () => {
-  assert.deepEqual(Object.values(miniAppOrganizations).map((group) => group.miniApps.length), [1, 20, 10]);
+  assert.deepEqual(Object.values(miniAppOrganizations).map((group) => group.miniApps.length), [1, 20, 10, 10]);
   assert.deepEqual(Object.values(miniAppOrganizations).flatMap((group) => group.miniApps).sort(), [...miniAppKeys].sort());
   assert.equal(miniAppOrganization('main'), 'quickreels');
   assert.equal(miniAppOrganization('storyland'), miniAppOrganization('taletv'));
   assert.equal(miniAppOrganization('crownrush'), miniAppOrganization('elitedrama'));
+  assert.equal(miniAppOrganization('lucidreel'), miniAppOrganization('lumishort'));
+  assert.equal(sameMiniAppOrganization('lucidreel', 'crownrush'), false);
   assert.equal(sameMiniAppOrganization('dramacloud', 'cinereels'), true);
   assert.equal(sameMiniAppOrganization('taletv', 'crownrush'), false);
   assert.throws(() => assertSameMiniAppOrganization('main', ['taletv']), /同一组织/);

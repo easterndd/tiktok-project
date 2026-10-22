@@ -1,5 +1,6 @@
 import { ApiError, apiClient } from '../../lib/api-client';
 import { isDemoMode } from '../../lib/storage';
+import { reportDiagnostic } from '../../lib/diagnostics';
 
 const clientEventId = () => typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `client-${Date.now()}`;
 
@@ -41,7 +42,9 @@ async function recordAdEvent(input: { clientEventId: string; eventType: 'REQUEST
 async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; sessionId: string; adIndex: number; rewardEventId: string }) {
   const { adUnitId, episodeId, sessionId, adIndex, rewardEventId } = input;
   await recordAdEvent({ clientEventId: `${rewardEventId}:requested`, eventType: 'REQUESTED', placementId: adUnitId, episodeId, sessionId, adIndex });
-  const ad = window.TTMinis!.createRewardedVideoAd({ adUnitId });
+  let ad;
+  try { ad = window.TTMinis!.createRewardedVideoAd({ adUnitId }); }
+  catch (error) { reportDiagnostic({ kind: 'AD', phase: 'REWARDED_CREATE', message: error instanceof Error ? error.message : String(error), path: `/episodes/${episodeId}` }); throw error; }
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     const cleanup = () => { ad.offClose(onClose); ad.offError(onError); };
@@ -65,6 +68,7 @@ async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; s
     };
     const onError = (error: unknown) => {
       const errorCode = error instanceof Error ? error.message : 'AD_SHOW_FAILED';
+      reportDiagnostic({ kind: 'AD', phase: 'REWARDED_SHOW', message: errorCode, path: `/episodes/${episodeId}` });
       void recordAdEvent({ clientEventId: `${rewardEventId}:failed`, eventType: 'FAILED', placementId: adUnitId, episodeId, sessionId, adIndex, errorCode });
       fail(error);
     };
@@ -89,7 +93,10 @@ export async function unlockEpisodeByRewardedAd(episodeId: string) {
     }
     return;
   }
-  if (!window.TTMinis?.canIUse('createRewardedVideoAd')) throw new Error('REWARDED_AD_UNAVAILABLE');
+  if (!window.TTMinis?.canIUse('createRewardedVideoAd')) {
+    reportDiagnostic({ kind: 'AD', phase: 'REWARDED_UNAVAILABLE', message: 'REWARDED_AD_UNAVAILABLE', path: `/episodes/${episodeId}` });
+    throw new Error('REWARDED_AD_UNAVAILABLE');
+  }
 
   let shouldContinue = true;
   let adIndex = 1;

@@ -3,6 +3,7 @@ import { completeAppEntryAd, showAppEntryAd, startAppEntryAdSession } from '../f
 import { runEntryAdFlow } from '../features/ads/entry-ad-flow';
 import { ensureAnonymousSession } from '../features/auth/anonymous-session';
 import { appName } from '../lib/app-brand';
+import { reportDiagnostic } from '../lib/diagnostics';
 import styles from './EntryAdGate.module.css';
 
 type GateState = 'LOADING' | 'READY';
@@ -27,6 +28,10 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const controller = new AbortController();
+    const startedAt = Date.now();
+    const startupTimer = window.setTimeout(() => {
+      if (!controller.signal.aborted) reportDiagnostic({ kind: 'STARTUP', phase: 'ENTRY_GATE_SLOW', message: 'Entry gate has not completed after 15 seconds', durationMs: Date.now() - startedAt });
+    }, 15_000);
     const wait = (ms: number) => new Promise<void>((resolve) => {
       if (controller.signal.aborted) return resolve();
       const timer = window.setTimeout(done, ms);
@@ -48,12 +53,16 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
           if (controller.signal.aborted) return;
           if (session.required) {
             step = 'ENTRY_AD_PLAYBACK';
-            await runEntryAdFlow(session, { show: showAppEntryAd, complete: completeAppEntryAd, wait, isActive: () => !controller.signal.aborted, onError: (cause) => console.warn('[EntryAdGate] entry ad unavailable; retrying', cause) });
+            await runEntryAdFlow(session, { show: showAppEntryAd, complete: completeAppEntryAd, wait, isActive: () => !controller.signal.aborted, onError: (cause) => {
+              reportDiagnostic({ kind: 'AD', phase: 'ENTRY_AD_PLAYBACK', message: cause instanceof Error ? cause.message : String(cause) });
+              console.warn('[EntryAdGate] entry ad unavailable; retrying', cause);
+            } });
           }
-          if (!controller.signal.aborted) setState('READY');
+          if (!controller.signal.aborted) { window.clearTimeout(startupTimer); setState('READY'); }
           return;
         } catch (cause) {
           if (controller.signal.aborted) return;
+          reportDiagnostic({ kind: step === 'ENTRY_AD_PLAYBACK' ? 'AD' : 'STARTUP', phase: step, message: cause instanceof Error ? cause.message : String(cause), durationMs: Date.now() - startedAt });
           console.error(`[EntryAdGate] ${step} failed`, cause);
           console.warn(formatGateError(step, cause));
           await wait(2000);
@@ -61,7 +70,7 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
       }
     };
     void run();
-    return () => controller.abort();
+    return () => { controller.abort(); window.clearTimeout(startupTimer); };
   }, []);
   if (state === 'READY') return <>{children}</>;
   return <main className={styles.gate} aria-busy="true"><section className={styles.surface} aria-live="polite">

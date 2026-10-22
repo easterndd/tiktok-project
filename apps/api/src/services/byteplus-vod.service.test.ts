@@ -72,7 +72,7 @@ describe('BytePlusVodService', () => {
     assert.match(decoded.GetPlayInfoToken, /(?:^|&)Ssl=1(?:&|$)/);
   });
 
-  it('uses the official SDK UploadMedia path when available', async () => {
+  it('uses HTTPS transfer even when the SDK exposes its unbounded HTTP uploader', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'byteplus-sdk-upload-'));
     try {
       const filePath = join(directory, 'episode.mp4');
@@ -80,22 +80,39 @@ describe('BytePlusVodService', () => {
       let request: Record<string, unknown> | undefined;
       const service = new BytePlusVodService(env, {
         vodService: {
-          UploadMedia: async (input: Record<string, unknown>) => {
+          UploadMedia: async () => { throw new Error('Must not use unbounded HTTP upload'); },
+          ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'video.mp4', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
+          CommitUploadInfo: async (input: Record<string, unknown>) => {
             request = input;
             return { Result: { Data: { Vid: 'vid-sdk', PosterUri: 'cover', SourceInfo: { Duration: 12 } } } };
           }
-        } as never
+        } as never,
+        uploadFetch: async (url, init) => {
+          assert.equal(new URL(String(url)).protocol, 'https:');
+          assert.ok(init?.signal);
+          assert.equal(Buffer.from(init?.body as Uint8Array).toString(), 'video-data');
+          return new Response('', { status: 200 });
+        }
       });
       const result = await service.uploadLocalVideo({ filePath, fileName: '第1集.mp4', title: 'TaleTV - 第1集', spaceName: 'space', byteplusAccountId: 'account', tags: ['qr-scope-test', 'qr-upload-job'] });
       assert.equal(result.byteplusVid, 'vid-sdk');
       assert.equal(request?.SpaceName, 'space');
-      assert.equal(request?.FilePath, filePath);
-      assert.match(String(request?.FileName), /^1-[a-f0-9-]+\.mp4$/);
+      assert.equal(request?.SessionKey, 'session');
       assert.equal(JSON.parse(String(request?.Functions))[1].Input.Title, 'TaleTV - 第1集');
       assert.equal(JSON.parse(String(request?.Functions))[1].Input.Tags, 'qr-scope-test,qr-upload-job');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it('rejects tags longer than the BytePlus limit before uploading', async () => {
+    let uploads = 0;
+    const service = new BytePlusVodService(env, { vodService: {
+      UploadMedia: async () => { uploads++; return { Result: { Data: { Vid: 'unexpected' } } }; }
+    } as never });
+    await assert.rejects(() => service.uploadLocalVideo({ filePath: 'unused.mp4', fileName: 'episode.mp4',
+      title: 'Episode 1', spaceName: 'space', byteplusAccountId: 'account', tags: ['a'.repeat(37)] }), /36 字节/);
+    assert.equal(uploads, 0);
   });
 
   it('uploads a local file with a unique object name and a visible media title', async () => {
@@ -160,18 +177,108 @@ describe('BytePlusVodService', () => {
         }
       });
       await service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: '第2集', spaceName: 'space', byteplusAccountId: 'account' });
-      assert.equal(requests.length, 4);
+      assert.equal(requests.length, 5);
       for (const request of requests) {
         assert.equal(request.headers.get('Content-Type'), null);
         assert.equal(request.headers.get('Accept'), null);
       }
       assert.equal(requests[0].headers.get('X-Storage-Mode'), 'gateway');
-      assert.match(requests[1].query, /partNumber=1/);
-      assert.match(requests[2].query, /partNumber=2/);
-      assert.match(String(requests[3].body), /^0:[a-f0-9]{8},1:[a-f0-9]{8}$/);
+      assert.deepEqual(requests.slice(1, -1).map((request) => new URLSearchParams(request.query).get('partNumber')).sort(), ['1', '2', '3']);
+      assert.match(String(requests.at(-1)?.body), /^0:[a-f0-9]{8},1:[a-f0-9]{8},2:[a-f0-9]{8}$/);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it('retries a failed HTTPS part without restarting successful parts or committing early', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'byteplus-part-retry-'));
+    try {
+      const filePath = join(directory, 'episode.mp4');
+      await writeFile(filePath, Buffer.alloc(20 * 1024 * 1024 + 1, 1));
+      const parts: string[] = [];
+      let merged = false;
+      let commits = 0;
+      const service = new BytePlusVodService(env, {
+        vodService: {
+          ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'object', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
+          CommitUploadInfo: async () => {
+            assert.equal(merged, true);
+            commits++;
+            return { Result: { Data: { Vid: 'vid-retried' } } };
+          }
+        } as never,
+        uploadFetch: async (url, init) => {
+          const target = new URL(String(url));
+          assert.equal(target.protocol, 'https:');
+          assert.ok(init?.signal);
+          if (target.search === '?uploads') return Response.json({ payload: { uploadID: 'upload-1' } });
+          const part = target.searchParams.get('partNumber');
+          if (part) {
+            parts.push(part);
+            if (part === '1' && parts.filter((item) => item === '1').length === 1) return new Response('temporarily unavailable', { status: 503 });
+          } else merged = true;
+          return new Response('', { status: 200 });
+        }
+      });
+      assert.equal((await service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: 'Episode', spaceName: 'space', byteplusAccountId: 'account' })).byteplusVid, 'vid-retried');
+      assert.deepEqual(parts.sort(), ['1', '1', '2', '3']);
+      assert.equal(commits, 1);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('limits multipart transfers to two in flight and merges in part-number order', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'byteplus-two-parts-'));
+    try {
+      const filePath = join(directory, 'episode.mp4');
+      await writeFile(filePath, Buffer.alloc(20 * 1024 * 1024 + 1, 1));
+      const releases = new Map<string, () => void>();
+      const started: string[] = [];
+      let peak = 0;
+      let active = 0;
+      let merged = false;
+      let firstTwo!: () => void;
+      let third!: () => void;
+      const firstTwoStarted = new Promise<void>((resolve) => { firstTwo = resolve; });
+      const thirdStarted = new Promise<void>((resolve) => { third = resolve; });
+      const service = new BytePlusVodService(env, {
+        vodService: {
+          ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'object', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
+          CommitUploadInfo: async () => {
+            assert.equal(merged, true);
+            return { Result: { Data: { Vid: 'vid-parallel' } } };
+          }
+        } as never,
+        uploadFetch: async (url, init) => {
+          const query = new URL(String(url)).searchParams;
+          if (query.has('uploads')) return Response.json({ payload: { uploadID: 'upload-1' } });
+          const part = query.get('partNumber');
+          if (!part) {
+            assert.equal(active, 0);
+            assert.match(String(init?.body), /^0:([a-f0-9]{8}),1:\1,2:[a-f0-9]{8}$/);
+            merged = true;
+            return new Response('', { status: 200 });
+          }
+          started.push(part);
+          peak = Math.max(peak, ++active);
+          if (started.length === 2) firstTwo();
+          if (started.length === 3) third();
+          await new Promise<void>((resolve) => { releases.set(part, resolve); });
+          active--;
+          return new Response('', { status: 200 });
+        }
+      });
+      const upload = service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: 'Episode', spaceName: 'space', byteplusAccountId: 'account' });
+      await firstTwoStarted;
+      assert.deepEqual(started, ['1', '2']);
+      assert.equal(peak, 2);
+      releases.get('2')!();
+      await thirdStarted;
+      assert.deepEqual(started, ['1', '2', '3']);
+      assert.equal(peak, 2);
+      releases.get('1')!();
+      releases.get('3')!();
+      assert.equal((await upload).byteplusVid, 'vid-parallel');
+    } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
   it('does not retry a permanent upload host rejection or commit an incomplete file', async () => {
@@ -238,21 +345,49 @@ describe('BytePlusVodService', () => {
       const filePath = join(directory, 'episode.mp4');
       await writeFile(filePath, Buffer.from('video-data'));
       const response = { ResponseMetadata: { RequestId: '202610120818195FA476160CF69C4B0CE4', Action: 'CommitUploadInfo',
-        Error: { Code: 'InvalidParameter.InvalidParamError', Message: 'invalid Functions.Tags Authorization=private-value' } } };
+        Error: { Code: 'InvalidParameter.InvalidParamError', Message: 'InvalidParameter.InvalidParamError: invalid Functions.Tags Authorization=private-value' } } };
       const service = new BytePlusVodService(env, { vodService: {
-        UploadMedia: async () => { throw new Error(`Upload Media Error: Error: ${JSON.stringify(response)}`); }
-      } as never });
+        ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'video.mp4', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
+        CommitUploadInfo: async () => { throw new Error(JSON.stringify(response)); }
+      } as never, uploadFetch: async () => new Response('', { status: 200 }) });
       await assert.rejects(
         () => service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: 'Episode 1', spaceName: 'space', byteplusAccountId: 'account' }),
         (error: unknown) => {
           assert.equal((error as { retryable?: boolean }).retryable, false);
           assert.equal((error as { uncertain?: boolean }).uncertain, false);
           assert.match((error as Error).message, /InvalidParameter\.InvalidParamError: invalid Functions\.Tags/);
+          assert.doesNotMatch((error as Error).message, /Error: InvalidParameter\.InvalidParamError/);
           assert.match((error as Error).message, /202610120818195FA476160CF69C4B0CE4/);
           assert.doesNotMatch((error as Error).message, /private-value/);
           return true;
         }
       );
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('distinguishes legacy SDK transfer failures from an unknown commit outcome', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'byteplus-sdk-failure-'));
+    try {
+      const filePath = join(directory, 'episode.mp4');
+      await writeFile(filePath, 'video-data');
+      for (const [message, retryable, uncertain] of [
+        ['init upload error:AxiosError: socket hang up', true, false],
+        ['upload part error:AxiosError: Request failed with status code 503', true, false],
+        ['upload merge part error:AxiosError: Request failed with status code 500', true, false],
+        ['upload part error:AxiosError: Request failed with status code 400', false, false],
+        ['AxiosError: Request failed with status code 503', true, true]
+      ] as const) {
+        const service = new BytePlusVodService(env, { vodService: {
+          ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'video.mp4', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
+          CommitUploadInfo: async () => { throw new Error(`Upload Media Error: Error: ${message}`); }
+        } as never, uploadFetch: async () => new Response('', { status: 200 }) });
+        await assert.rejects(() => service.uploadLocalVideo({ filePath, fileName: 'episode.mp4',
+          title: 'Episode 1', spaceName: 'space', byteplusAccountId: 'account' }), (error: unknown) => {
+          assert.equal((error as { retryable: boolean }).retryable, retryable, message);
+          assert.equal((error as { uncertain: boolean }).uncertain, uncertain, message);
+          return true;
+        });
+      }
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
@@ -264,8 +399,9 @@ describe('BytePlusVodService', () => {
       const response = { ResponseMetadata: { Action: 'CommitUploadInfo',
         Error: { Code: 'ServiceUnavailable', Message: 'Try again later' } } };
       const service = new BytePlusVodService(env, { vodService: {
-        UploadMedia: async () => { throw new Error(`Upload Media Error: Error: ${JSON.stringify(response)}`); }
-      } as never });
+        ApplyUploadInfo: async () => ({ Result: { Data: { UploadAddress: { SessionKey: 'session', StoreInfos: [{ StoreUri: 'video.mp4', Auth: 'secret' }], UploadHosts: ['upload.example.com'] } } } }),
+        CommitUploadInfo: async () => response
+      } as never, uploadFetch: async () => new Response('', { status: 200 }) });
       await assert.rejects(
         () => service.uploadLocalVideo({ filePath, fileName: 'episode.mp4', title: 'Episode 1', spaceName: 'space', byteplusAccountId: 'account' }),
         (error: unknown) => {

@@ -7,7 +7,8 @@ const apps = {
   lucidreel: 'LucidReel', astraclip: 'AstraClip', lumoreel: 'LumoReel',
   orbitplay: 'OrbitPlay', zenclip: 'ZenClip', auraclip: 'AuraClip',
   fluxplay: 'FluxPlay', driftreel: 'DriftReel', novaclip: 'NovaClip',
-  lumishort: 'LumiShort'
+  lumishort: 'LumiShort', sonicreel: 'SonicReel', harborplay: 'HarborPlay',
+  dazzleshort: 'DazzleShort', fableclip: 'FableClip', emberreel: 'EmberReel'
 };
 const legalBase = 'https://xuyins.com/static/newbeat';
 const operator = 'NEWBEAT DIGITAL MARKETING LIMITED';
@@ -18,7 +19,7 @@ describe('NEWBEAT Mini legal pages', () => {
     it(`${name} uses NEWBEAT policies in the Mini and Portal`, async () => {
       const config = JSON.parse(await readFile(new URL(`../../${key}/minis.config.json`, import.meta.url), 'utf8'));
       assert.equal(config.dev.name, name);
-      assert.match(config.appId, /^\d+$/);
+      assert.match(config.appId, /^(?:\d+|REPLACE_WITH_[A-Z0-9_]+)$/);
       assert.equal(config.dev.ppLink, `${legalBase}/privacy-policy.html`);
       assert.equal(config.dev.tosLink, `${legalBase}/terms-of-service.html`);
       assert.equal(legalContactForApp(key), contact);

@@ -25,10 +25,11 @@ const newMiniAppNames = {
   dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama',
   lucidreel: 'LucidReel', astraclip: 'AstraClip', lumoreel: 'LumoReel', orbitplay: 'OrbitPlay',
   zenclip: 'ZenClip', auraclip: 'AuraClip', fluxplay: 'FluxPlay', driftreel: 'DriftReel',
-  novaclip: 'NovaClip', lumishort: 'LumiShort'
+  novaclip: 'NovaClip', lumishort: 'LumiShort', sonicreel: 'SonicReel',
+  harborplay: 'HarborPlay', dazzleshort: 'DazzleShort', fableclip: 'FableClip', emberreel: 'EmberReel'
 } as const;
 export const breezeApps = ['crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama'] as const;
-export const newbeatApps = ['lucidreel', 'astraclip', 'lumoreel', 'orbitplay', 'zenclip', 'auraclip', 'fluxplay', 'driftreel', 'novaclip', 'lumishort'] as const;
+export const newbeatApps = ['lucidreel', 'astraclip', 'lumoreel', 'orbitplay', 'zenclip', 'auraclip', 'fluxplay', 'driftreel', 'novaclip', 'lumishort', 'sonicreel', 'harborplay', 'dazzleshort', 'fableclip', 'emberreel'] as const;
 type LegalApp = 'quickreels' | 'taletv' | keyof typeof newMiniAppNames;
 
 export function legalContactForApp(app: LegalApp) {
