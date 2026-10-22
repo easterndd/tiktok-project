@@ -223,6 +223,7 @@ const viewerSearchInput = z.object({ search: z.string().trim().max(128).default(
 const viewerAdPreferenceInput = z.object({ appEntryAdExempt: z.boolean() });
 const viewerAdBatchInput = z.object({ userIds: z.array(z.string().min(1).max(128)).min(1).max(100), appEntryAdExempt: z.boolean() }).refine((input) => new Set(input.userIds).size === input.userIds.length);
 const sharedViewerQueryInput = viewerSearchInput.extend({ miniAppKey: z.enum(miniAppKeys) });
+const sharedViewerLaunchQueryInput = z.object({ miniAppKey: z.enum(miniAppKeys), limit: z.coerce.number().int().min(1).max(100).default(30), offset: z.coerce.number().int().min(0).max(1_000_000).default(0) });
 const sharedViewerAdBatchInput = viewerAdBatchInput.extend({ miniAppKey: z.enum(miniAppKeys) });
 const viewerParams = z.object({ userId: z.string().min(1).max(128) });
 const ipSearchInput = z.object({ search: z.string().trim().max(45).default(''), miniAppKey: z.enum(miniAppKeys).optional(), limit: z.coerce.number().int().min(1).max(100).default(30) });
@@ -497,8 +498,12 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       orderBy: { createdAt: 'desc' }, take: limit,
       select: { id: true, identityType: true, tiktokOpenId: true, appEntryAdExempt: true, createdAt: true, appSessions: { orderBy: { lastSeenAt: 'desc' }, take: 1, select: { lastSeenAt: true, countryCode: true } } }
     });
-    const ips = await recentViewerIps(app.sharedPrisma, app.config.MINI_APP_KEY, items.map((item) => item.id));
-    return { items: items.map(({ appSessions, ...viewer }) => ({ ...viewer, lastSeenAt: appSessions[0]?.lastSeenAt ?? null, countryCode: appSessions[0]?.countryCode ?? null, ipAddress: ips.get(viewer.id) || null })) };
+    const [ips, launchEvents] = await Promise.all([
+      recentViewerIps(app.sharedPrisma, app.config.MINI_APP_KEY, items.map((item) => item.id)),
+      app.prisma.audienceActivityEvent.findMany({ where: { userId: { in: items.map((item) => item.id) }, eventType: 'APP_LAUNCH_CONTEXT' }, orderBy: { createdAt: 'desc' }, distinct: ['userId'], take: items.length, select: { userId: true, metadata: true, createdAt: true } })
+    ]);
+    const launchByUser = new Map(launchEvents.map((event) => [event.userId, event]));
+    return { items: items.map(({ appSessions, ...viewer }) => ({ ...viewer, lastSeenAt: appSessions[0]?.lastSeenAt ?? null, countryCode: appSessions[0]?.countryCode ?? null, ipAddress: ips.get(viewer.id) || null, launchContext: launchByUser.get(viewer.id) ?? null })) };
   });
   app.get('/admin/shared/viewers', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
     const { miniAppKey, search, ipAddress, limit } = sharedViewerQueryInput.parse(request.query);
@@ -518,8 +523,27 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       orderBy: { createdAt: 'desc' }, take: limit,
       select: { id: true, identityType: true, tiktokOpenId: true, appEntryAdExempt: true, createdAt: true, appSessions: { orderBy: { lastSeenAt: 'desc' }, take: 1, select: { lastSeenAt: true, countryCode: true } } }
     });
-    const ips = await recentViewerIps(app.sharedPrisma, miniAppKey, items.map((item) => item.id));
-    return { items: items.map(({ appSessions, ...viewer }) => ({ ...viewer, miniAppKey, lastSeenAt: appSessions[0]?.lastSeenAt ?? null, countryCode: appSessions[0]?.countryCode ?? null, ipAddress: ips.get(viewer.id) || null })) };
+    const [ips, launchEvents] = await Promise.all([
+      recentViewerIps(app.sharedPrisma, miniAppKey, items.map((item) => item.id)),
+      targetDb.audienceActivityEvent.findMany({ where: { userId: { in: items.map((item) => item.id) }, eventType: 'APP_LAUNCH_CONTEXT' }, orderBy: { createdAt: 'desc' }, distinct: ['userId'], take: items.length, select: { userId: true, metadata: true, createdAt: true } })
+    ]);
+    const launchByUser = new Map(launchEvents.map((event) => [event.userId, event]));
+    return { items: items.map(({ appSessions, ...viewer }) => ({ ...viewer, miniAppKey, lastSeenAt: appSessions[0]?.lastSeenAt ?? null, countryCode: appSessions[0]?.countryCode ?? null, ipAddress: ips.get(viewer.id) || null, launchContext: launchByUser.get(viewer.id) ?? null })) };
+  });
+  app.get('/admin/shared/viewers/:userId/launches', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
+    const { userId } = viewerParams.parse(request.params);
+    const { miniAppKey, limit, offset } = sharedViewerLaunchQueryInput.parse(request.query);
+    assertSameMiniAppOrganization(app.config.MINI_APP_KEY, [miniAppKey]);
+    const authorizedAdminIds = await playbackAdminIds(app, request, [miniAppKey]);
+    const targetDb = app.miniAppPrisma[miniAppKey];
+    if (!authorizedAdminIds[miniAppKey] || !targetDb) return reply.code(403).send({ error: { code: 'TARGET_ADMIN_REQUIRED', message: '请先在小程序切换器中登录目标小程序。', requestId: request.id } });
+    const viewer = await targetDb.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!viewer) return reply.code(404).send({ error: { code: 'VIEWER_NOT_FOUND', message: '用户不存在。', requestId: request.id } });
+    const events = await targetDb.audienceActivityEvent.findMany({
+      where: { userId, eventType: 'APP_LAUNCH_CONTEXT' }, orderBy: { createdAt: 'desc' },
+      skip: offset, take: limit + 1, select: { id: true, createdAt: true, metadata: true }
+    });
+    return { items: events.slice(0, limit), hasMore: events.length > limit };
   });
   app.patch('/admin/shared/viewers/app-entry-ad/batch', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
     const input = sharedViewerAdBatchInput.parse(request.body);

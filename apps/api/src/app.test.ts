@@ -94,6 +94,7 @@ async function createPrismaStub() {
     entrySessions: new Map<string, any>(),
     entryCompletions: new Map<string, any>(),
     appSessions: new Map<string, any>(),
+    activityEvents: new Map<string, any>(),
     sharedIps: new Map<string, any>(),
     sharedVisits: new Map<string, any>(),
     sharedExemptions: new Map<string, any>(),
@@ -214,6 +215,24 @@ async function createPrismaStub() {
       create: async () => { state.shareCount += 1; return { id: `share-${state.shareCount}` }; }
     },
     searchEvent: { create: async () => ({ id: 'search-1' }), count: async () => 0 },
+    audienceActivityEvent: {
+      findFirst: async ({ where }: any) => [...state.activityEvents.values()].find((event) =>
+        event.userId === where.userId && event.eventType === where.eventType
+        && event.metadata?.entryId === where.metadata?.equals) ?? null,
+      create: async ({ data }: any) => {
+        const event = { id: `activity-${state.activityEvents.size + 1}`, createdAt: new Date(), ...data };
+        state.activityEvents.set(event.id, event);
+        return event;
+      },
+      update: async ({ where, data }: any) => {
+        const event = Object.assign(state.activityEvents.get(where.id), data);
+        state.activityEvents.set(where.id, event);
+        return event;
+      },
+      findMany: async ({ where, take, skip = 0 }: any) => [...state.activityEvents.values()].reverse().filter((event) =>
+        (typeof where.userId === 'string' ? where.userId === event.userId : where.userId.in.includes(event.userId))
+        && event.eventType === where.eventType).slice(skip, skip + take)
+    },
     watchProgress: { findMany: async () => [] },
     user: {
       upsert: async ({ where, create, update }: any) => {
@@ -802,6 +821,51 @@ describe('QuicK ReeLS API', () => {
     assert.equal(typeof response.json().accessToken, 'string');
   });
 
+  it('preserves each WebView entry URL and exposes its history only to an owner', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const previewUrl = 'https://mini.example.test/?src=preview&src=qr#watch';
+    const adUrl = 'https://mini.example.test/?campaign_id=123&ttclid=click%2Bvalue#watch';
+    const entryId = 'preview-entry-0001';
+    const session = await app.inject({ method: 'POST', url: '/api/v1/auth/anonymous/session', payload: {
+      visitorKey: 'p'.repeat(64), clientSessionId: 'launch-session-0001',
+      launchContext: { entryId, rawUrl: previewUrl, launchPath: '/', launchQuery: { src: 'preview' } }
+    } });
+    assert.equal(session.statusCode, 200, session.body);
+    const viewerId = session.json().viewer.id;
+    const userHeaders = { authorization: `Bearer ${session.json().accessToken}` };
+    const duplicate = await app.inject({ method: 'POST', url: '/api/v1/auth/launch-context', headers: userHeaders,
+      payload: { entryId, rawUrl: previewUrl, sdkPayloadRaw: '{"query":{"source":"preview"},"launch_from":"anchor"}' } });
+    assert.equal(duplicate.statusCode, 200, duplicate.body);
+    const later = await app.inject({ method: 'POST', url: '/api/v1/auth/launch-context', headers: userHeaders,
+      payload: { entryId: 'paid-entry-0002', rawUrl: adUrl, launchPath: '/', launchQuery: { campaign_id: '123' } } });
+    assert.equal(later.statusCode, 200, later.body);
+    assert.equal((app.prisma as any)._state.activityEvents.size, 2);
+    const path = `/api/v1/admin/shared/viewers/${viewerId}/launches?miniAppKey=main&limit=1`;
+    assert.equal((await app.inject({ method: 'GET', url: path, headers: userHeaders })).statusCode, 403);
+    const ownerHeaders = { authorization: `Bearer ${await app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: 'main', role: 'OWNER', tokenVersion: 0 })}` };
+    const latest = await app.inject({ method: 'GET', url: path, headers: ownerHeaders });
+    assert.equal(latest.statusCode, 200, latest.body);
+    assert.equal(latest.json().items[0].metadata.rawUrl, adUrl);
+    assert.equal(latest.json().hasMore, true);
+    const older = await app.inject({ method: 'GET', url: `${path}&offset=1`, headers: ownerHeaders });
+    assert.equal(older.json().items[0].metadata.rawUrl, previewUrl);
+    assert.equal(older.json().items[0].metadata.sdkPayloadRaw, '{"query":{"source":"preview"},"launch_from":"anchor"}');
+    assert.equal(older.json().hasMore, false);
+  });
+
+  it('accepts launch context from an older Mini build without an entry ID', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const response = await app.inject({ method: 'POST', url: '/api/v1/auth/anonymous/session', payload: {
+      visitorKey: 'q'.repeat(64), clientSessionId: 'legacy-launch-session-0001',
+      launchContext: { launchPath: '/', launchQuery: { source: 'preview' } }
+    } });
+    assert.equal(response.statusCode, 200, response.body);
+    const event = [...(app.prisma as any)._state.activityEvents.values()][0] as any;
+    assert.equal(event.metadata.entryId, 'legacy-launch-session-0001');
+  });
+
   it('stores the resolved client IP and trusted country for regional analytics', async () => {
     const app = await createTestApp({ TRUSTED_PROXY_CIDRS: '172.20.0.2/32' });
     apps.push(app);
@@ -972,6 +1036,9 @@ describe('QuicK ReeLS API', () => {
 
     const unauthorized = await app.inject({ method: 'GET', url: '/api/taleflick/v1/admin/shared/viewers?miniAppKey=storyshort', headers: { authorization: `Bearer ${currentToken}` } });
     assert.equal(unauthorized.statusCode, 403, unauthorized.body);
+    const launchPath = '/api/taleflick/v1/admin/shared/viewers/storyshort-viewer/launches?miniAppKey=storyshort';
+    assert.equal((await app.inject({ method: 'GET', url: launchPath, headers: { authorization: `Bearer ${currentToken}` } })).statusCode, 403);
+    assert.equal((await app.inject({ method: 'GET', url: launchPath, headers })).statusCode, 200);
 
     const viewers = await app.inject({ method: 'GET', url: '/api/taleflick/v1/admin/shared/viewers?miniAppKey=storyshort&search=storyshort-open-id', headers });
     assert.equal(viewers.statusCode, 200, viewers.body);

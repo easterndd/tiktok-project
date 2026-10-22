@@ -1,17 +1,28 @@
 import { createCipheriv, createHmac, createHash, randomBytes } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requestCountry } from '../../lib/content-visibility';
 import { requireUser } from '../../plugins/auth';
 import { addDatabaseDuration } from '../../lib/request-performance';
+
+const launchContextInput = z.object({
+  entryId: z.string().min(8).max(128).optional(),
+  rawUrl: z.url().max(32768).optional(),
+  sdkPayloadRaw: z.string().max(32768).optional(),
+  launchScene: z.string().trim().max(64).optional(),
+  launchPath: z.string().trim().max(256).optional(),
+  launchQuery: z.record(z.string(), z.string().max(128)).optional()
+});
+const recordedLaunchContextInput = launchContextInput.extend({ entryId: z.string().min(8).max(128) });
 
 const anonymousSessionInput = z.object({
   visitorKey: z.string().min(32).max(512),
   clientSessionId: z.string().min(8).max(128),
   platform: z.string().trim().min(1).max(64).optional(),
   clientVersion: z.string().trim().min(1).max(64).optional(),
-  source: z.string().trim().min(1).max(64).optional()
+  source: z.string().trim().min(1).max(64).optional(),
+  launchContext: launchContextInput.optional()
 });
 
 const tikTokSessionInput = z.object({
@@ -73,13 +84,53 @@ async function exchangeTikTokCode(app: FastifyInstance, code: string) {
   return token;
 }
 
+async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, userId: string, context: z.infer<typeof launchContextInput>, fallbackEntryId?: string) {
+  const entryId = context.entryId ?? fallbackEntryId;
+  if (!entryId) return false;
+  const launchQuery = Object.fromEntries(Object.entries(context.launchQuery ?? {}).filter(([key, value]) =>
+    /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(key)
+    && !/(?:token|auth|secret|password|email|phone|openid|open_id|user.?id|username|uid|visitor|session|credential|code|url|redirect|callback)/i.test(key)
+    && !/(?:https?:\/\/|www\.)/i.test(value)
+  ).slice(0, 32));
+  try {
+    const existing = await app.prisma.audienceActivityEvent.findFirst({
+      where: { userId, eventType: 'APP_LAUNCH_CONTEXT', metadata: { path: ['entryId'], equals: entryId } },
+      select: { id: true, metadata: true }
+    });
+    if (existing) {
+      if (context.sdkPayloadRaw) {
+        const metadata = existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? existing.metadata : {};
+        await app.prisma.audienceActivityEvent.update({ where: { id: existing.id }, data: {
+          metadata: { ...metadata, sdkPayloadRaw: context.sdkPayloadRaw } as Prisma.InputJsonValue
+        } });
+      }
+      return true;
+    }
+    await app.prisma.audienceActivityEvent.create({ data: {
+      userId, eventType: 'APP_LAUNCH_CONTEXT', metadata: {
+        entryId,
+        rawUrl: context.rawUrl,
+        sdkPayloadRaw: context.sdkPayloadRaw,
+        launchScene: context.launchScene,
+        launchPath: context.launchPath?.startsWith('/') && !context.launchPath.startsWith('//')
+          ? context.launchPath.split(/[?#]/, 1)[0] : undefined,
+        launchQuery
+      } as Prisma.InputJsonValue
+    } });
+    return true;
+  } catch (error) {
+    request.log.warn({ err: error }, 'Mini app launch context could not be saved');
+    return false;
+  }
+}
+
 export async function registerAuthRoutes(app: FastifyInstance) {
   app.post('/auth/anonymous/session', {
     // Shared NATs can contain many real viewers; keep this above the global
     // per-IP API budget while still rejecting abnormal bootstrap bursts.
     config: { rateLimit: { max: 120, timeWindow: '1 minute' } }
   }, async (request) => {
-    const { visitorKey, clientSessionId, platform, clientVersion, source } = anonymousSessionInput.parse(request.body);
+    const { visitorKey, clientSessionId, platform, clientVersion, source, launchContext } = anonymousSessionInput.parse(request.body);
     const countryCode = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress);
     const visitorKeyHash = createHmac('sha256', app.config.JWT_SECRET).update(visitorKey).digest('base64url');
     const databaseStartedAt = performance.now();
@@ -95,12 +146,23 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       update: { platform, clientVersion, source, countryCode }
     });
     addDatabaseDuration(request, performance.now() - databaseStartedAt);
+    if (launchContext) await saveLaunchContext(app, request, user.id, launchContext, clientSessionId);
     const accessToken = await app.jwt.sign({ sub: user.id, kind: 'user', appKey: app.config.MINI_APP_KEY }, { expiresIn: app.config.USER_JWT_EXPIRES_IN });
     return {
       accessToken,
       expiresIn: app.config.USER_JWT_EXPIRES_IN,
       viewer: { id: user.id, type: user.identityType }
     };
+  });
+
+  app.post('/auth/launch-context', {
+    preHandler: requireUser,
+    config: { rateLimit: { max: 30, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
+  }, async (request) => {
+    const context = recordedLaunchContextInput.parse(request.body);
+    let user = await app.prisma.user.findUniqueOrThrow({ where: { id: request.user.sub }, select: { id: true, mergedIntoUserId: true } });
+    if (user.mergedIntoUserId) user = await app.prisma.user.findUniqueOrThrow({ where: { id: user.mergedIntoUserId }, select: { id: true, mergedIntoUserId: true } });
+    return { saved: await saveLaunchContext(app, request, user.id, context) };
   });
 
   app.post('/auth/tiktok/session', {

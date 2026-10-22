@@ -4,6 +4,11 @@ declare global {
       init(options: { clientKey: string }): void;
       login(options?: { success?: (result: { code: string }) => void; fail?: (error: unknown) => void; complete?: () => void }): Promise<{ code: string }> | void;
       canIUse(apiName: string): boolean;
+      onShow?(callback: (params: unknown) => void): void;
+      game?: {
+        getLaunchOptionsSync?(): { scene?: unknown; query?: unknown };
+        getEnterOptionsSync?(): { scene?: unknown; query?: unknown };
+      };
       getPlayer?(channel?: 'byteplus'): Promise<VePlayerConstructor>;
       createRewardedVideoAd(options: { adUnitId: string }): RewardedVideoAd;
       createInterstitialAd(options: { adUnitId: string }): InterstitialAd;
@@ -46,6 +51,7 @@ declare global {
     on(event: string, callback: (data?: unknown) => void): void;
     off?(event: string, callback: (data?: unknown) => void): void;
     playNext?(options: VePlayerSource & { lang?: string }): Promise<void>;
+    player?: { play?(): Promise<void> | void; paused?: boolean; currentTime?: number };
     preLoadData?: { hit?: number; duration?: number; length?: number };
     destroy(): void;
   }

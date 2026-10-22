@@ -53,6 +53,16 @@ h2 { margin-bottom: 5px; font-size: 18px; }
 .panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 20px; padding: 21px 22px 17px; }
 .panel-heading a, .text-button { display: inline-flex; align-items: center; gap: 4px; color: var(--pink); border: 0; background: transparent; font-size: 11px; font-weight: 800; text-decoration: none; cursor: pointer; }
 .table-wrap { overflow-x: auto; }
+.launch-url-cell { min-width: 250px; max-width: 360px; }
+.launch-url-cell code { display: block; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.launch-url-cell .text-button { margin-top: 6px; padding: 0; }
+.launch-history { display: grid; gap: 12px; min-width: 0; padding: 4px 0 10px; white-space: normal; }
+.launch-history-item { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: #f8fafb; }
+.launch-history-item time { font-weight: 700; }
+.launch-history-item > div { display: grid; gap: 5px; min-width: 0; }
+.launch-history-item span { color: var(--muted); font-size: 11px; }
+.launch-history-item code { overflow-wrap: anywhere; user-select: text; white-space: pre-wrap; }
+.launch-history-item .text-button { justify-self: start; padding: 0; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { padding: 11px 22px; color: #95a0b2; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 10px; font-weight: 800; text-align: left; text-transform: uppercase; letter-spacing: .08em; }
 td { padding: 14px 22px; color: var(--muted); border-bottom: 1px solid #edf0f4; white-space: nowrap; }

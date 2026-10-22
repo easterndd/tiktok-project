@@ -1,9 +1,17 @@
 import { apiClient, registerUnauthorizedHandler } from '../../lib/api-client';
 import { clearSessionToken, getOrCreateVisitorKey, getSessionToken, isDemoMode, setSessionToken } from '../../lib/storage';
 import { storagePrefix } from '../../lib/app-brand';
+import { getMiniLaunchContext } from '../../lib/launch-context';
 
 let pendingSession: Promise<void> | null = null;
 let pendingTikTokSession: Promise<void> | null = null;
+let pendingLaunchRecord: Promise<void> | null = null;
+const entryId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `entry-${Date.now()}-${Math.random()}`;
+let lastSdkPayloadRaw = '';
+
+function createLaunchEntryId() {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `entry-${Date.now()}-${Math.random()}`;
+}
 
 function getOrCreateClientSessionId() {
   const key = `${storagePrefix}_app_session_id`;
@@ -21,17 +29,38 @@ export async function ensureAnonymousSession(options: { force?: boolean } = {}) 
     return;
   }
   if (!pendingSession) {
+    const launchContext = getMiniLaunchContext();
     pendingSession = apiClient.post<{ accessToken: string }>('/auth/anonymous/session', {
       visitorKey: getOrCreateVisitorKey(),
       clientSessionId: getOrCreateClientSessionId(),
       platform: window.TTMinis ? 'TIKTOK_MINIS' : 'WEB',
       clientVersion: import.meta.env.VITE_APP_VERSION || undefined,
-      source: 'APP_LAUNCH'
+      source: launchContext.launchScene || 'APP_LAUNCH',
+      launchContext: { ...launchContext, entryId }
     })
       .then((session) => setSessionToken(session.accessToken))
       .finally(() => { pendingSession = null; });
   }
   return pendingSession;
+}
+
+export async function recordMiniLaunch(sdkPayloadRaw?: string) {
+  if (isDemoMode()) return;
+  if (sdkPayloadRaw) {
+    if (sdkPayloadRaw === lastSdkPayloadRaw) return;
+    const launchEntryId = lastSdkPayloadRaw ? createLaunchEntryId() : entryId;
+    await ensureAnonymousSession();
+    await apiClient.post('/auth/launch-context', { ...getMiniLaunchContext(), entryId: launchEntryId, sdkPayloadRaw });
+    lastSdkPayloadRaw = sdkPayloadRaw;
+    return;
+  }
+  if (!pendingLaunchRecord) {
+    pendingLaunchRecord = (async () => {
+      await ensureAnonymousSession();
+      await apiClient.post('/auth/launch-context', { ...getMiniLaunchContext(), entryId });
+    })().finally(() => { pendingLaunchRecord = null; });
+  }
+  return pendingLaunchRecord;
 }
 
 function getTikTokLoginCode() {

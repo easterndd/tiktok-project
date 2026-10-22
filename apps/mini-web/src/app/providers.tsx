@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, type ReactNode } from 'react';
 import { EntryAdGate } from '../components/EntryAdGate';
 import { startAppEntryAdSession } from '../features/ads/app-entry-ad';
-import { ensureAnonymousSession, ensureTikTokSession } from '../features/auth/anonymous-session';
+import { ensureAnonymousSession, ensureTikTokSession, recordMiniLaunch } from '../features/auth/anonymous-session';
 import { appKey } from '../lib/app-brand';
 
 const queryClient = new QueryClient({
@@ -15,11 +15,28 @@ const queryClient = new QueryClient({
     }
   }
 });
+let sdkLaunchListenerInstalled = false;
 
 function AnonymousSessionBootstrap() {
   useEffect(() => {
+    const minis = window.TTMinis;
+    if (!sdkLaunchListenerInstalled && minis?.onShow && minis.canIUse?.('onShow.callback')) {
+      try {
+        minis.onShow((payload) => {
+          if (payload === undefined) return;
+          try {
+            const raw = JSON.stringify(payload);
+            if (raw && raw.length <= 32768) void recordMiniLaunch(raw).catch(() => undefined);
+          } catch { /* Some SDK payloads cannot be serialized. */ }
+        });
+        sdkLaunchListenerInstalled = true;
+      } catch { /* onShow is optional on older TikTok clients. */ }
+    }
     void ensureAnonymousSession()
-      .then(() => appKey === 'storyland' ? startAppEntryAdSession() : undefined)
+      .then(async () => {
+        await recordMiniLaunch();
+        if (appKey === 'storyland') await startAppEntryAdSession();
+      })
       .catch(() => undefined);
   }, []);
   return null;
