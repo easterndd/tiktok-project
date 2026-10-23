@@ -5,6 +5,24 @@ import type { MiniAppKey } from '../config/mini-apps';
 
 const rawIpRetentionMs = 30 * 86_400_000;
 type SharedIpDb = Pick<PrismaClient, '$queryRaw' | '$executeRaw'>;
+const maxPendingSharedIpVisits = 256;
+let pendingSharedIpVisits = 0;
+let sharedIpVisitTail: Promise<void> = Promise.resolve();
+
+export function queueSharedIpVisit(db: PrismaClient, input: Parameters<typeof recordSharedIpVisit>[1], onError: (error: unknown) => void) {
+  if (pendingSharedIpVisits >= maxPendingSharedIpVisits) {
+    onError(new Error('Shared IP visit queue is full'));
+    return;
+  }
+  pendingSharedIpVisits++;
+  sharedIpVisitTail = sharedIpVisitTail.then(() => recordSharedIpVisit(db, input))
+    .catch(onError)
+    .finally(() => { pendingSharedIpVisits--; });
+}
+
+export function waitForSharedIpVisits() {
+  return sharedIpVisitTail;
+}
 
 export function normalizeIp(value: string): string | null {
   const candidate = value.trim();

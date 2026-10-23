@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
 import { miniAppAdConfig } from '../../config/mini-apps';
 import { measureDatabase } from '../../lib/request-performance';
-import { isEntryAdIpExempt, recordSharedIpVisit } from '../../services/shared-ip.service';
+import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { requestCountry } from '../../lib/content-visibility';
 
 const policyId = 'default';
@@ -57,14 +57,12 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
     const { launchId, releaseId } = startInput.parse(request.body);
-    const [_, saved] = await Promise.all([
-      measureDatabase(request, () => recordSharedIpVisit(app.sharedPrisma, {
-        ipAddress: request.ip, miniAppKey: app.config.MINI_APP_KEY, userId: request.user.sub, clientSessionId: launchId,
-        countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
-        secret: app.rootConfig.JWT_SECRET
-      })),
-      measureDatabase(request, () => app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } }))
-    ]);
+    queueSharedIpVisit(app.sharedPrisma, {
+      ipAddress: request.ip, miniAppKey: app.config.MINI_APP_KEY, userId: request.user.sub, clientSessionId: launchId,
+      countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
+      secret: app.rootConfig.JWT_SECRET
+    }, (error) => request.log.warn({ err: error }, 'Shared IP visit could not be recorded'));
+    const saved = await measureDatabase(request, () => app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } }));
     let policy = saved ?? disabledPolicy(app, releaseId);
     if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
       try {
@@ -77,7 +75,10 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     if (saved && !saved.firstSeenAt) await measureDatabase(request, () => app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } }));
     if (!policy.enabled) return { required: false as const };
     const [ipExempt, viewer] = await Promise.all([
-      measureDatabase(request, () => isEntryAdIpExempt(app.sharedPrisma, request.ip)),
+      measureDatabase(request, () => isEntryAdIpExempt(app.sharedPrisma, request.ip)).catch((error) => {
+        request.log.warn({ err: error }, 'Shared IP exemption lookup failed; applying entry-ad policy');
+        return false;
+      }),
       measureDatabase(request, () => app.prisma.user.findUnique({ where: { id: request.user.sub }, select: { appEntryAdExempt: true, mergedIntoUserId: true } }))
     ]);
     if (ipExempt) return { required: false as const };

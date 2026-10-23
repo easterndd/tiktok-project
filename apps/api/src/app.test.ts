@@ -8,7 +8,7 @@ import { loadEnv } from './config/env';
 import { hashPassword } from './services/password';
 import { BytePlusVodService } from './services/byteplus-vod.service';
 import { uploadScope, uploadTags } from './services/local-upload.service';
-import { cleanupSharedIps, recordSharedIpVisit, setEntryAdIpExemption } from './services/shared-ip.service';
+import { cleanupSharedIps, recordSharedIpVisit, setEntryAdIpExemption, waitForSharedIpVisits } from './services/shared-ip.service';
 
 const env: Env = {
   NODE_ENV: 'test',
@@ -474,6 +474,7 @@ describe('QuicK ReeLS API', () => {
 
   afterEach(async () => {
     globalThis.fetch = originalFetch;
+    await waitForSharedIpVisits();
     while (apps.length) await apps.pop()!.close();
   });
 
@@ -941,12 +942,37 @@ describe('QuicK ReeLS API', () => {
     assert.equal(first.statusCode, 200, first.body);
     assert.equal(retry.statusCode, 200, retry.body);
     assert.equal(taletv.statusCode, 200, taletv.body);
+    await waitForSharedIpVisits();
     const registry = (sharedPrisma as any)._state;
     assert.equal(registry.sharedIps.size, 1);
     assert.equal([...registry.sharedIps.values()][0].visitCount, 2);
     assert.deepEqual([...registry.sharedVisits.values()].map((visit: any) => visit.miniAppKey).sort(), ['main', 'taletv']);
     assert.equal((app.prisma as any)._state.sharedIps.size, 0);
     assert.equal((taletvPrisma as any)._state.sharedIps.size, 0);
+  });
+
+  it('keeps entry ads available when shared IP writes or exemption reads fail', async () => {
+    const sharedPrisma = await createPrismaStub();
+    const app = await createTestApp({}, { sharedPrisma: sharedPrisma as PrismaClient });
+    apps.push(app);
+    const owner = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const viewer = { authorization: `Bearer ${await token(app, 'user')}` };
+    const policy = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: owner,
+      payload: { enabled: true, mode: 'INTERSTITIAL', placementId: 'entry-ad', requiredCount: 1, onUnavailable: 'ALLOW' } });
+    assert.equal(policy.statusCode, 200, policy.body);
+
+    (sharedPrisma as any).$transaction = async () => { throw new Error('P2028: transaction could not be started'); };
+    const first = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: viewer,
+      remoteAddress: '198.51.100.51', payload: { launchId: 'f7544158-5312-450c-96d4-6507f0894350' } });
+    assert.equal(first.statusCode, 200, first.body);
+    assert.equal(first.json().required, true);
+    await waitForSharedIpVisits();
+
+    (sharedPrisma as any).$queryRaw = async () => { throw new Error('shared IP lookup unavailable'); };
+    const second = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: viewer,
+      remoteAddress: '198.51.100.51', payload: { launchId: 'c22c9d77-aa09-40da-8e54-f9a6095df1da' } });
+    assert.equal(second.statusCode, 200, second.body);
+    assert.equal(second.json().required, true);
   });
 
   it('persists exempt IPs, skips only entry ads, and keeps repeated launch counting idempotent', async () => {
@@ -971,6 +997,7 @@ describe('QuicK ReeLS API', () => {
     assert.equal(episodeReward.statusCode, 200, episodeReward.body);
     assert.equal(typeof episodeReward.json().sessionId, 'string');
 
+    await waitForSharedIpVisits();
     const registry = (app.sharedPrisma as any)._state;
     assert.equal([...registry.sharedIps.values()][0].visitCount, 1);
     assert.equal(registry.sharedExemptions.has(ip), true);
