@@ -20,7 +20,7 @@ export async function registerAdRoutes(app: FastifyInstance) {
     const body = z.object({
       clientEventId: z.string().min(1).max(128),
       adType: z.enum(['REWARDED', 'INTERSTITIAL']),
-      scope: z.enum(['EPISODE_UNLOCK', 'APP_ENTRY']).default('EPISODE_UNLOCK'),
+      scope: z.enum(['EPISODE_UNLOCK', 'APP_ENTRY', 'EXIT_RETENTION']).default('EPISODE_UNLOCK'),
       eventType: z.enum(['REQUESTED', 'SHOWN', 'CLOSED_INCOMPLETE', 'FAILED']),
       placementId: z.string().min(1).max(128),
       episodeId: z.string().min(1).max(128).optional(),
@@ -43,7 +43,7 @@ export async function registerAdRoutes(app: FastifyInstance) {
         throw Object.assign(new Error('Invalid episode-unlock ad event.'), { statusCode: 400 });
       }
       const session = await measureDatabase(request, () => app.prisma.rewardedUnlockSession.findUnique({ where: { id: body.rewardSessionId! } }));
-      if (!session || session.userId !== request.user.sub || session.episodeId !== body.episodeId || session.status !== 'ACTIVE' || session.expiresAt <= new Date() || session.placementId !== body.placementId || body.adIndex !== session.completedCount + 1) {
+      if (!session || session.userId !== request.user.sub || session.episodeId !== body.episodeId || session.status !== 'ACTIVE' || session.expiresAt <= new Date() || session.placementId !== body.placementId || body.adIndex !== session.completedCount + 1 || (session.purpose ?? 'EPISODE_UNLOCK') !== body.scope) {
         throw Object.assign(new Error('Rewarded unlock session is unavailable.'), { statusCode: 409 });
       }
     }

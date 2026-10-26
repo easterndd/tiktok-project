@@ -8,7 +8,7 @@ const hooks = registerHooks({
     return next(specifier, context);
   }
 });
-const { getMiniLaunchContext, rememberSdkLaunchPayload } = await import('../src/lib/launch-context.ts');
+const { getMiniLaunchContext, getMiniLaunchAdId, rememberSdkLaunchPayload } = await import('../src/lib/launch-context.ts');
 const previousWindow = globalThis.window;
 after(() => { hooks.deregister(); globalThis.window = previousWindow; });
 
@@ -39,4 +39,15 @@ it('uses the official Mini Drama onShow payload for the launch summary', () => {
     launchQuery: { source: 'campaign', episode_id: 'ep-2', ttoclid: 'click-1' },
     rawUrl: 'https://example.test/watch/album-1/episode-2?campaign=spring&access_token=secret&uid=user-1&redirect_url=https%3A%2F%2Fexample.test'
   });
+});
+
+it('reads adId from the WebView URL and SDK query with case-insensitive key matching', () => {
+  globalThis.window = {
+    location: { href: 'https://example.test/?ttoclid=preview&Ad_ID=1879822310597858', pathname: '/', search: '?ttoclid=preview&Ad_ID=1879822310597858' },
+    TTMinis: {}
+  };
+  assert.equal(getMiniLaunchAdId(), '1879822310597858');
+
+  rememberSdkLaunchPayload({ query: { adid: 'sdk-ad-2' } });
+  assert.equal(getMiniLaunchAdId(), 'sdk-ad-2');
 });

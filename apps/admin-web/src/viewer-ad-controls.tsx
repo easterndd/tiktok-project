@@ -1,8 +1,9 @@
-import { Fragment, useEffect, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Panel } from './dashboard-ui';
 
-type Viewer = { id: string; identityType: string; tiktokOpenId: string | null; appEntryAdExempt: boolean; createdAt: string; lastSeenAt: string | null; countryCode: string | null; ipAddress: string | null; launchContext: { metadata?: unknown; createdAt: string } | null };
-type LaunchEvent = { id: string; createdAt: string; metadata: unknown };
+type Attribution = { status: 'ATTRIBUTED' | 'UNATTRIBUTED'; adId: string | null; reason: string };
+type Viewer = { id: string; identityType: string; tiktokOpenId: string | null; appEntryAdExempt: boolean; createdAt: string; lastSeenAt: string | null; countryCode: string | null; ipAddress: string | null; launchContext: { metadata?: unknown; createdAt: string; attribution?: Attribution } | null };
+type LaunchEvent = { id: string; createdAt: string; metadata: unknown; attribution?: Attribution };
 type LaunchMetadata = { rawUrl?: unknown; sdkPayloadRaw?: unknown; launchScene?: unknown; launchPath?: unknown; launchQuery?: unknown };
 type Api = <T>(path: string, options?: RequestInit) => Promise<T>;
 
@@ -21,19 +22,37 @@ export function ViewerAdControls({ api, canEdit, miniApps, currentMiniApp }: { a
   const [launches, setLaunches] = useState<LaunchEvent[]>([]);
   const [launchesLoading, setLaunchesLoading] = useState(false);
   const [launchesMore, setLaunchesMore] = useState(false);
-  const load = async (term: string, ipTerm: string, appKey: string) => {
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const loadingRef = useRef(false);
+  const filtersRef = useRef({ search: '', ipAddress: '', miniAppKey: currentMiniApp });
+  filtersRef.current = { search, ipAddress, miniAppKey };
+  const load = async (term: string, ipTerm: string, appKey: string, options: { preserveView?: boolean; silent?: boolean } = {}) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
     try {
       const query = new URLSearchParams({ search: term, ipAddress: ipTerm, miniAppKey: appKey, limit: '30' });
       const result = await api<{ items: Viewer[] }>('/admin/shared/viewers?' + query);
       setItems(result.items);
-      setSelected(new Set());
-      setExpandedUserId(null);
-      setMessage('');
-    } catch (error) { setMessage(error instanceof Error ? error.message : '读取用户失败'); }
-    finally { setLoading(false); }
+      setSelected((current) => options.preserveView ? new Set([...current].filter((id) => result.items.some((item) => item.id === id))) : new Set());
+      setExpandedUserId((current) => options.preserveView && current && result.items.some((item) => item.id === current) ? current : null);
+      setLastUpdatedAt(new Date());
+      if (!options.silent) setMessage('');
+    } catch (error) { if (!options.silent) setMessage(error instanceof Error ? error.message : '读取用户失败'); }
+    finally { loadingRef.current = false; setLoading(false); }
   };
   useEffect(() => { void load('', '', currentMiniApp); }, [currentMiniApp]);
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      const filters = filtersRef.current;
+      void load(filters.search.trim(), filters.ipAddress.trim(), filters.miniAppKey, { preserveView: true, silent: true });
+    };
+    const timer = window.setInterval(refresh, 30_000);
+    const onVisibilityChange = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisibilityChange); };
+  }, [currentMiniApp]);
   const submit = (event: FormEvent) => { event.preventDefault(); void load(search.trim(), ipAddress.trim(), miniAppKey); };
   const change = async (viewer: Viewer) => {
     setSaving(true);
@@ -63,6 +82,7 @@ export function ViewerAdControls({ api, canEdit, miniApps, currentMiniApp }: { a
     const rawUrl = metadataFor(value).rawUrl;
     return typeof rawUrl === 'string' && rawUrl ? rawUrl : null;
   };
+  const attributionFor = (value: Attribution | undefined) => value?.status === 'ATTRIBUTED' ? `归因 · adId ${value.adId}` : '未归因';
   const loadLaunches = async (userId: string, offset = 0) => {
     setLaunchesLoading(true);
     try {
@@ -101,8 +121,8 @@ export function ViewerAdControls({ api, canEdit, miniApps, currentMiniApp }: { a
       <button className="secondary" type="submit" disabled={loading}>{loading ? '查询中...' : '查询用户'}</button>
     </form>
     {message && <p className="form-help">{message}</p>}
-    <div className="toolbar"><span>{selectedMiniApp?.name ?? miniAppKey} · 已选择 {selected.size} 位</span><button className="secondary" type="button" disabled={!canEdit || saving || !selected.size} onClick={() => void changeSelected(true)}>豁免所选用户</button><button className="secondary" type="button" disabled={!canEdit || saving || !selected.size} onClick={() => void changeSelected(false)}>正常展示所选用户</button></div>
-    <p className="form-help">原始 URL 为小程序 WebView 实际收到的地址；TikTok 外层广告链接未传入 WebView 时无法显示。展开历史可查看 SDK 原始回调。仅供对照采样，当前不会自动判定归因。</p>
+    <div className="toolbar"><span>{selectedMiniApp?.name ?? miniAppKey} · 已选择 {selected.size} 位 · {lastUpdatedAt ? `更新于 ${lastUpdatedAt.toLocaleTimeString('zh-CN')}` : '等待更新'}</span><button className="secondary" type="button" disabled={!canEdit || saving || !selected.size} onClick={() => void changeSelected(true)}>豁免所选用户</button><button className="secondary" type="button" disabled={!canEdit || saving || !selected.size} onClick={() => void changeSelected(false)}>正常展示所选用户</button></div>
+    <p className="form-help">归因规则：入口原始 URL 或入口参数中存在非空、非占位符的 adId 即判定为归因；没有有效 adId 时固定不弹入口强弹广告。归因用户继续按当前小程序的入口广告配置执行。</p>
     <div className="table-wrap"><table><thead><tr><th><input aria-label="选择当前页用户" type="checkbox" checked={allSelected} onChange={(event) => setSelected(event.target.checked ? new Set(items.map((item) => item.id)) : new Set())} /></th><th>小程序用户 ID</th><th>身份</th><th>最近会话</th><th>最近 WebView 原始 URL</th><th>最近 IP</th><th>国家/地区</th><th>进入广告</th></tr></thead><tbody>{items.map((viewer) => <Fragment key={viewer.id}><tr><td><input aria-label={`选择用户 ${viewer.id}`} type="checkbox" checked={selected.has(viewer.id)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(viewer.id); else next.delete(viewer.id); return next; })} /></td><td><code>{viewer.id}</code>{viewer.tiktokOpenId && <small>OpenID：{viewer.tiktokOpenId}</small>}</td><td>{viewer.identityType}</td><td>{viewer.lastSeenAt ? new Date(viewer.lastSeenAt).toLocaleString('zh-CN') : '-'}</td><td className="launch-url-cell"><code title={launchSummary(viewer)}>{launchSummary(viewer)}</code><button className="text-button" type="button" onClick={() => showLaunches(viewer.id)} aria-expanded={expandedUserId === viewer.id}>{expandedUserId === viewer.id ? '收起记录' : '查看历史'}</button></td><td><code>{viewer.ipAddress ?? '-'}</code></td><td>{viewer.countryCode ?? '未知'}</td><td><button className="secondary" type="button" disabled={!canEdit || saving} onClick={() => void change(viewer)}>{viewer.appEntryAdExempt ? '已豁免 · 点击恢复' : '正常展示 · 点击豁免'}</button></td></tr>{expandedUserId === viewer.id && <tr><td colSpan={8}><div className="launch-history"><strong>入口记录 · {viewer.id}</strong>{launchesLoading && !launches.length && <p>加载中...</p>}{!launchesLoading && !launches.length && <p>暂无入口记录</p>}{launches.map((event) => { const context = metadataFor(event.metadata); const url = rawUrlFor(event.metadata); return <div className="launch-history-item" key={event.id}><time>{new Date(event.createdAt).toLocaleString('zh-CN')}</time><div><span>WebView 原始 URL</span><code>{url ?? '旧记录未保存原始 URL'}</code>{url && <button className="text-button" type="button" onClick={() => void copyUrl(url)}>复制 URL</button>}</div><div><span>SDK 原始回调</span><code>{typeof context.sdkPayloadRaw === 'string' ? context.sdkPayloadRaw : 'SDK 未提供或当前版本不支持'}</code></div><div><span>入口摘要</span><code>{JSON.stringify({ scene: context.launchScene ?? null, path: context.launchPath ?? null, query: context.launchQuery ?? {} })}</code></div></div>; })}{launchesMore && <button className="secondary" type="button" disabled={launchesLoading} onClick={() => void loadLaunches(viewer.id, launches.length)}>{launchesLoading ? '加载中...' : '加载更多'}</button>}</div></td></tr>}</Fragment>)}</tbody></table>{!items.length && !loading && <p className="empty-copy table-empty">暂无匹配用户</p>}</div>
   </Panel>;
 }

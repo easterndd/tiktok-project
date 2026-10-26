@@ -5,12 +5,13 @@ import { requireUser } from '../../plugins/auth';
 import { miniAppAdConfig } from '../../config/mini-apps';
 import { measureDatabase } from '../../lib/request-performance';
 import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
+import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { requestCountry } from '../../lib/content-visibility';
 
 const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
 const releaseIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default');
-const startInput = z.object({ launchId: z.string().uuid(), releaseId: releaseIdSchema });
+const startInput = z.object({ launchId: z.string().uuid(), releaseId: releaseIdSchema, adId: z.string().trim().max(128).nullable().optional() });
 const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.boolean() });
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
 
@@ -21,6 +22,8 @@ function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
     id: releaseId === 'default' ? policyId : `release:${releaseId}`,
     releaseId,
     enabled: false,
+    exitRetentionEnabled: false,
+    exitRetentionAdCount: 1,
     mode,
     placementId: mode === 'INTERSTITIAL' ? placements.appEntryPlacementId : placements.rewardedPlacementId,
     requiredCount: 1,
@@ -51,17 +54,48 @@ export async function readAppEntryAdPolicy(app: FastifyInstance, releaseId = 'de
     ?? disabledPolicy(app, releaseId);
 }
 
+export async function readExitRetentionConfig(app: FastifyInstance, releaseId: string, userId: string, ip: string) {
+  const policy = await readAppEntryAdPolicy(app, releaseId);
+  const placementId = miniAppAdConfig(app.config).rewardedPlacementId;
+  if (!policy.exitRetentionEnabled || !placementId) return { enabled: false as const };
+  const [ipExempt, viewer] = await Promise.all([
+    isEntryAdIpExempt(app.sharedPrisma, ip),
+    app.prisma.user.findUnique({ where: { id: userId }, select: { appEntryAdExempt: true, mergedIntoUserId: true } })
+  ]);
+  if (ipExempt || viewer?.appEntryAdExempt) return { enabled: false as const };
+  if (viewer?.mergedIntoUserId) {
+    const canonical = await app.prisma.user.findUnique({ where: { id: viewer.mergedIntoUserId }, select: { appEntryAdExempt: true } });
+    if (canonical?.appEntryAdExempt) return { enabled: false as const };
+  }
+  return { enabled: true as const, placementId, requiredCount: policy.exitRetentionAdCount };
+}
+
 export async function registerAppEntryAdRoutes(app: FastifyInstance) {
+  app.get('/exit-retention/config', { preHandler: requireUser }, async (request) => {
+    const { releaseId } = z.object({ releaseId: releaseIdSchema }).parse(request.query);
+    return measureDatabase(request, () => readExitRetentionConfig(app, releaseId, request.user.sub, request.ip));
+  });
   app.post('/app-entry-ad-sessions', {
     preHandler: requireUser,
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
-    const { launchId, releaseId } = startInput.parse(request.body);
+    const { launchId, releaseId, adId } = startInput.parse(request.body);
     queueSharedIpVisit(app.sharedPrisma, {
       ipAddress: request.ip, miniAppKey: app.config.MINI_APP_KEY, userId: request.user.sub, clientSessionId: launchId,
       countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
       secret: app.rootConfig.JWT_SECRET
     }, (error) => request.log.warn({ err: error }, 'Shared IP visit could not be recorded'));
+    let attribution;
+    if (adId !== undefined) {
+      attribution = classifyLaunchAttribution({ launchQuery: adId === null ? {} : { adId } });
+    } else {
+      const latestLaunch = await measureDatabase(request, () => app.prisma.audienceActivityEvent.findFirst({
+        where: { userId: request.user.sub, eventType: 'APP_LAUNCH_CONTEXT' },
+        orderBy: { createdAt: 'desc' }, select: { metadata: true }
+      }));
+      attribution = classifyLaunchAttribution(latestLaunch?.metadata);
+    }
+    if (attribution.status !== 'ATTRIBUTED') return { required: false as const };
     const saved = await measureDatabase(request, () => app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } }));
     let policy = saved ?? disabledPolicy(app, releaseId);
     if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
@@ -143,6 +177,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       if (completion) {
         return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: session.completedCount < session.requiredCount, retryCurrent: false };
       }
+      if (session.status !== 'ACTIVE' || session.expiresAt <= new Date()) return null;
       if (!isEnded && session.countMode === 'COMPLETED') {
         const closed = await tx.adEvent.findFirst({
           where: { userId: request.user.sub, clientEventId, scope: 'APP_ENTRY', eventType: 'CLOSED_INCOMPLETE', appEntrySessionId: sessionId, adType: 'REWARDED', placementId: session.placementId },
@@ -162,7 +197,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
         },
         select: { id: true, adIndex: true }
       });
-      if (!shown) return null;
+      if (!shown) return { retryShownAcknowledgement: true as const };
       const adIndex = shown.adIndex;
       if (adIndex == null) return null;
       const indexCompletion = await tx.appEntryAdCompletion.findUnique({ where: { sessionId_adIndex: { sessionId, adIndex } } });
@@ -197,6 +232,9 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     }
 
     if (!result) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
+    if ('retryShownAcknowledgement' in result) {
+      return reply.code(409).send({ error: { code: 'AD_NOT_ACKNOWLEDGED', message: 'The ad impression has not been acknowledged yet.', requestId: request.id } });
+    }
     return { ...result, access: result.shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
   });
 }

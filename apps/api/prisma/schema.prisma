@@ -91,6 +91,11 @@ enum RewardedUnlockSessionStatus {
   EXPIRED
 }
 
+enum RewardedUnlockPurpose {
+  EPISODE_UNLOCK
+  EXIT_RETENTION
+}
+
 enum AdType {
   REWARDED
   INTERSTITIAL
@@ -107,6 +112,7 @@ enum AdEventType {
 enum AdScope {
   EPISODE_UNLOCK
   APP_ENTRY
+  EXIT_RETENTION
 }
 
 enum UserIdentityType {
@@ -621,6 +627,8 @@ model RewardedUnlockSession {
   id             String                      @id @default(cuid())
   userId         String
   episodeId      String
+  purpose        RewardedUnlockPurpose      @default(EPISODE_UNLOCK)
+  releaseId      String                      @default("default")
   placementId    String
   requiredCount  Int
   completedCount Int                         @default(0)
@@ -634,7 +642,7 @@ model RewardedUnlockSession {
   rewards  RewardedUnlockReward[]
   adEvents AdEvent[]              @relation("AdEventRewardSession")
 
-  @@index([userId, episodeId, status, expiresAt])
+  @@index([userId, episodeId, purpose, releaseId, status, expiresAt], map: "reward_session_lookup_context")
 }
 
 model RewardedUnlockReward {
@@ -682,6 +690,8 @@ model AppEntryAdPolicy {
   id            String             @id @default("default")
   releaseId     String             @unique @default("default")
   enabled       Boolean            @default(false)
+  exitRetentionEnabled Boolean     @default(false)
+  exitRetentionAdCount Int         @default(1)
   mode          AppEntryAdMode     @default(INTERSTITIAL)
   placementId   String             @default("")
   requiredCount Int                @default(1)

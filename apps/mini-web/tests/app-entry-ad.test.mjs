@@ -9,9 +9,10 @@ const performanceReports = [];
 globalThis.__entryAdTestPost = (...args) => post(...args);
 globalThis.__entryAdTestPerformance = (...args) => performanceReports.push(args);
 const mocks = {
-  '../../lib/api-client': 'export class ApiError extends Error {} export const apiClient = { post: (...args) => globalThis.__entryAdTestPost(...args) };',
+  '../../lib/api-client': 'export class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } } globalThis.__entryAdApiError = ApiError; export const apiClient = { post: (...args) => globalThis.__entryAdTestPost(...args) };',
   '../../lib/storage': 'export const isDemoMode = () => false;',
   '../../lib/app-brand': 'export const storagePrefix = "test";',
+  '../../lib/launch-context': 'export const getMiniLaunchAdId = () => null;',
   '../../lib/diagnostics': 'export const reportDiagnostic = () => {}; export const reportPerformance = (...args) => globalThis.__entryAdTestPerformance(...args);'
 };
 const hooks = registerHooks({
@@ -25,7 +26,7 @@ const hooks = registerHooks({
 });
 const { showAppEntryAd, completeAppEntryAd } = await import('../src/features/ads/app-entry-ad.ts');
 const previousWindow = globalThis.window;
-after(() => { hooks.deregister(); globalThis.window = previousWindow; delete globalThis.__entryAdTestPost; delete globalThis.__entryAdTestPerformance; });
+after(() => { hooks.deregister(); globalThis.window = previousWindow; delete globalThis.__entryAdTestPost; delete globalThis.__entryAdTestPerformance; delete globalThis.__entryAdApiError; });
 
 function setup() {
   const ads = [];
@@ -44,18 +45,23 @@ function setup() {
   globalThis.window = { TTMinis: { canIUse: () => true, createRewardedVideoAd: create, createInterstitialAd: create } };
   return ads;
 }
+
 const input = { mode: 'REWARDED_GATED', placementId: 'placement', sessionId: 'session', adIndex: 1 };
 const flush = () => new Promise(setImmediate);
 
-it('shows without waiting for REQUESTED and waits for SHOWN before server completion', async () => {
+it('shows without waiting for REQUESTED and overlaps SHOWN with completion', async () => {
   const ads = setup();
   let acknowledgeShown;
   const shownResponse = new Promise((resolve) => { acknowledgeShown = resolve; });
   const requests = [];
+  let completionAttempts = 0;
   post = (path, body) => {
     requests.push({ path, body });
     if (body.eventType === 'REQUESTED') return new Promise(() => {});
     if (body.eventType === 'SHOWN') return shownResponse;
+    if (path.endsWith('/complete') && ++completionAttempts === 1) {
+      throw new globalThis.__entryAdApiError('impression acknowledgement pending', 425);
+    }
     return Promise.resolve({ shouldContinue: false, completedCount: 1, requiredCount: 1 });
   };
   const playback = showAppEntryAd(input);
@@ -66,10 +72,10 @@ it('shows without waiting for REQUESTED and waits for SHOWN before server comple
   assert.equal(ads[0].close, undefined);
   const completion = completeAppEntryAd('session', result.clientEventId, result.isEnded);
   await flush();
-  assert.equal(requests.filter(({ path }) => path.endsWith('/complete')).length, 0);
+  assert.equal(requests.filter(({ path }) => path.endsWith('/complete')).length, 1);
   acknowledgeShown();
   await completion;
-  assert.equal(requests.filter(({ path }) => path.endsWith('/complete')).length, 1);
+  assert.equal(requests.filter(({ path }) => path.endsWith('/complete')).length, 2);
 });
 
 it('retries the same SHOWN ID and prewarms the next ad instance', async () => {
@@ -77,12 +83,19 @@ it('retries the same SHOWN ID and prewarms the next ad instance', async () => {
   const ads = setup();
   const shownIds = [];
   const completed = [];
+  let shownPersisted = false;
   post = async (path, body) => {
     if (body.eventType === 'SHOWN') {
       shownIds.push(body.clientEventId);
       if (shownIds.length === 1) throw new Error('network');
+      shownPersisted = true;
     }
-    if (path.endsWith('/complete')) completed.push(body);
+    if (path.endsWith('/complete')) {
+      if (!shownPersisted) {
+        throw new globalThis.__entryAdApiError('impression acknowledgement pending', 425);
+      }
+      completed.push(body);
+    }
     return { shouldContinue: true, completedCount: completed.length, requiredCount: 2 };
   };
   const first = showAppEntryAd(input);

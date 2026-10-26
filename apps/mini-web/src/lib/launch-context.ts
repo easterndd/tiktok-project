@@ -48,3 +48,9 @@ export function getMiniLaunchContext() {
     rawUrl: initialWebviewUrl || undefined
   };
 }
+
+export function getMiniLaunchAdId() {
+  const query = getMiniLaunchContext().launchQuery;
+  const entry = Object.entries(query).find(([key]) => key.toLowerCase().replace(/[_-]/g, '') === 'adid');
+  return entry?.[1] ?? null;
+}

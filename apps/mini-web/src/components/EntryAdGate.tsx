@@ -89,7 +89,10 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
       }
     };
     void run();
-    return () => { controller.abort(); window.clearTimeout(startupTimer); };
+    return () => {
+      controller.abort();
+      window.clearTimeout(startupTimer);
+    };
   }, [attempt]);
   return <EntryAdReadyContext.Provider value={state === 'READY'}>
     {children}

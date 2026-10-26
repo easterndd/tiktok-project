@@ -67,7 +67,19 @@ function selectMiniApp(value: MiniApp) {
   onSelect(value);
 }
 function MiniAppSelect() {
-	return <label className="mini-app-select">当前小程序<select value={activeApp} onChange={(event) => selectMiniApp(event.target.value as MiniApp)}>{miniAppOrganizations.map((group) => <optgroup key={group.id} label={group.label}>{group.apps.map((key) => <option key={key} value={key}>{miniAppNames[key]}</option>)}</optgroup>)}</select></label>;
+  const [search, setSearch] = useState('');
+  const query = search.trim().toLocaleLowerCase();
+  const hasMatch = !query || miniAppOrganizations.some((group) => group.apps.some((key) => key.toLocaleLowerCase().includes(query) || miniAppNames[key].toLocaleLowerCase().includes(query)));
+  const groups = miniAppOrganizations.map((group) => ({
+    ...group,
+    apps: group.apps.filter((key) => !query || key === activeApp || key.toLocaleLowerCase().includes(query) || miniAppNames[key].toLocaleLowerCase().includes(query))
+  })).filter((group) => group.apps.length > 0);
+  return <label className="mini-app-select">
+    当前小程序
+    <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索小程序名称或 key" aria-label="搜索小程序" />
+    <select value={activeApp} onChange={(event) => selectMiniApp(event.target.value as MiniApp)}>{groups.map((group) => <optgroup key={group.id} label={group.label}>{group.apps.map((key) => <option key={key} value={key}>{miniAppNames[key]} · {key}</option>)}</optgroup>)}</select>
+    {query && !hasMatch && <small className="form-help">没有匹配的小程序</small>}
+  </label>;
 }
 let adminSessionRecoveryStarted = false;
 
@@ -189,7 +201,7 @@ function platformBusinessDetails(job: PlatformSyncJob) {
   return details;
 }
 type Overview = { albums: number; episodes: number; users: number; likes: number; favorites: number; shares: number; searches: number; rewardedUnlocks: number; updatedAt?: string };
-type AppEntryAdPolicy = { releaseId: string; enabled: boolean; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; requiredCount: number; countMode: 'COMPLETED' | 'SHOWN'; onUnavailable: 'ALLOW' | 'BLOCK'; version: number };
+type AppEntryAdPolicy = { releaseId: string; enabled: boolean; exitRetentionEnabled: boolean; exitRetentionAdCount: number; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; requiredCount: number; countMode: 'COMPLETED' | 'SHOWN'; onUnavailable: 'ALLOW' | 'BLOCK'; version: number };
 type PortalStatus = 'UNKNOWN' | 'PREVIEW' | 'IN_REVIEW' | 'READY' | 'RELEASED';
 type AppEntryAdRelease = AppEntryAdPolicy & { portalVersion: string | null; portalStatus: PortalStatus; firstSeenAt?: string | null; lastSeenAt?: string | null };
 type AppEntryAdPolicyList = { items: AppEntryAdRelease[]; placementDefaults: { INTERSTITIAL: string; REWARDED_GATED: string } };
@@ -303,7 +315,7 @@ function AdminApp() {
   const [entryAdVersions, setEntryAdVersions] = useState<AppEntryAdPolicyList['items']>([]);
   const [savingEntryAdRelease, setSavingEntryAdRelease] = useState(false);
   const [entryAdPlacementDefaults, setEntryAdPlacementDefaults] = useState<AppEntryAdPolicyList['placementDefaults']>({ INTERSTITIAL: '', REWARDED_GATED: '' });
-  const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ releaseId: 'default', enabled: false, mode: 'INTERSTITIAL', placementId: '', requiredCount: 1, countMode: 'COMPLETED', onUnavailable: 'ALLOW', version: 1 });
+  const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ releaseId: 'default', enabled: false, exitRetentionEnabled: false, exitRetentionAdCount: 1, mode: 'INTERSTITIAL', placementId: '', requiredCount: 1, countMode: 'COMPLETED', onUnavailable: 'ALLOW', version: 1 });
   const [analyticsFrom, setAnalyticsFrom] = useState(() => rangeStart(30));
   const [analyticsTo, setAnalyticsTo] = useState(() => inputDate(new Date()));
   const [analyticsTimezone, setAnalyticsTimezone] = useState('Asia/Shanghai');
@@ -1393,8 +1405,9 @@ function AdminApp() {
         <p className="form-help">首次上报：{selectedEntryAdRelease?.firstSeenAt ? new Date(selectedEntryAdRelease.firstSeenAt).toLocaleString('zh-CN') : '尚未收到该包上报'}。同一构建包审核通过后继续使用同一标识和策略。</p><details><summary>Portal 人工备注（非平台自动识别）</summary><div className="form-grid"><label>Portal 版本号<input value={selectedEntryAdRelease?.portalVersion ?? ''} maxLength={32} placeholder="例如 Version 2" onChange={(event) => setEntryAdVersions((items) => items.map((item) => item.releaseId === entryAdReleaseId ? { ...item, portalVersion: event.target.value } : item))} /></label><label>Portal 状态（手动核对）<select value={selectedEntryAdRelease?.portalStatus ?? 'UNKNOWN'} onChange={(event) => setEntryAdVersions((items) => items.map((item) => item.releaseId === entryAdReleaseId ? { ...item, portalStatus: event.target.value as PortalStatus } : item))}>{Object.entries(portalStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
         <button className="secondary" type="button" disabled={!selectedEntryAdRelease || savingEntryAdRelease} onClick={() => void saveEntryAdRelease()}><Save size={17} />{savingEntryAdRelease ? '保存中...' : '保存 Portal 版本状态'}</button></details>
         <label className="check-row"><input type="checkbox" checked={entryAdPolicy.enabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, enabled: event.target.checked }))} />启用进入广告</label>
+        <div className="form-grid"><label className="check-row"><input type="checkbox" checked={entryAdPolicy.exitRetentionEnabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, exitRetentionEnabled: event.target.checked }))} />启用退出挽留</label><label>挽留所需完整观看次数<input type="number" min="1" max="20" value={entryAdPolicy.exitRetentionAdCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, exitRetentionAdCount: Number(event.target.value) }))} disabled={!entryAdPolicy.exitRetentionEnabled} /></label></div>
         <div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => { const mode = event.target.value as AppEntryAdPolicy['mode']; return { ...policy, mode, placementId: entryAdPlacementDefaults[mode] }; })}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>广告位 ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required={entryAdPolicy.enabled} /></label><label>所需广告次数<input type="number" min="1" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>计数规则<select value={entryAdPolicy.countMode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, countMode: event.target.value as AppEntryAdPolicy['countMode'] }))}><option value="COMPLETED">完成激励后计数</option><option value="SHOWN">成功弹出即计数</option></select></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入</option></select></label></div>
-        <p className="form-help">正在编辑：{entryAdPolicy.releaseId} · 策略版本 {entryAdPolicy.version}。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy || entryAdPolicy.releaseId !== entryAdReleaseId}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存进入广告策略</>}</button></form></Panel>}
+        <p className="form-help">正在编辑：{entryAdPolicy.releaseId} · 策略版本 {entryAdPolicy.version}。退出挽留使用当前小程序服务端配置的激励广告位。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy || entryAdPolicy.releaseId !== entryAdReleaseId}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存广告策略</>}</button></form></Panel>}
       {tab === 'audience' && !audience && !resourceStatus.audience?.error && <p className="load-placeholder">正在加载观众数据...</p>}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <ViewerAdControls api={api} canEdit miniApps={organizationApps} currentMiniApp={activeApp} />}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <SharedIpControls api={api} canEdit miniApps={Object.entries(miniAppNames).map(([key, name]) => ({ key, name }))} />}

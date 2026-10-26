@@ -139,9 +139,9 @@ it('uses independent ad placement defaults for each mini app admin context', asy
     const mainUserToken = await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'main' });
     const taletvUserToken = await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'taletv' });
     await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: { authorization: `Bearer ${mainUserToken}` },
-      payload: { launchId: '8be2272a-32fd-4f65-b3f5-9414b5d5d943', releaseId: 'main-review-v7' } });
+      payload: { launchId: '8be2272a-32fd-4f65-b3f5-9414b5d5d943', releaseId: 'main-review-v7', adId: 'main-ad-1' } });
     await app.inject({ method: 'POST', url: '/api/taletv/v1/app-entry-ad-sessions', headers: { authorization: `Bearer ${taletvUserToken}` },
-      payload: { launchId: '83ef9af1-5ab5-48b9-a365-295d8f9773c2', releaseId: 'taletv-v6' } });
+      payload: { launchId: '83ef9af1-5ab5-48b9-a365-295d8f9773c2', releaseId: 'taletv-v6', adId: 'taletv-ad-1' } });
     const mainVersions = await app.inject({ url: '/api/v1/admin/app-entry-ad-policies', headers: { authorization: `Bearer ${mainAdminToken}` } });
     const taletvVersions = await app.inject({ url: '/api/taletv/v1/admin/app-entry-ad-policies', headers: { authorization: `Bearer ${taletvAdminToken}` } });
     assert.deepEqual(mainVersions.json().items.map((item: { releaseId: string }) => item.releaseId), ['main-review-v7', 'default']);

@@ -31,6 +31,7 @@ import {
 } from '../../services/shared-platform.service';
 import { authorizeSharedPlayback, sharedPlaybackStatus } from '../../services/shared-playback.service';
 import { assertSameMiniAppOrganization, miniAppAdConfig, miniAppKeys, sameMiniAppOrganization, type MiniAppKey } from '../../config/mini-apps';
+import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { assertDisplayMetadataOwner, carryBaseTextChanges, displayMetadataInput, findDisplayMetadataAlbum, readDisplayMetadata, retryDisplayMetadata, saveLocalDisplayMetadata, saveSharedDisplayMetadata } from '../../services/display-metadata.service';
 import { listEntryAdIpExemptions, listSharedIpVisits, listSharedIps, listViewerIdsForIp, normalizeIp, recentViewerIps, removeEntryAdIpExemption, setEntryAdIpExemption, setEntryAdIpExemptions } from '../../services/shared-ip.service';
 
@@ -208,6 +209,8 @@ const analyticsQuery = z.object({
 const appEntryAdPolicyInput = z.object({
   releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default'),
   enabled: z.boolean(),
+  exitRetentionEnabled: z.boolean().default(false),
+  exitRetentionAdCount: z.number().int().min(1).max(20).default(1),
   mode: z.enum(['INTERSTITIAL', 'REWARDED_GATED']),
   placementId: z.string().trim().max(128),
   requiredCount: z.number().int().min(1),
@@ -231,6 +234,34 @@ const ipVisitsInput = z.object({ limit: z.coerce.number().int().min(1).max(100).
 const ipExemptionInput = z.object({ ipAddress: z.string().trim().min(3).max(45), note: z.string().trim().max(500).nullable().default(null) });
 const ipExemptionBatchInput = z.object({ ipAddresses: z.array(z.string().trim().min(3).max(45)).min(1).max(100), exempt: z.boolean(), note: z.string().trim().max(500).nullable().default(null) }).refine((input) => new Set(input.ipAddresses).size === input.ipAddresses.length);
 const ipParams = z.object({ ipAddress: z.string().trim().min(3).max(45) });
+
+type ViewerSortRow = { id: string };
+
+async function globallySortedViewerIds(db: PrismaClient, input: { search: string; viewerIds?: string[]; limit: number }) {
+  if (input.viewerIds && input.viewerIds.length === 0) return [];
+  const filters: Prisma.Sql[] = [];
+  if (input.search) {
+    const pattern = `%${input.search}%`;
+    filters.push(Prisma.sql`(u."id" ILIKE ${pattern} OR u."tiktokOpenId" ILIKE ${pattern})`);
+  }
+  if (input.viewerIds) filters.push(Prisma.sql`u."id" IN (${Prisma.join(input.viewerIds)})`);
+  const where = filters.length ? Prisma.sql`WHERE ${Prisma.join(filters, ' AND ')}` : Prisma.empty;
+  const rows = await db.$queryRaw<ViewerSortRow[]>(Prisma.sql`
+    SELECT u."id"
+    FROM "User" AS u
+    LEFT JOIN LATERAL (
+      SELECT s."lastSeenAt"
+      FROM "AppSession" AS s
+      WHERE s."userId" = u."id"
+      ORDER BY s."lastSeenAt" DESC
+      LIMIT 1
+    ) AS latest_session ON TRUE
+    ${where}
+    ORDER BY latest_session."lastSeenAt" DESC NULLS LAST, u."createdAt" DESC, u."id" DESC
+    LIMIT ${input.limit}
+  `);
+  return rows.map((row) => row.id);
+}
 
 const componentLabels: Record<z.infer<typeof componentParams>['key'], string> = {
   APP_TOPBAR: '顶部导航',
@@ -493,17 +524,23 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       viewerIds = (await listViewerIdsForIp(app.sharedPrisma, app.config.MINI_APP_KEY, ip, app.rootConfig.JWT_SECRET)).map((row) => row.userId);
       if (!viewerIds.length) return { items: [] };
     }
+    const sortedViewerIds = await globallySortedViewerIds(app.prisma, { search, viewerIds, limit });
     const items = await app.prisma.user.findMany({
-      where: { ...(search ? { OR: [{ id: { contains: search } }, { tiktokOpenId: { contains: search } }] } : {}), ...(viewerIds ? { id: { in: viewerIds } } : {}) },
-      orderBy: { createdAt: 'desc' }, take: limit,
+      where: { id: { in: sortedViewerIds } },
       select: { id: true, identityType: true, tiktokOpenId: true, appEntryAdExempt: true, createdAt: true, appSessions: { orderBy: { lastSeenAt: 'desc' }, take: 1, select: { lastSeenAt: true, countryCode: true } } }
     });
+    const itemOrder = new Map(sortedViewerIds.map((id, index) => [id, index]));
+    items.sort((left, right) => (itemOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (itemOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER));
     const [ips, launchEvents] = await Promise.all([
       recentViewerIps(app.sharedPrisma, app.config.MINI_APP_KEY, items.map((item) => item.id)),
       app.prisma.audienceActivityEvent.findMany({ where: { userId: { in: items.map((item) => item.id) }, eventType: 'APP_LAUNCH_CONTEXT' }, orderBy: { createdAt: 'desc' }, distinct: ['userId'], take: items.length, select: { userId: true, metadata: true, createdAt: true } })
     ]);
     const launchByUser = new Map(launchEvents.map((event) => [event.userId, event]));
-    return { items: items.map(({ appSessions, ...viewer }) => ({ ...viewer, lastSeenAt: appSessions[0]?.lastSeenAt ?? null, countryCode: appSessions[0]?.countryCode ?? null, ipAddress: ips.get(viewer.id) || null, launchContext: launchByUser.get(viewer.id) ?? null })) };
+    return { items: items.map(({ appSessions, ...viewer }) => {
+      const launchContext = launchByUser.get(viewer.id) ?? null;
+      return { ...viewer, lastSeenAt: appSessions[0]?.lastSeenAt ?? null, countryCode: appSessions[0]?.countryCode ?? null, ipAddress: ips.get(viewer.id) || null,
+        launchContext: launchContext ? { ...launchContext, attribution: classifyLaunchAttribution(launchContext.metadata) } : null };
+    }) };
   });
   app.get('/admin/shared/viewers', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
     const { miniAppKey, search, ipAddress, limit } = sharedViewerQueryInput.parse(request.query);
@@ -518,17 +555,23 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       viewerIds = (await listViewerIdsForIp(app.sharedPrisma, miniAppKey, ip, app.rootConfig.JWT_SECRET)).map((row) => row.userId);
       if (!viewerIds.length) return { items: [] };
     }
+    const sortedViewerIds = await globallySortedViewerIds(targetDb, { search, viewerIds, limit });
     const items = await targetDb.user.findMany({
-      where: { ...(search ? { OR: [{ id: { contains: search } }, { tiktokOpenId: { contains: search } }] } : {}), ...(viewerIds ? { id: { in: viewerIds } } : {}) },
-      orderBy: { createdAt: 'desc' }, take: limit,
+      where: { id: { in: sortedViewerIds } },
       select: { id: true, identityType: true, tiktokOpenId: true, appEntryAdExempt: true, createdAt: true, appSessions: { orderBy: { lastSeenAt: 'desc' }, take: 1, select: { lastSeenAt: true, countryCode: true } } }
     });
+    const itemOrder = new Map(sortedViewerIds.map((id, index) => [id, index]));
+    items.sort((left, right) => (itemOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (itemOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER));
     const [ips, launchEvents] = await Promise.all([
       recentViewerIps(app.sharedPrisma, miniAppKey, items.map((item) => item.id)),
       targetDb.audienceActivityEvent.findMany({ where: { userId: { in: items.map((item) => item.id) }, eventType: 'APP_LAUNCH_CONTEXT' }, orderBy: { createdAt: 'desc' }, distinct: ['userId'], take: items.length, select: { userId: true, metadata: true, createdAt: true } })
     ]);
     const launchByUser = new Map(launchEvents.map((event) => [event.userId, event]));
-    return { items: items.map(({ appSessions, ...viewer }) => ({ ...viewer, miniAppKey, lastSeenAt: appSessions[0]?.lastSeenAt ?? null, countryCode: appSessions[0]?.countryCode ?? null, ipAddress: ips.get(viewer.id) || null, launchContext: launchByUser.get(viewer.id) ?? null })) };
+    return { items: items.map(({ appSessions, ...viewer }) => {
+      const launchContext = launchByUser.get(viewer.id) ?? null;
+      return { ...viewer, miniAppKey, lastSeenAt: appSessions[0]?.lastSeenAt ?? null, countryCode: appSessions[0]?.countryCode ?? null, ipAddress: ips.get(viewer.id) || null,
+        launchContext: launchContext ? { ...launchContext, attribution: classifyLaunchAttribution(launchContext.metadata) } : null };
+    }) };
   });
   app.get('/admin/shared/viewers/:userId/launches', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
     const { userId } = viewerParams.parse(request.params);
@@ -543,7 +586,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       where: { userId, eventType: 'APP_LAUNCH_CONTEXT' }, orderBy: { createdAt: 'desc' },
       skip: offset, take: limit + 1, select: { id: true, createdAt: true, metadata: true }
     });
-    return { items: events.slice(0, limit), hasMore: events.length > limit };
+    return { items: events.slice(0, limit).map((event) => ({ ...event, attribution: classifyLaunchAttribution(event.metadata) })), hasMore: events.length > limit };
   });
   app.patch('/admin/shared/viewers/app-entry-ad/batch', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
     const input = sharedViewerAdBatchInput.parse(request.body);
@@ -714,7 +757,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/admin/app-entry-ad-policies', { preHandler: requireAdmin }, async () => {
     const policies = await app.prisma.appEntryAdPolicy.findMany({
       orderBy: { updatedAt: 'desc' },
-      select: { releaseId: true, enabled: true, mode: true, placementId: true, requiredCount: true, countMode: true, onUnavailable: true, version: true, updatedAt: true, firstSeenAt: true }
+      select: { releaseId: true, enabled: true, exitRetentionEnabled: true, exitRetentionAdCount: true, mode: true, placementId: true, requiredCount: true, countMode: true, onUnavailable: true, version: true, updatedAt: true, firstSeenAt: true }
     });
     const releases = await app.sharedPrisma.miniAppCodeRelease.findMany({
       where: { miniAppKey: app.config.MINI_APP_KEY },
@@ -724,7 +767,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const placements = miniAppAdConfig(app.config);
     const items = policies.some((item) => item.releaseId === 'default') ? policies : [...policies, {
       releaseId: 'default', enabled: false, mode: placements.appEntryPlacementId ? 'INTERSTITIAL' as const : 'REWARDED_GATED' as const,
-      placementId: placements.appEntryPlacementId || placements.rewardedPlacementId, requiredCount: 1,
+      exitRetentionEnabled: false, exitRetentionAdCount: 1, placementId: placements.appEntryPlacementId || placements.rewardedPlacementId, requiredCount: 1,
       countMode: 'COMPLETED' as const, onUnavailable: 'ALLOW' as const, version: 1, updatedAt: new Date(0), firstSeenAt: null
     }];
     return {

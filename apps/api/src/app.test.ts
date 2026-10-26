@@ -95,6 +95,7 @@ async function createPrismaStub() {
     entryCompletions: new Map<string, any>(),
     appSessions: new Map<string, any>(),
     activityEvents: new Map<string, any>(),
+    legacyLaunchMetadata: { metadata: { launchQuery: { adId: 'test-ad-id' } } } as any | null,
     sharedIps: new Map<string, any>(),
     sharedVisits: new Map<string, any>(),
     sharedExemptions: new Map<string, any>(),
@@ -147,7 +148,7 @@ async function createPrismaStub() {
     },
     rewardedUnlockSession: {
       updateMany: async () => ({ count: 0 }),
-      findFirst: async (args: { where: { userId: string; episodeId: string; status: string } }) => Array.from(state.rewardSessions.values()).find((session) => session.userId === args.where.userId && session.episodeId === args.where.episodeId && session.status === args.where.status) ?? null,
+      findFirst: async (args: { where: { userId: string; episodeId: string; status: string; purpose?: string; releaseId?: string } }) => Array.from(state.rewardSessions.values()).find((session) => session.userId === args.where.userId && session.episodeId === args.where.episodeId && session.status === args.where.status && (session.purpose ?? 'EPISODE_UNLOCK') === (args.where.purpose ?? 'EPISODE_UNLOCK') && (session.releaseId ?? 'default') === (args.where.releaseId ?? 'default')) ?? null,
       findUnique: async (args: { where: { id: string } }) => state.rewardSessions.get(args.where.id) ?? null,
       findUniqueOrThrow: async (args: { where: { id: string } }) => state.rewardSessions.get(args.where.id),
       create: async (args: { data: any }) => {
@@ -216,9 +217,12 @@ async function createPrismaStub() {
     },
     searchEvent: { create: async () => ({ id: 'search-1' }), count: async () => 0 },
     audienceActivityEvent: {
-      findFirst: async ({ where }: any) => [...state.activityEvents.values()].find((event) =>
-        event.userId === where.userId && event.eventType === where.eventType
-        && event.metadata?.entryId === where.metadata?.equals) ?? null,
+      findFirst: async ({ where, orderBy }: any) => {
+        const events = [...state.activityEvents.values()].filter((event) => event.userId === where.userId && event.eventType === where.eventType);
+        if (where.metadata) return events.find((event) => event.metadata?.entryId === where.metadata.equals) ?? null;
+        if (orderBy) return events.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] ?? state.legacyLaunchMetadata;
+        return events[0] ?? null;
+      },
       create: async ({ data }: any) => {
         const event = { id: `activity-${state.activityEvents.size + 1}`, createdAt: new Date(), ...data };
         state.activityEvents.set(event.id, event);
@@ -1009,6 +1013,65 @@ describe('QuicK ReeLS API', () => {
     assert.equal(history.json().items.length, 1);
   });
 
+  it('skips entry strong ads for explicit missing or placeholder ad IDs and keeps the configured flow for attributed entries', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const userHeaders = { authorization: `Bearer ${await token(app, 'user')}` };
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders,
+      payload: { enabled: true, exitRetentionEnabled: true, exitRetentionAdCount: 2, mode: 'INTERSTITIAL', placementId: 'attributed-entry', requiredCount: 1, onUnavailable: 'ALLOW' } });
+
+    const preview = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders,
+      payload: { launchId: 'a5ac5104-8d0f-40f6-a857-0a2eaf261d36', adId: null } });
+    assert.deepEqual(preview.json(), { required: false });
+    assert.equal((app.prisma as any)._state.entrySessions.size, 0);
+
+    const placeholder = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders,
+      payload: { launchId: 'a5ac5104-8d0f-40f6-a857-0a2eaf261d37', adId: '__AD_ID__' } });
+    assert.deepEqual(placeholder.json(), { required: false });
+
+    const attributed = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders,
+      payload: { launchId: 'a5ac5104-8d0f-40f6-a857-0a2eaf261d38', adId: '1879822310597858' } });
+    assert.equal(attributed.statusCode, 200, attributed.body);
+    assert.equal(attributed.json().required, true);
+    assert.equal(attributed.json().placementId, 'attributed-entry');
+  });
+
+  it('keeps exit retention separate from entry ads and episode unlock sessions', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const userHeaders = { authorization: `Bearer ${await token(app, 'user')}`, 'x-geo-country': 'US' };
+    const policy = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders,
+      payload: { releaseId: 'main-test-v1', enabled: true, exitRetentionEnabled: true, exitRetentionAdCount: 2, mode: 'INTERSTITIAL', placementId: 'entry-only', requiredCount: 1, onUnavailable: 'ALLOW' } });
+    assert.equal(policy.statusCode, 200, policy.body);
+
+    const config = await app.inject({ method: 'GET', url: '/api/v1/exit-retention/config?releaseId=main-test-v1', headers: userHeaders });
+    assert.deepEqual(config.json(), { enabled: true, placementId: env.REWARDED_PLACEMENT_ID, requiredCount: 2 });
+    const normal = await app.inject({ method: 'POST', url: '/api/v1/episodes/episode-1/reward-session', headers: userHeaders, payload: {} });
+    const retention = await app.inject({ method: 'POST', url: '/api/v1/episodes/episode-1/reward-session', headers: userHeaders, payload: { purpose: 'EXIT_RETENTION', releaseId: 'main-test-v1' } });
+    assert.equal(normal.json().requiredCount, 3);
+    assert.equal(retention.json().requiredCount, 2);
+    assert.notEqual(normal.json().sessionId, retention.json().sessionId);
+
+    const badScope = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers: userHeaders,
+      payload: { clientEventId: 'retention-event-1', adType: 'REWARDED', eventType: 'SHOWN', placementId: env.REWARDED_PLACEMENT_ID, episodeId: 'episode-1', sessionId: retention.json().sessionId, rewardSessionId: retention.json().sessionId, adIndex: 1 } });
+    assert.equal(badScope.statusCode, 409);
+    const firstShown = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers: userHeaders,
+      payload: { clientEventId: 'retention-event-1', adType: 'REWARDED', scope: 'EXIT_RETENTION', eventType: 'SHOWN', placementId: env.REWARDED_PLACEMENT_ID, episodeId: 'episode-1', sessionId: retention.json().sessionId, rewardSessionId: retention.json().sessionId, adIndex: 1 } });
+    assert.equal(firstShown.statusCode, 200, firstShown.body);
+    const firstComplete = await app.inject({ method: 'POST', url: `/api/v1/episodes/episode-1/reward-session/${retention.json().sessionId}/complete`, headers: userHeaders,
+      payload: { clientEventId: 'retention-event-1', isEnded: true } });
+    assert.equal(firstComplete.json().access, 'REWARDED_AD_REQUIRED');
+    const secondShown = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers: userHeaders,
+      payload: { clientEventId: 'retention-event-2', adType: 'REWARDED', scope: 'EXIT_RETENTION', eventType: 'SHOWN', placementId: env.REWARDED_PLACEMENT_ID, episodeId: 'episode-1', sessionId: retention.json().sessionId, rewardSessionId: retention.json().sessionId, adIndex: 2 } });
+    assert.equal(secondShown.statusCode, 200, secondShown.body);
+    const secondComplete = await app.inject({ method: 'POST', url: `/api/v1/episodes/episode-1/reward-session/${retention.json().sessionId}/complete`, headers: userHeaders,
+      payload: { clientEventId: 'retention-event-2', isEnded: true } });
+    assert.equal(secondComplete.json().access, 'PLAYABLE');
+    assert.equal(secondComplete.json().shouldContinue, false);
+  });
+
   it('filters viewers by exact IP and mini app and bulk updates entry-ad exemptions', async () => {
     const app = await createTestApp();
     apps.push(app);
@@ -1291,6 +1354,7 @@ describe('QuicK ReeLS API', () => {
     for (const eventId of ['de0d4d84-f1e5-4a4d-b6b6-1de0124e1201', 'b124bec0-1af4-4dc6-aec6-98f1c0f77e4a']) {
       const premature = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId: eventId, isEnded: true } });
       assert.equal(premature.statusCode, 409);
+      assert.equal(premature.json().error.code, 'AD_NOT_ACKNOWLEDGED');
       const shown = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers, payload: { clientEventId: eventId, adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'SHOWN', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: eventId.startsWith('de0') ? 1 : 2 } });
       assert.equal(shown.statusCode, 200);
       const completed = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId: eventId, isEnded: true } });

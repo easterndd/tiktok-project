@@ -1,6 +1,7 @@
 import { ApiError, apiClient } from '../../lib/api-client';
 import { isDemoMode } from '../../lib/storage';
 import { storagePrefix } from '../../lib/app-brand';
+import { getMiniLaunchAdId } from '../../lib/launch-context';
 import { adTimeout, adErrorMessage } from './ad-timeout';
 import { runAdShow } from './ad-show';
 import { reportDiagnostic, reportPerformance } from '../../lib/diagnostics';
@@ -44,7 +45,8 @@ export async function startAppEntryAdSession(): Promise<AppEntryAdSession> {
   const startedAt = performance.now();
   const session = await apiClient.post<AppEntryAdSession>('/app-entry-ad-sessions', {
     launchId: getLaunchId(),
-    releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default'
+    releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default',
+    adId: getMiniLaunchAdId()
   });
   reportPerformance('ENTRY_AD_POLICY_RESPONSE', '/app-entry-ad-sessions', performance.now() - startedAt, { required: session.required, mode: session.mode ?? 'NONE' });
   if (session.required && session.placementId) {
@@ -62,15 +64,24 @@ type EntryAdProgress = { shouldContinue: boolean; completedCount: number; requir
 export async function completeAppEntryAd(sessionId: string, clientEventId: string, isEnded: boolean) {
   if (isDemoMode()) return { shouldContinue: false, completedCount: 0, requiredCount: 0 };
   const key = `${sessionId}:${clientEventId}`;
-  // Retry the same impression, never replay a watched ad because telemetry failed.
-  try { await shownAcknowledgements.get(key)?.(); }
-  catch (error) {
-    reportDiagnostic({ kind: 'API', phase: 'ENTRY_AD_SHOWN_REPORT', message: adErrorMessage(error), path: '/ad-events' });
-    throw error;
-  }
+  const shownAcknowledgement = shownAcknowledgements.get(key);
   const payload = { clientEventId, isEnded };
+  const complete = () => apiClient.post<EntryAdProgress>(`/app-entry-ad-sessions/${sessionId}/complete`, payload);
   try {
-    const result = await apiClient.post<EntryAdProgress>(`/app-entry-ad-sessions/${sessionId}/complete`, payload);
+    let result: EntryAdProgress;
+    try {
+      result = await complete();
+    } catch (error) {
+      if (!(error instanceof ApiError) || (error.status !== 409 && error.status !== 425) || (error.status === 409 && error.code !== 'AD_NOT_ACKNOWLEDGED')) throw error;
+      // Run completion beside SHOWN telemetry; wait only when the API observes
+      // the race and asks us to retry after the impression is persisted.
+      try { await shownAcknowledgement?.(); }
+      catch (ackError) {
+        reportDiagnostic({ kind: 'API', phase: 'ENTRY_AD_SHOWN_REPORT', message: adErrorMessage(ackError), path: '/ad-events' });
+        throw ackError;
+      }
+      result = await complete();
+    }
     shownAcknowledgements.delete(key);
     if (!result.shouldContinue) entryAdClosedAt.delete(sessionId);
     return result;

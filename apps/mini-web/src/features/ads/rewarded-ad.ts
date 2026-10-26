@@ -11,38 +11,46 @@ type RewardSession = {
   access: 'PLAYABLE' | 'REWARDED_AD_REQUIRED';
   sessionId?: string;
   placementId?: string;
+  completedCount?: number;
+  requiredCount?: number;
 };
 
 type RewardComplete = {
   access: 'PLAYABLE' | 'REWARDED_AD_REQUIRED';
   shouldContinue: boolean;
+  completedCount?: number;
+  requiredCount?: number;
 };
 
 const rewardSessions = new Map<string, { promise: Promise<RewardSession>; expiresAt: number }>();
+type RewardPurpose = 'EPISODE_UNLOCK' | 'EXIT_RETENTION';
+type RewardOptions = { purpose?: RewardPurpose; releaseId?: string };
+const sessionKey = (episodeId: string, options: RewardOptions) => `${options.purpose ?? 'EPISODE_UNLOCK'}:${options.releaseId ?? 'default'}:${episodeId}`;
 
-export function prepareRewardedUnlockSession(episodeId: string) {
-  const cached = rewardSessions.get(episodeId);
+export function prepareRewardedUnlockSession(episodeId: string, options: RewardOptions = {}) {
+  const key = sessionKey(episodeId, options);
+  const cached = rewardSessions.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;
 
   const entry = {
     promise: Promise.resolve({ access: 'PLAYABLE' } as RewardSession),
     expiresAt: Date.now() + 25 * 60 * 1000
   };
-  entry.promise = apiClient.post<RewardSession>(`/episodes/${episodeId}/reward-session`, {}).then((session) => {
+  entry.promise = apiClient.post<RewardSession>(`/episodes/${episodeId}/reward-session`, options.purpose === 'EXIT_RETENTION' ? { purpose: 'EXIT_RETENTION', releaseId: options.releaseId ?? 'default' } : {}).then((session) => {
     if (session.access === 'REWARDED_AD_REQUIRED' && session.placementId) {
       prewarmRewardedAd(session.placementId);
-      if (rewardSessions.get(episodeId) === entry) {
-        rewardSessions.set(episodeId, { promise: Promise.resolve(session), expiresAt: entry.expiresAt });
+      if (rewardSessions.get(key) === entry) {
+        rewardSessions.set(key, { promise: Promise.resolve(session), expiresAt: entry.expiresAt });
       }
-    } else if (rewardSessions.get(episodeId) === entry) {
-      rewardSessions.delete(episodeId);
+    } else if (rewardSessions.get(key) === entry) {
+      rewardSessions.delete(key);
     }
     return session;
   }).catch((error) => {
-    if (rewardSessions.get(episodeId) === entry) rewardSessions.delete(episodeId);
+    if (rewardSessions.get(key) === entry) rewardSessions.delete(key);
     throw error;
   });
-  rewardSessions.set(episodeId, entry);
+  rewardSessions.set(key, entry);
   return entry.promise;
 }
 
@@ -65,7 +73,7 @@ async function completeReward(episodeId: string, sessionId: string, eventId: str
   }
 }
 
-async function recordAdEvent(input: { clientEventId: string; eventType: 'REQUESTED' | 'SHOWN' | 'CLOSED_INCOMPLETE' | 'FAILED'; placementId: string; episodeId: string; sessionId: string; adIndex: number; errorCode?: string }, required = false) {
+async function recordAdEvent(input: { clientEventId: string; eventType: 'REQUESTED' | 'SHOWN' | 'CLOSED_INCOMPLETE' | 'FAILED'; placementId: string; episodeId: string; sessionId: string; adIndex: number; scope: RewardPurpose; errorCode?: string }, required = false) {
   const startedAt = performance.now();
   try {
     await apiClient.post('/ad-events', { adType: 'REWARDED', ...input, rewardSessionId: input.sessionId });
@@ -78,12 +86,12 @@ async function recordAdEvent(input: { clientEventId: string; eventType: 'REQUEST
   }
 }
 
-async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; sessionId: string; adIndex: number; rewardEventId: string; previousClosedAt?: number }) {
-  const { adUnitId, episodeId, sessionId, adIndex, rewardEventId, previousClosedAt } = input;
+async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; sessionId: string; adIndex: number; rewardEventId: string; scope: RewardPurpose; previousClosedAt?: number }) {
+  const { adUnitId, episodeId, sessionId, adIndex, rewardEventId, scope, previousClosedAt } = input;
   const releaseActivity = claimNativeAd('rewarded');
   if (!releaseActivity) throw new Error('AD_BUSY');
   // REQUESTED is analytics only; network latency must not block the native ad.
-  void recordAdEvent({ clientEventId: `${rewardEventId}:requested`, eventType: 'REQUESTED', placementId: adUnitId, episodeId, sessionId, adIndex });
+  void recordAdEvent({ clientEventId: `${rewardEventId}:requested`, eventType: 'REQUESTED', placementId: adUnitId, episodeId, sessionId, adIndex, scope });
   let ad;
   try { ad = getRewardedAd(adUnitId); }
   catch (error) { releaseActivity(); reportDiagnostic({ kind: 'AD', phase: 'REWARDED_CREATE', message: error instanceof Error ? error.message : String(error), path: `/episodes/${episodeId}` }); throw error; }
@@ -114,7 +122,7 @@ async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; s
         prewarmRewardedAd(adUnitId);
       }
       if (!isEnded) {
-        void recordAdEvent({ clientEventId: `${rewardEventId}:incomplete`, eventType: 'CLOSED_INCOMPLETE', placementId: adUnitId, episodeId, sessionId, adIndex });
+        void recordAdEvent({ clientEventId: `${rewardEventId}:incomplete`, eventType: 'CLOSED_INCOMPLETE', placementId: adUnitId, episodeId, sessionId, adIndex, scope });
         fail(new Error('AD_REWARD_NOT_EARNED'));
       }
       else void shownConfirmation.then(() => {
@@ -129,7 +137,7 @@ async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; s
       if (settled) return;
       const errorCode = adErrorMessage(error);
       reportDiagnostic({ kind: 'AD', phase: 'REWARDED_SHOW', message: errorCode, path: `/episodes/${episodeId}` });
-      void recordAdEvent({ clientEventId: `${rewardEventId}:failed`, eventType: 'FAILED', placementId: adUnitId, episodeId, sessionId, adIndex, errorCode });
+      void recordAdEvent({ clientEventId: `${rewardEventId}:failed`, eventType: 'FAILED', placementId: adUnitId, episodeId, sessionId, adIndex, scope, errorCode });
       fail(new Error(errorCode));
     };
     const timeout = adTimeout(onError);
@@ -139,7 +147,7 @@ async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; s
       timeout.shown();
       reportPerformance('REWARDED_AD_SHOW_ACCEPTED', '/native-ads/rewarded', performance.now() - showStartedAt, { adIndex });
       if (previousClosedAt !== undefined) reportPerformance('REWARDED_CLOSE_TO_NEXT_AD_SHOW_ACCEPTED', '/native-ads/rewarded', performance.timeOrigin + performance.now() - previousClosedAt, { adIndex });
-      return recordAdEvent({ clientEventId: rewardEventId, eventType: 'SHOWN', placementId: adUnitId, episodeId, sessionId, adIndex }, true);
+      return recordAdEvent({ clientEventId: rewardEventId, eventType: 'SHOWN', placementId: adUnitId, episodeId, sessionId, adIndex, scope }, true);
     });
     ad.onClose(onClose);
     ad.onError(onError);
@@ -147,9 +155,9 @@ async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; s
   });
 }
 
-export async function unlockEpisodeByRewardedAd(episodeId: string): Promise<number | undefined> {
+export async function unlockEpisodeByRewardedAd(episodeId: string, options: RewardOptions = {}): Promise<number | undefined> {
   const sessionWaitStartedAt = performance.now();
-  const session = await prepareRewardedUnlockSession(episodeId);
+  const session = await prepareRewardedUnlockSession(episodeId, options);
   reportPerformance('REWARDED_UNLOCK_SESSION_READY', `/episodes/${episodeId}/reward-session`, performance.now() - sessionWaitStartedAt, { access: session.access });
   if (session.access === 'PLAYABLE') return undefined;
   if (!session.sessionId || !session.placementId) throw new Error('REWARDED_SESSION_UNAVAILABLE');
@@ -174,15 +182,17 @@ export async function unlockEpisodeByRewardedAd(episodeId: string): Promise<numb
   prewarmRewardedAd(session.placementId);
 
   let shouldContinue = true;
-  let adIndex = 1;
+  let adIndex = (session.completedCount ?? 0) + 1;
   let previousClosedAt: number | undefined;
   while (shouldContinue) {
     const eventId = clientEventId();
-    const closedAt = await showOneRewardedAd({ adUnitId: session.placementId, episodeId, sessionId: session.sessionId, adIndex, rewardEventId: eventId, previousClosedAt });
+    const closedAt = await showOneRewardedAd({ adUnitId: session.placementId, episodeId, sessionId: session.sessionId, adIndex, rewardEventId: eventId, scope: options.purpose ?? 'EPISODE_UNLOCK', previousClosedAt });
     const result = await completeReward(episodeId, session.sessionId, eventId);
     shouldContinue = result.shouldContinue;
+    session.completedCount = result.completedCount ?? adIndex;
+    session.requiredCount = result.requiredCount ?? session.requiredCount;
     previousClosedAt = closedAt;
-    if (!shouldContinue) rewardSessions.delete(episodeId);
+    if (!shouldContinue) rewardSessions.delete(sessionKey(episodeId, options));
     adIndex += 1;
   }
   return previousClosedAt;

@@ -2,7 +2,7 @@ import type { AlbumDetail, EpisodeSummary, PlayInfo } from '@quickreels/shared-t
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, RefreshCw, X } from 'lucide-react';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useBlocker, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { EpisodeList } from '../components/EpisodeList';
 import { PlayerShell } from '../components/PlayerShell';
 import { LoadingState } from '../components/LoadingState';
@@ -24,6 +24,9 @@ export function WatchPage() {
   const locale = useLocale();
   const sessionToken = useSyncExternalStore(subscribeToSession, getSessionToken, () => null);
   const entryAdReady = useEntryAdReady();
+  const [retentionOpen, setRetentionOpen] = useState(false);
+  const [retentionError, setRetentionError] = useState('');
+  const allowExit = useRef(false);
   const locationState = location.state && typeof location.state === 'object' ? location.state as { transitionTiming?: { kind?: unknown; closedAt?: unknown } } : null;
   const transitionTiming = locationState?.transitionTiming
     && (locationState.transitionTiming.kind === 'REWARDED' || locationState.transitionTiming.kind === 'EPISODE_INTERSTITIAL')
@@ -64,6 +67,23 @@ export function WatchPage() {
   const episodeItems = episodes.data?.items ?? [];
   const currentIndex = episodeItems.findIndex((episode) => episode.id === episodeId);
   const nextEpisode = currentIndex >= 0 ? episodeItems[currentIndex + 1] : undefined;
+  const retentionConfig = useQuery({
+    queryKey: ['exit-retention-config', import.meta.env.VITE_MINI_RELEASE_ID || 'default'],
+    queryFn: () => apiClient.get<{ enabled: boolean; placementId?: string; requiredCount?: number }>(`/exit-retention/config?releaseId=${encodeURIComponent(import.meta.env.VITE_MINI_RELEASE_ID || 'default')}`),
+    enabled: Boolean(sessionToken && entryAdReady), staleTime: 60_000, retry: false
+  });
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => Boolean(retentionConfig.data?.enabled && !allowExit.current && currentLocation.pathname.startsWith('/watch/') && !nextLocation.pathname.startsWith('/watch/')));
+  const canOfferRetentionUnlock = Boolean(retentionConfig.data?.enabled && nextEpisode?.access === 'REWARDED_AD_REQUIRED');
+  useEffect(() => {
+    if (blocker.state === 'blocked') {
+      setRetentionOpen(true);
+    }
+  }, [blocker, retentionConfig.data?.enabled]);
+  useEffect(() => {
+    if (canOfferRetentionUnlock && nextEpisode) {
+      void prepareRewardedUnlockSession(nextEpisode.id, { purpose: 'EXIT_RETENTION', releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default' }).catch(() => undefined);
+    }
+  }, [canOfferRetentionUnlock, nextEpisode?.id]);
   useEffect(() => {
     if (nextEpisode?.access === 'REWARDED_AD_REQUIRED') {
       void prepareRewardedUnlockSession(nextEpisode.id).catch(() => undefined);
@@ -90,6 +110,20 @@ export function WatchPage() {
       navigate(`/watch/${albumId}/${episode.id}`, { replace: true, state: closedAt === undefined ? null : { transitionTiming: { kind: 'REWARDED', closedAt } } });
     }
   });
+  const retentionUnlock = useMutation({
+    mutationFn: async (episode: EpisodeSummary) => {
+      const closedAt = await unlockEpisodeByRewardedAd(episode.id, { purpose: 'EXIT_RETENTION', releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default' });
+      return { episode, closedAt };
+    },
+    onSuccess: ({ episode, closedAt }) => {
+      setRetentionOpen(false);
+      setRetentionError('');
+      if (blocker.state === 'blocked') blocker.reset();
+      void queryClient.invalidateQueries({ queryKey: ['episodes', albumId] });
+      navigate(`/watch/${albumId}/${episode.id}`, { replace: true, state: closedAt === undefined ? null : { transitionTiming: { kind: 'REWARDED', closedAt } } });
+    },
+    onError: (error) => setRetentionError(error instanceof Error && error.message === 'AD_REWARD_NOT_EARNED' ? 'The ad was closed early. Watch it to the end to unlock the next episode.' : 'The ad could not be completed. Please try again or leave.')
+  });
   const defaultEpisode = episodeItems.find((episode) => episode.access === 'PLAYABLE') ?? episodeItems[0];
 
   useEffect(() => {
@@ -109,7 +143,18 @@ export function WatchPage() {
   const byteplusPlayback = playInfo.data?.playbackMode === 'BYTEPLUS';
   const platformReady = hasTikTokMinis() && Boolean(window.TTMinis?.getPlayer);
   const message = playInfo.isError ? t(locale, 'episodeLocked') : byteplusPlayback && !platformReady ? t(locale, 'platformCopy') : undefined;
-  const goBack = () => window.history.length > 1 ? navigate(-1) : navigate('/');
+  const leavePage = () => {
+    setRetentionOpen(false);
+    setRetentionError('');
+    allowExit.current = true;
+    if (blocker.state === 'blocked') blocker.proceed();
+    else if (window.history.length > 1) navigate(-1);
+    else navigate('/');
+  };
+  const goBack = () => {
+    if (retentionConfig.data?.enabled) { setRetentionError(''); setRetentionOpen(true); }
+    else leavePage();
+  };
   const previousEpisode = currentIndex > 0 ? episodeItems[currentIndex - 1] : undefined;
   const requestEpisode = (episode: EpisodeSummary | undefined, naturalTransition = false) => {
     if (!episode || episode.id === episodeId || unlock.isPending || transitionPending.current) return;
@@ -131,7 +176,7 @@ export function WatchPage() {
     unlock.mutate(episode);
   };
   const handleTouchStart = (event: React.TouchEvent<HTMLElement>) => {
-    if (episodePickerOpen || unlock.isPending || event.touches.length !== 1) return;
+    if (retentionOpen || episodePickerOpen || unlock.isPending || event.touches.length !== 1) return;
     const target = event.target as HTMLElement;
     if (target.closest('button, a, input, select')) return;
     const touch = event.touches[0];
@@ -140,7 +185,7 @@ export function WatchPage() {
   const handleTouchEnd = (event: React.TouchEvent<HTMLElement>) => {
     const start = touchStart.current;
     touchStart.current = null;
-    if (!start || episodePickerOpen || unlock.isPending) return;
+    if (!start || retentionOpen || episodePickerOpen || unlock.isPending) return;
     const touch = event.changedTouches[0];
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
@@ -182,5 +227,16 @@ export function WatchPage() {
       </section>
     </div>}
     {unlockTarget && unlock.isPending && !episodePickerOpen && <div className={styles.unlockLayer} role="status"><div className={styles.unlockCard}><RefreshCw size={22} aria-hidden="true" /><strong>{t(locale, 'watchAd')}</strong><span>{unlockTarget.title}</span><small>{t(locale, 'syncing')}</small></div></div>}
+    {retentionOpen && <div className={styles.retentionLayer}>
+      <section className={styles.retentionCard} role="dialog" aria-modal="true" aria-labelledby="retention-title">
+        <span className={styles.retentionEyebrow}>ONE MORE EPISODE?</span>
+        <h2 id="retention-title">Nearly 5,000 viewers love these stories. Are you sure you want to leave?</h2>
+        {canOfferRetentionUnlock && nextEpisode && <p>Watch {retentionConfig.data?.requiredCount ?? 1} rewarded {retentionConfig.data?.requiredCount === 1 ? 'ad' : 'ads'} to unlock the next episode: {nextEpisode.title}</p>}
+        {retentionError && <p className={styles.retentionError} role="alert">{retentionError}</p>}
+        {canOfferRetentionUnlock && nextEpisode && <button type="button" className={styles.retentionPrimary} disabled={retentionUnlock.isPending} onClick={() => retentionUnlock.mutate(nextEpisode)}>{retentionUnlock.isPending ? 'Preparing your ad…' : 'Watch this ad to unlock'}</button>}
+        <button type="button" className={styles.retentionSecondary} disabled={retentionUnlock.isPending} onClick={() => { setRetentionOpen(false); setRetentionError(''); if (blocker.state === 'blocked') blocker.reset(); }}>Keep watching</button>
+        <button type="button" className={styles.retentionLeave} disabled={retentionUnlock.isPending} onClick={leavePage}>Leave now</button>
+      </section>
+    </div>}
   </section>;
 }

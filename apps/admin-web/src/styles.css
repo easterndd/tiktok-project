@@ -12,8 +12,11 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .brand > span:last-child { color: var(--pink); }
 .mini-app-select { display: grid; gap: 7px; margin: 22px 10px 0; color: #aebbd0; font-size: 12px; font-weight: 700; }
 .mini-app-select select { width: 100%; min-height: 42px; padding: 0 10px; color: #fff; border: 1px solid #3d4b60; border-radius: 6px; background: #242f41; cursor: pointer; }
+.mini-app-select input { width: 100%; min-height: 36px; padding: 0 10px; color: #fff; border: 1px solid #3d4b60; border-radius: 6px; background: #1c2635; outline: none; }
+.mini-app-select input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(27,183,194,.12); }
 .login-panel .mini-app-select { margin: 0; color: var(--ink); }
 .login-panel .mini-app-select select { color: var(--ink); border-color: var(--line); background: #fff; }
+.login-panel .mini-app-select input { color: var(--ink); border-color: var(--line); background: #fff; }
 .workspace-label { margin: 24px 10px 10px; color: #5f6d84; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
 .sidebar nav, .sidebar-bottom { display: grid; gap: 5px; }
 .sidebar nav button, .sidebar-bottom > button { display: flex; width: 100%; align-items: center; gap: 11px; min-height: 44px; padding: 0 11px; color: #9eabc0; border: 0; border-radius: 8px; background: transparent; font-size: 13px; font-weight: 700; text-align: left; cursor: pointer; }
