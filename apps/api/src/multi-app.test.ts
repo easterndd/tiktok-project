@@ -115,8 +115,8 @@ it('keeps episode interstitial placements independent and disabled when missing'
     const taletvToken = await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'taletv' });
     const main = await app.inject({ url: '/api/v1/episode-interstitial/config', headers: { authorization: `Bearer ${mainToken}` } });
     const taletv = await app.inject({ url: '/api/taletv/v1/episode-interstitial/config', headers: { authorization: `Bearer ${taletvToken}` } });
-    assert.deepEqual(main.json(), { enabled: true, placementId: 'main-interstitial' });
-    assert.deepEqual(taletv.json(), { enabled: false, placementId: null });
+    assert.deepEqual(main.json(), { enabled: true, placementId: 'main-interstitial', initialDelaySeconds: 30, intervalSeconds: 60, minIntervalSeconds: 180, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60 });
+    assert.deepEqual(taletv.json(), { enabled: false, placementId: null, initialDelaySeconds: 30, intervalSeconds: 60, minIntervalSeconds: 180, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60 });
     assert.equal((await app.inject({ url: '/api/taletv/v1/episode-interstitial/config', headers: { authorization: `Bearer ${mainToken}` } })).statusCode, 401);
   } finally { await app.close(); }
 });

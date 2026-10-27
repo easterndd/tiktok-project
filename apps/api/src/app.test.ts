@@ -327,6 +327,11 @@ async function createPrismaStub() {
         const byIndex = args.where.sessionId_adIndex;
         return state.entryCompletions.get(`${byIndex.sessionId}:index:${byIndex.adIndex}`) ?? null;
       },
+      findFirst: async (args: any) => {
+        const where = args.where ?? {};
+        return [...state.entryCompletions.values()].find((completion: any) => completion.sessionId === where.sessionId
+          && (where.OR ?? []).some((candidate: any) => Object.entries(candidate).every(([key, value]) => completion[key] === value))) ?? null;
+      },
       create: async (args: any) => {
         const completion = { id: `entry-completion-${state.entryCompletions.size + 1}`, ...args.data };
         state.entryCompletions.set(`${completion.sessionId}:${completion.clientEventId}`, completion);
@@ -1468,6 +1473,31 @@ describe('QuicK ReeLS API', () => {
     const completed = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/complete`, headers, payload: { clientEventId: secondEventId, isEnded: true } });
     assert.equal(completed.statusCode, 200);
     assert.equal(completed.json().shouldContinue, false);
+  });
+
+  it('counts shown impressions atomically and idempotently without waiting for close completion', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const headers = { authorization: `Bearer ${await token(app, 'user')}` };
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 2, countMode: 'SHOWN', onUnavailable: 'BLOCK' } });
+    const started = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId: '2d734801-9f3d-4427-9d13-f893b2b9e8d0' } });
+    const sessionId = started.json().sessionId as string;
+    const firstId = '6bf5a3e1-9e6b-40ba-a4cc-d5c6f8b0e120';
+    const first = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: firstId, adIndex: 1 } });
+    assert.equal(first.statusCode, 200, first.body);
+    assert.equal(first.json().completedCount, 1);
+    assert.equal(first.json().shouldContinue, true);
+    const duplicate = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: firstId, adIndex: 1 } });
+    assert.equal(duplicate.statusCode, 200, duplicate.body);
+    assert.equal(duplicate.json().completedCount, 1);
+    const wrongIndex = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: '9ae88250-1f83-46af-a808-ade9742e9235', adIndex: 3 } });
+    assert.equal(wrongIndex.statusCode, 409);
+    const second = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: 'eb2d536a-2cc7-405a-b4cc-66dab238515e', adIndex: 2 } });
+    assert.equal(second.statusCode, 200, second.body);
+    assert.equal(second.json().completedCount, 2);
+    assert.equal(second.json().shouldContinue, false);
+    assert.equal((await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } }))!.status, 'COMPLETED');
   });
 
   it('counts three closed entry ads in shown mode and preserves the session policy snapshot', async () => {

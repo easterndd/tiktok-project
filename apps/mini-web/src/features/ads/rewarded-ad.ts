@@ -38,7 +38,7 @@ export function prepareRewardedUnlockSession(episodeId: string, options: RewardO
   };
   entry.promise = apiClient.post<RewardSession>(`/episodes/${episodeId}/reward-session`, options.purpose === 'EXIT_RETENTION' ? { purpose: 'EXIT_RETENTION', releaseId: options.releaseId ?? 'default' } : {}).then((session) => {
     if (session.access === 'REWARDED_AD_REQUIRED' && session.placementId) {
-      prewarmRewardedAd(session.placementId);
+      prewarmRewardedAd(session.placementId, 1);
       if (rewardSessions.get(key) === entry) {
         rewardSessions.set(key, { promise: Promise.resolve(session), expiresAt: entry.expiresAt });
       }
@@ -119,7 +119,7 @@ async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; s
       if (!settled) {
         cleanup();
         release();
-        prewarmRewardedAd(adUnitId);
+        prewarmRewardedAd(adUnitId, 1);
       }
       if (!isEnded) {
         void recordAdEvent({ clientEventId: `${rewardEventId}:incomplete`, eventType: 'CLOSED_INCOMPLETE', placementId: adUnitId, episodeId, sessionId, adIndex, scope });
@@ -179,7 +179,7 @@ export async function unlockEpisodeByRewardedAd(episodeId: string, options: Rewa
   // Construct the native object before the first show() call. The reference
   // package does this at module/view setup, removing synchronous SDK creation
   // from the user click path while keeping server placement authoritative.
-  prewarmRewardedAd(session.placementId);
+  prewarmRewardedAd(session.placementId, 1);
 
   let shouldContinue = true;
   let adIndex = (session.completedCount ?? 0) + 1;

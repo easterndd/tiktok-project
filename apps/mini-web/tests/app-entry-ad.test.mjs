@@ -108,7 +108,7 @@ it('retries the same SHOWN ID and prewarms the next ad instance', async () => {
   assert.equal(ads[0].shows, 1);
   const second = showAppEntryAd({ ...input, adIndex: 2 });
   await flush();
-  assert.equal(ads.length, 2);
+  assert.equal(ads.length, 3);
   assert.ok(performanceReports.some(([phase]) => phase === 'ENTRY_AD_CLOSE_TO_NEXT_AD_SHOW_ACCEPTED'));
   ads[1].close({ isEnded: false });
   const earlyClose = await second;

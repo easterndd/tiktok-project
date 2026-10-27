@@ -8,7 +8,7 @@ import { PlayerShell } from '../components/PlayerShell';
 import { LoadingState } from '../components/LoadingState';
 import { useEntryAdReady } from '../components/EntryAdGate';
 import { prepareRewardedUnlockSession, unlockEpisodeByRewardedAd } from '../features/ads/rewarded-ad';
-import { prepareEpisodeInterstitial, showEpisodeTransitionInterstitial } from '../features/ads/episode-interstitial';
+import { configureEpisodeInterstitial, prepareEpisodeInterstitial, showEpisodeTransitionInterstitial, startEpisodeInterstitialSchedule } from '../features/ads/episode-interstitial';
 import { apiClient } from '../lib/api-client';
 import { reportDiagnostic } from '../lib/diagnostics';
 import { t } from '../lib/i18n';
@@ -18,6 +18,7 @@ import styles from './WatchPage.module.css';
 
 export function WatchPage() {
   const { albumId = '', episodeId } = useParams();
+  const releaseId = import.meta.env.VITE_MINI_RELEASE_ID || 'default';
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -48,14 +49,21 @@ export function WatchPage() {
     transitionPending.current = false;
   }, [episodeId]);
   const interstitialConfig = useQuery({
-    queryKey: ['episode-interstitial-config'],
-    queryFn: () => apiClient.get<{ enabled: boolean; placementId: string | null }>('/episode-interstitial/config'),
+    queryKey: ['episode-interstitial-config', releaseId],
+    queryFn: () => apiClient.get<{ enabled: boolean; placementId: string | null; initialDelaySeconds: number; intervalSeconds: number; minIntervalSeconds: number; maxPerSession: number; initialSkipTransitions: number; everyTransitions: number; rewardedCooldownSeconds: number }>(`/episode-interstitial/config?releaseId=${encodeURIComponent(releaseId)}`),
     staleTime: 5 * 60_000,
     retry: false,
     enabled: Boolean(sessionToken)
   });
   const interstitialPlacementId = interstitialConfig.data?.enabled ? interstitialConfig.data.placementId : null;
+  useEffect(() => {
+    if (interstitialConfig.data) configureEpisodeInterstitial(interstitialConfig.data);
+  }, [interstitialConfig.data]);
   useEffect(() => { prepareEpisodeInterstitial(interstitialPlacementId); }, [interstitialPlacementId]);
+  useEffect(() => {
+    if (!entryAdReady || !interstitialPlacementId || !interstitialConfig.data?.enabled) return;
+    return startEpisodeInterstitialSchedule(interstitialPlacementId, () => mounted.current && document.visibilityState !== 'hidden');
+  }, [entryAdReady, interstitialConfig.data?.enabled, interstitialPlacementId]);
   useEffect(() => {
     if (interstitialConfig.isSuccess && !interstitialConfig.data.enabled) {
       reportDiagnostic({ kind: 'AD', phase: 'EPISODE_INTERSTITIAL_DISABLED', message: 'No episode interstitial placement configured', path: '/episode-interstitial/config' });

@@ -11,7 +11,7 @@ const hooks = registerHooks({
     return next(specifier, context);
   }
 });
-const { showEpisodeTransitionInterstitial } = await import('../src/features/ads/episode-interstitial.ts');
+const { configureEpisodeInterstitial, showEpisodeTransitionInterstitial } = await import('../src/features/ads/episode-interstitial.ts');
 const { claimNativeAd, markRewardedAdClosed } = await import('../src/features/ads/ad-activity.ts');
 const originalNow = Date.now;
 const originalWindow = globalThis.window;
@@ -19,6 +19,7 @@ const originalWindow = globalThis.window;
 it('skips missing placement, frequency and competing ads; closes or fails without blocking', async () => {
   let now = 1_000_000;
   Date.now = () => now;
+  configureEpisodeInterstitial({ initialDelaySeconds: 0, intervalSeconds: 1, minIntervalSeconds: 0, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60 });
   const ads = [];
   let failNext = false;
   globalThis.window = { TTMinis: {
@@ -48,7 +49,8 @@ it('skips missing placement, frequency and competing ads; closes or fails withou
     await showEpisodeTransitionInterstitial('episode-placement');
     await showEpisodeTransitionInterstitial('episode-placement');
     const first = showEpisodeTransitionInterstitial('episode-placement');
-    assert.equal(ads.length, 1);
+    assert.equal(ads.length, 2); // One active impression and one loaded next instance.
+    await new Promise(setImmediate);
     ads[0].close();
     const firstClosedAt = await first;
     assert.ok(typeof firstClosedAt === 'number' && firstClosedAt >= performance.timeOrigin);
@@ -67,13 +69,16 @@ it('skips missing placement, frequency and competing ads; closes or fails withou
     markRewardedAdClosed();
     releaseRewarded();
     await showEpisodeTransitionInterstitial('episode-placement');
-    assert.equal(ads.length, 2);
+    assert.equal(ads.length, 3); // The failed impression leaves the preloaded next instance available.
     now += 61_000;
     await showEpisodeTransitionInterstitial('episode-placement');
     await showEpisodeTransitionInterstitial('episode-placement');
     const second = showEpisodeTransitionInterstitial('episode-placement');
-    assert.equal(ads.length, 3);
-    ads[2].close();
+    assert.equal(ads.length, 4); // The next impression consumes the prepared instance and preloads another.
+    await new Promise(setImmediate);
+    const activeSecond = ads.find((ad) => typeof ad.close === 'function');
+    assert.ok(activeSecond, 'the second impression should bind a close handler');
+    activeSecond.close();
     assert.ok(typeof await second === 'number');
     assert.equal(ads.length, 4); // The session limit prevents a third impression.
   } finally {

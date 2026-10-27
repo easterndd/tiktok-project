@@ -33,7 +33,7 @@ export async function mockApiRequest<T>({ method, path, body }: MockRequest): Pr
   const pathname = url.pathname;
 
   if (method === 'GET' && pathname === '/home') return getMockHome((url.searchParams.get('locale') as Locale | null) ?? readPreferences().locale) as T;
-  if (method === 'GET' && pathname === '/episode-interstitial/config') return { enabled: false, placementId: null } as T;
+  if (method === 'GET' && pathname === '/episode-interstitial/config') return { enabled: false, placementId: null, initialDelaySeconds: 30, intervalSeconds: 60, minIntervalSeconds: 180, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60 } as T;
   if (method === 'GET' && pathname === '/ui-components') return { items: defaultUiComponents } as T;
   const locale = (url.searchParams.get('locale') as Locale | null) ?? readPreferences().locale;
   if (method === 'GET' && pathname === '/albums') return { items: getMockHome(locale).feed.items, nextCursor: null } as T;

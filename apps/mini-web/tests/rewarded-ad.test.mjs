@@ -87,7 +87,7 @@ it('reuses a prepared reward session and prewarmed ad instance on click', async 
   const unlock = unlockEpisodeByRewardedAd('episode-2');
   await new Promise(setImmediate);
   assert.equal(requests.filter(({ path }) => path.endsWith('/reward-session')).length, 1);
-  assert.equal(ads.length, 1);
+  assert.equal(ads.length, 2);
   assert.equal(ads[0].shows, 1);
   close({ isEnded: true });
   await unlock;

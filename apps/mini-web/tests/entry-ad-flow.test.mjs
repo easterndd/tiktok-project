@@ -71,6 +71,69 @@ describe('entry ad gate flow', () => {
     assert.deepEqual(indices, [1, 2, 3]);
   });
 
+  it('opens the next shown-count ad while the ordered server acknowledgement is pending', async () => {
+    const opened = [];
+    let releaseAcknowledgements;
+    const acknowledgement = new Promise((resolve) => { releaseAcknowledgements = resolve; });
+    let confirms = 0;
+    const flow = runEntryAdFlow({ ...session, requiredCount: 2, countMode: 'SHOWN' }, {
+      ...base,
+      show: async ({ adIndex, onShown }) => {
+        opened.push(adIndex);
+        onShown({ clientEventId: `event-${adIndex}`, isEnded: false });
+        return { clientEventId: `event-${adIndex}`, isEnded: false };
+      },
+      complete: async (_sessionId, id, isEnded, adIndex) => {
+        confirms++;
+        assert.equal(isEnded, true);
+        assert.equal(id, `event-${adIndex}`);
+        return acknowledgement;
+      }
+    });
+    await new Promise(setImmediate);
+    assert.deepEqual(opened, [1, 2]);
+    releaseAcknowledgements({ completedCount: 2, shouldContinue: false });
+    await flow;
+    assert.equal(confirms, 2);
+  });
+
+  it('retries a transient SHOWN acknowledgement with the same event while keeping ad playback moving', async () => {
+    const opened = [];
+    const confirmations = [];
+    let firstAttempts = 0;
+    await runEntryAdFlow({ ...session, requiredCount: 2, countMode: 'SHOWN' }, {
+      ...base,
+      show: async ({ adIndex, onShown }) => {
+        opened.push(adIndex);
+        const playback = { clientEventId: `event-${adIndex}`, isEnded: false };
+        onShown(playback);
+        return playback;
+      },
+      complete: async (_sessionId, clientEventId, isEnded, adIndex) => {
+        confirmations.push([clientEventId, adIndex]);
+        assert.equal(isEnded, true);
+        if (adIndex === 1 && ++firstAttempts === 1) throw new Error('temporary network error');
+        return { completedCount: adIndex, shouldContinue: adIndex < 2 };
+      }
+    });
+    assert.deepEqual(opened, [1, 2]);
+    assert.deepEqual(confirmations, [['event-1', 1], ['event-1', 1], ['event-2', 2]]);
+  });
+
+  it('does not grant access when SHOWN acknowledgements keep failing', async () => {
+    let attempts = 0;
+    await assert.rejects(runEntryAdFlow({ ...session, requiredCount: 1, countMode: 'SHOWN' }, {
+      ...base,
+      show: async ({ onShown }) => {
+        const playback = { clientEventId: 'event-1', isEnded: false };
+        onShown(playback);
+        return playback;
+      },
+      complete: async () => { attempts++; throw new Error('offline'); }
+    }), /offline/);
+    assert.equal(attempts, 3);
+  });
+
   it('retries the same completion after a lost response before another popup', async () => {
     const events = [];
     let attempts = 0;

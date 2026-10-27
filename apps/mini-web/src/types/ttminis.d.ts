@@ -61,6 +61,9 @@ declare global {
 
   interface RewardedVideoAd {
     show(): Promise<void>;
+    load?(): Promise<void> | void;
+    onLoad?(callback: () => void): void;
+    offLoad?(callback: () => void): void;
     onClose(callback: (result: { isEnded: boolean }) => void): void;
     offClose(callback: (result: { isEnded: boolean }) => void): void;
     onError(callback: (error: unknown) => void): void;
@@ -69,6 +72,9 @@ declare global {
 
   interface InterstitialAd {
     show(): Promise<void>;
+    load?(): Promise<void> | void;
+    onLoad?(callback: () => void): void;
+    offLoad?(callback: () => void): void;
     destroy?(): void;
     onClose(callback: () => void): void;
     offClose(callback: () => void): void;

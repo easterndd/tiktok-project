@@ -211,6 +211,14 @@ const appEntryAdPolicyInput = z.object({
   enabled: z.boolean(),
   exitRetentionEnabled: z.boolean().default(false),
   exitRetentionAdCount: z.number().int().min(1).max(20).default(1),
+  episodeInterstitialEnabled: z.boolean().default(true),
+  episodeInterstitialInitialDelaySeconds: z.number().int().min(0).max(86_400).default(30),
+  episodeInterstitialIntervalSeconds: z.number().int().min(1).max(86_400).default(60),
+  episodeInterstitialMinIntervalSeconds: z.number().int().min(0).max(86_400).default(180),
+  episodeInterstitialMaxPerSession: z.number().int().min(0).max(20).default(2),
+  episodeInterstitialInitialSkipTransitions: z.number().int().min(0).max(100).default(2),
+  episodeInterstitialEveryTransitions: z.number().int().min(1).max(100).default(3),
+  episodeInterstitialRewardedCooldownSeconds: z.number().int().min(0).max(86_400).default(60),
   mode: z.enum(['INTERSTITIAL', 'REWARDED_GATED']),
   placementId: z.string().trim().max(128),
   requiredCount: z.number().int().min(1),
@@ -757,7 +765,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/admin/app-entry-ad-policies', { preHandler: requireAdmin }, async () => {
     const policies = await app.prisma.appEntryAdPolicy.findMany({
       orderBy: { updatedAt: 'desc' },
-      select: { releaseId: true, enabled: true, exitRetentionEnabled: true, exitRetentionAdCount: true, mode: true, placementId: true, requiredCount: true, countMode: true, onUnavailable: true, version: true, updatedAt: true, firstSeenAt: true }
+      select: { releaseId: true, enabled: true, exitRetentionEnabled: true, exitRetentionAdCount: true, episodeInterstitialEnabled: true, episodeInterstitialInitialDelaySeconds: true, episodeInterstitialIntervalSeconds: true, episodeInterstitialMinIntervalSeconds: true, episodeInterstitialMaxPerSession: true, episodeInterstitialInitialSkipTransitions: true, episodeInterstitialEveryTransitions: true, episodeInterstitialRewardedCooldownSeconds: true, mode: true, placementId: true, requiredCount: true, countMode: true, onUnavailable: true, version: true, updatedAt: true, firstSeenAt: true }
     });
     const releases = await app.sharedPrisma.miniAppCodeRelease.findMany({
       where: { miniAppKey: app.config.MINI_APP_KEY },
@@ -767,7 +775,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const placements = miniAppAdConfig(app.config);
     const items = policies.some((item) => item.releaseId === 'default') ? policies : [...policies, {
       releaseId: 'default', enabled: false, mode: placements.appEntryPlacementId ? 'INTERSTITIAL' as const : 'REWARDED_GATED' as const,
-      exitRetentionEnabled: false, exitRetentionAdCount: 1, placementId: placements.appEntryPlacementId || placements.rewardedPlacementId, requiredCount: 1,
+      exitRetentionEnabled: false, exitRetentionAdCount: 1, episodeInterstitialEnabled: true, episodeInterstitialInitialDelaySeconds: 30, episodeInterstitialIntervalSeconds: 60, episodeInterstitialMinIntervalSeconds: 180, episodeInterstitialMaxPerSession: 2, episodeInterstitialInitialSkipTransitions: 2, episodeInterstitialEveryTransitions: 3, episodeInterstitialRewardedCooldownSeconds: 60, placementId: placements.appEntryPlacementId || placements.rewardedPlacementId, requiredCount: 1,
       countMode: 'COMPLETED' as const, onUnavailable: 'ALLOW' as const, version: 1, updatedAt: new Date(0), firstSeenAt: null
     }];
     return {

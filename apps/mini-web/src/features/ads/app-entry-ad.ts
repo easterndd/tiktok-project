@@ -6,7 +6,7 @@ import { adTimeout, adErrorMessage } from './ad-timeout';
 import { runAdShow } from './ad-show';
 import { reportDiagnostic, reportPerformance } from '../../lib/diagnostics';
 import { createShownAcknowledgement } from './shown-acknowledgement';
-import { getInterstitialAd, getRewardedAd, prewarmInterstitialAd, prewarmRewardedAd, releaseInterstitialAd, releaseRewardedAd } from './ad-instance-cache';
+import { getInterstitialAd, getRewardedAd, prewarmInterstitialAd, prewarmRewardedAd, releaseInterstitialAd, releaseRewardedAd, waitForAdReady } from './ad-instance-cache';
 import { claimNativeAd, markRewardedAdClosed } from './ad-activity';
 
 export type AppEntryAdSession = {
@@ -19,6 +19,22 @@ export type AppEntryAdSession = {
   completedCount?: number;
   onUnavailable?: 'ALLOW' | 'BLOCK';
 };
+
+export type EpisodeInterstitialPolicy = {
+  enabled: boolean;
+  placementId: string | null;
+  initialDelaySeconds: number;
+  intervalSeconds: number;
+  minIntervalSeconds: number;
+  maxPerSession: number;
+  initialSkipTransitions: number;
+  everyTransitions: number;
+  rewardedCooldownSeconds: number;
+};
+
+export async function startEpisodeInterstitialPolicy(releaseId = import.meta.env.VITE_MINI_RELEASE_ID || 'default') {
+  return apiClient.get<EpisodeInterstitialPolicy>(`/episode-interstitial/config?releaseId=${encodeURIComponent(releaseId)}`);
+}
 
 function eventId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -50,8 +66,8 @@ export async function startAppEntryAdSession(): Promise<AppEntryAdSession> {
   });
   reportPerformance('ENTRY_AD_POLICY_RESPONSE', '/app-entry-ad-sessions', performance.now() - startedAt, { required: session.required, mode: session.mode ?? 'NONE' });
   if (session.required && session.placementId) {
-    if (session.mode === 'INTERSTITIAL') prewarmInterstitialAd(session.placementId);
-    else if (session.mode === 'REWARDED_GATED') prewarmRewardedAd(session.placementId);
+    if (session.mode === 'INTERSTITIAL') prewarmInterstitialAd(session.placementId, 1);
+    else if (session.mode === 'REWARDED_GATED') prewarmRewardedAd(session.placementId, 1);
   }
   return session;
 }
@@ -94,6 +110,14 @@ export async function completeAppEntryAd(sessionId: string, clientEventId: strin
   }
 }
 
+export async function acknowledgeAppEntryAdShown(sessionId: string, clientEventId: string, adIndex: number) {
+  const path = `/app-entry-ad-sessions/${sessionId}/shown`;
+  const startedAt = performance.now();
+  const result = await apiClient.post<EntryAdProgress>(path, { clientEventId, adIndex });
+  reportPerformance('ENTRY_AD_SHOWN_COUNT_RESPONSE', path, performance.now() - startedAt, { adIndex });
+  return result;
+}
+
 export function recordAppEntryAdEvent(input: { eventType: 'REQUESTED' | 'SHOWN' | 'CLOSED_INCOMPLETE' | 'FAILED'; placementId: string; sessionId: string; adType: 'REWARDED' | 'INTERSTITIAL'; adIndex: number; errorCode?: string; clientEventId?: string }) {
   const path = '/ad-events';
   const startedAt = performance.now();
@@ -106,8 +130,8 @@ export function recordAppEntryAdEvent(input: { eventType: 'REQUESTED' | 'SHOWN' 
   });
 }
 
-export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; sessionId: string; adIndex: number; onShown?: () => void }): Promise<{ clientEventId: string; isEnded: boolean }> {
-  const { mode, placementId, sessionId, adIndex, onShown } = input;
+export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; sessionId: string; adIndex: number; requiredCount?: number; countMode?: 'COMPLETED' | 'SHOWN'; onShown?: (playback: { clientEventId: string; isEnded: boolean }) => void }): Promise<{ clientEventId: string; isEnded: boolean }> {
+  const { mode, placementId, sessionId, adIndex, requiredCount, countMode = 'COMPLETED', onShown } = input;
   const adType = mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED';
   const previousClosedAt = entryAdClosedAt.get(sessionId);
   const completionEventId = eventId();
@@ -119,9 +143,20 @@ export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_G
 
   // Analytics must not delay the next native ad's show() call.
   void recordAppEntryAdEvent({ eventType: 'REQUESTED', placementId, sessionId, adType, adIndex }).catch(() => undefined);
-  let ad: InterstitialAd | RewardedVideoAd;
-  try { ad = mode === 'INTERSTITIAL' ? getInterstitialAd(placementId) : getRewardedAd(placementId); }
-  catch (error) { releaseActivity(); throw error; }
+  let ad: InterstitialAd | RewardedVideoAd | undefined;
+  try {
+    const prewarmNext = requiredCount === undefined || adIndex < requiredCount;
+    ad = mode === 'INTERSTITIAL' ? getInterstitialAd(placementId, prewarmNext) : getRewardedAd(placementId, prewarmNext);
+    await waitForAdReady(ad);
+  } catch (error) {
+    if (ad) {
+      if (mode === 'INTERSTITIAL') releaseInterstitialAd(placementId, ad as InterstitialAd);
+      else releaseRewardedAd(placementId, ad as RewardedVideoAd);
+    }
+    releaseActivity();
+    void recordAppEntryAdEvent({ eventType: 'FAILED', placementId, sessionId, adType, adIndex, errorCode: adErrorMessage(error) }).catch(() => undefined);
+    throw error;
+  }
   const isEnded = await new Promise<boolean>((resolve, reject) => {
     let settled = false;
     let closed: boolean | undefined;
@@ -149,8 +184,10 @@ export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_G
       closed = mode === 'INTERSTITIAL' || result?.isEnded === true;
       cleanup();
       release();
-      if (mode === 'INTERSTITIAL') prewarmInterstitialAd(placementId);
-      else prewarmRewardedAd(placementId);
+      if (requiredCount === undefined || adIndex < requiredCount) {
+        if (mode === 'INTERSTITIAL') prewarmInterstitialAd(placementId, 1);
+        else prewarmRewardedAd(placementId, 1);
+      }
       finishClose();
     };
     const onError = (error: unknown) => {
@@ -170,17 +207,18 @@ export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_G
       if (settled) return;
       timeout.shown();
       reportPerformance('ENTRY_AD_SHOW_ACCEPTED', '/native-ads/entry', performance.now() - showStartedAt, { adType, adIndex });
-      // Overlap SHOWN acknowledgement with viewing. Completion still waits for
-      // this exact impression to be recorded before asking the server to count it.
-      shownAcknowledgements.set(key, createShownAcknowledgement(() => recordAppEntryAdEvent({
-        eventType: 'SHOWN', placementId, sessionId, adType, adIndex, clientEventId: completionEventId
-      })));
+      if (countMode === 'COMPLETED') {
+        // The completion endpoint still requires a persisted impression and full watch.
+        shownAcknowledgements.set(key, createShownAcknowledgement(() => recordAppEntryAdEvent({
+          eventType: 'SHOWN', placementId, sessionId, adType, adIndex, clientEventId: completionEventId
+        })));
+      }
       shown = true;
       if (previousClosedAt !== undefined) {
         reportPerformance('ENTRY_AD_CLOSE_TO_NEXT_AD_SHOW_ACCEPTED', '/native-ads/entry', performance.timeOrigin + performance.now() - previousClosedAt, { adIndex });
         if (entryAdClosedAt.get(sessionId) === previousClosedAt) entryAdClosedAt.delete(sessionId);
       }
-      onShown?.();
+      onShown?.({ clientEventId: completionEventId, isEnded: false });
       finishClose();
     }, onError, onError);
   });

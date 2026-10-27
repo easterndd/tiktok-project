@@ -13,6 +13,7 @@ const sessionTtlMs = 15 * 60 * 1000;
 const releaseIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default');
 const startInput = z.object({ launchId: z.string().uuid(), releaseId: releaseIdSchema, adId: z.string().trim().max(128).nullable().optional() });
 const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.boolean() });
+const shownInput = z.object({ clientEventId: z.string().uuid(), adIndex: z.number().int().positive() });
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
 
 function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
@@ -24,6 +25,14 @@ function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
     enabled: false,
     exitRetentionEnabled: false,
     exitRetentionAdCount: 1,
+    episodeInterstitialEnabled: true,
+    episodeInterstitialInitialDelaySeconds: 30,
+    episodeInterstitialIntervalSeconds: 60,
+    episodeInterstitialMinIntervalSeconds: 180,
+    episodeInterstitialMaxPerSession: 2,
+    episodeInterstitialInitialSkipTransitions: 2,
+    episodeInterstitialEveryTransitions: 3,
+    episodeInterstitialRewardedCooldownSeconds: 60,
     mode,
     placementId: mode === 'INTERSTITIAL' ? placements.appEntryPlacementId : placements.rewardedPlacementId,
     requiredCount: 1,
@@ -74,6 +83,22 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
   app.get('/exit-retention/config', { preHandler: requireUser }, async (request) => {
     const { releaseId } = z.object({ releaseId: releaseIdSchema }).parse(request.query);
     return measureDatabase(request, () => readExitRetentionConfig(app, releaseId, request.user.sub, request.ip));
+  });
+  app.get('/episode-interstitial/config', { preHandler: requireUser }, async (request) => {
+    const { releaseId } = z.object({ releaseId: releaseIdSchema }).parse(request.query);
+    const policy = await measureDatabase(request, () => readAppEntryAdPolicy(app, releaseId));
+    const placementId = miniAppAdConfig(app.config).episodeInterstitialPlacementId;
+    return {
+      enabled: policy.episodeInterstitialEnabled && Boolean(placementId),
+      placementId: placementId || null,
+      initialDelaySeconds: policy.episodeInterstitialInitialDelaySeconds,
+      intervalSeconds: policy.episodeInterstitialIntervalSeconds,
+      minIntervalSeconds: policy.episodeInterstitialMinIntervalSeconds,
+      maxPerSession: policy.episodeInterstitialMaxPerSession,
+      initialSkipTransitions: policy.episodeInterstitialInitialSkipTransitions,
+      everyTransitions: policy.episodeInterstitialEveryTransitions,
+      rewardedCooldownSeconds: policy.episodeInterstitialRewardedCooldownSeconds
+    };
   });
   app.post('/app-entry-ad-sessions', {
     preHandler: requireUser,
@@ -237,6 +262,60 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     if ('retryShownAcknowledgement' in result) {
       return reply.code(409).send({ error: { code: 'AD_NOT_ACKNOWLEDGED', message: 'The ad impression has not been acknowledged yet.', requestId: request.id } });
     }
+    return { ...result, access: result.shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
+  });
+
+  app.post('/app-entry-ad-sessions/:sessionId/shown', {
+    preHandler: requireUser,
+    config: { rateLimit: { max: 60, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
+  }, async (request, reply) => {
+    const { sessionId } = sessionParams.parse(request.params);
+    const { clientEventId, adIndex } = shownInput.parse(request.body);
+    const transact = () => app.prisma.$transaction(async (tx) => {
+      const session = await tx.appEntryAdSession.findUnique({ where: { id: sessionId } });
+      if (!session || session.userId !== request.user.sub) return null;
+      if (session.countMode !== 'SHOWN') return { invalidMode: true as const };
+      const existing = await tx.appEntryAdCompletion.findFirst({
+        where: { sessionId, OR: [{ clientEventId }, { adIndex }] },
+        select: { clientEventId: true, adIndex: true }
+      });
+      if (existing) {
+        if (existing.clientEventId !== clientEventId || existing.adIndex !== adIndex) return { conflict: true as const };
+        return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: session.completedCount < session.requiredCount };
+      }
+      if (session.status !== 'ACTIVE' || session.expiresAt <= new Date() || adIndex > session.requiredCount) return null;
+      if (adIndex !== session.completedCount + 1) return { conflict: true as const };
+      const adType = session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' as const : 'REWARDED' as const;
+      let event = await tx.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } });
+      if (event) {
+        if (event.eventType !== 'SHOWN' || event.scope !== 'APP_ENTRY' || event.adType !== adType || event.placementId !== session.placementId || event.sessionId !== sessionId || event.appEntrySessionId !== sessionId || event.adIndex !== adIndex) {
+          return { conflict: true as const };
+        }
+      } else {
+        event = await tx.adEvent.create({ data: {
+          userId: request.user.sub, clientEventId, adType, scope: 'APP_ENTRY', eventType: 'SHOWN',
+          placementId: session.placementId, sessionId, appEntrySessionId: sessionId, adIndex
+        } });
+      }
+      const completedCount = session.completedCount + 1;
+      const status = completedCount >= session.requiredCount ? 'COMPLETED' as const : 'ACTIVE' as const;
+      await tx.appEntryAdCompletion.create({ data: { sessionId, clientEventId, adIndex, adEventId: event.id } });
+      await tx.appEntryAdSession.update({ where: { id: sessionId }, data: { completedCount, status, expiresAt: new Date(Date.now() + sessionTtlMs) } });
+      return { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE' };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    let result: Awaited<ReturnType<typeof transact>> | undefined;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        result = await measureDatabase(request, transact);
+        break;
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt === 4) throw error;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(200, 25 * 2 ** attempt)));
+      }
+    }
+    if (!result) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
+    if ('invalidMode' in result) return reply.code(409).send({ error: { code: 'COUNT_MODE_MISMATCH', message: 'This entry-ad session does not count impressions.', requestId: request.id } });
+    if ('conflict' in result) return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
     return { ...result, access: result.shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
   });
 }

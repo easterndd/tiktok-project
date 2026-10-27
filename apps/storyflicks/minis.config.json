@@ -1,6 +1,7 @@
 {
   "appId": "7688966971530758162",
   "dev": {
+    "clientKey": "mnwlm5hc7s3atp12",
     "name": "StoryFlicks",
     "host": "localhost",
     "port": 5193,

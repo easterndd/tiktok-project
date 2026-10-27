@@ -2,17 +2,12 @@ import { Prisma } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
-import { miniAppAdConfig } from '../../config/mini-apps';
 import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
 import { measureDatabase } from '../../lib/request-performance';
 
 const appEntrySessionTtlMs = 15 * 60 * 1000;
 
 export async function registerAdRoutes(app: FastifyInstance) {
-  app.get('/episode-interstitial/config', { preHandler: requireUser }, async () => {
-    const placementId = miniAppAdConfig(app.config).episodeInterstitialPlacementId;
-    return { enabled: Boolean(placementId), placementId: placementId || null };
-  });
   app.post('/ad-events', {
     preHandler: requireUser,
     config: { rateLimit: { max: 120, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
@@ -28,14 +23,17 @@ export async function registerAdRoutes(app: FastifyInstance) {
       rewardSessionId: z.string().min(1).max(128).optional(),
       appEntrySessionId: z.string().min(1).max(128).optional(),
       adIndex: z.number().int().positive(),
-      errorCode: z.string().max(128).optional()
+      errorCode: z.string().max(500).optional()
     }).parse(request.body);
     if (body.scope === 'APP_ENTRY') {
       if (body.episodeId || body.rewardSessionId || !body.appEntrySessionId || body.sessionId !== body.appEntrySessionId) {
         throw Object.assign(new Error('Invalid app-entry ad event.'), { statusCode: 400 });
       }
       const session = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({ where: { id: body.appEntrySessionId! } }));
-      if (!session || session.userId !== request.user.sub || session.status !== 'ACTIVE' || session.expiresAt <= new Date() || session.placementId !== body.placementId || session.mode !== (body.adType === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED_GATED') || body.adIndex > session.requiredCount) {
+      const countedImpressionClosed = session && body.eventType === 'CLOSED_INCOMPLETE' && session.countMode === 'SHOWN'
+        ? await measureDatabase(request, () => app.prisma.appEntryAdCompletion.findUnique({ where: { sessionId_adIndex: { sessionId: session.id, adIndex: body.adIndex } }, select: { id: true } }))
+        : null;
+      if (!session || session.userId !== request.user.sub || (session.status !== 'ACTIVE' && !countedImpressionClosed) || (session.expiresAt <= new Date() && !countedImpressionClosed) || session.placementId !== body.placementId || session.mode !== (body.adType === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED_GATED') || body.adIndex > session.requiredCount) {
         throw Object.assign(new Error('App-entry ad session is unavailable.'), { statusCode: 409 });
       }
     } else {
