@@ -15,6 +15,7 @@ const env: Env = {
   API_CORS_ORIGIN: 'http://localhost:5173',
   TRUST_GEO_COUNTRY_HEADER: false,
   TRUSTED_PROXY_CIDRS: '',
+  ENTRY_AD_ATTRIBUTION_GATE_ENABLED: false,
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters',
   USER_JWT_EXPIRES_IN: 3_600,
   ADMIN_JWT_EXPIRES_IN: 28_800,

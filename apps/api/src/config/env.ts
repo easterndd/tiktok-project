@@ -31,6 +31,8 @@ const environment = z.object({
   // Enable only when the public API is behind a proxy that removes client
   // supplied X-Geo-Country and writes a verified ISO 3166-1 alpha-2 value.
   TRUST_GEO_COUNTRY_HEADER: z.union([z.boolean(), z.stringbool()]).default(false),
+  // Keep launch attribution available for analytics, but gate entry ads only when explicitly enabled.
+  ENTRY_AD_ATTRIBUTION_GATE_ENABLED: z.union([z.boolean(), z.stringbool()]).default(false),
   JWT_SECRET: z.string().min(32),
   USER_DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
   USER_JWT_EXPIRES_IN: z.coerce.number().int().positive().default(3_600),

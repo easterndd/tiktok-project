@@ -85,17 +85,19 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
       secret: app.rootConfig.JWT_SECRET
     }, (error) => request.log.warn({ err: error }, 'Shared IP visit could not be recorded'));
-    let attribution;
-    if (adId !== undefined) {
-      attribution = classifyLaunchAttribution({ launchQuery: adId === null ? {} : { adId } });
-    } else {
-      const latestLaunch = await measureDatabase(request, () => app.prisma.audienceActivityEvent.findFirst({
-        where: { userId: request.user.sub, eventType: 'APP_LAUNCH_CONTEXT' },
-        orderBy: { createdAt: 'desc' }, select: { metadata: true }
-      }));
-      attribution = classifyLaunchAttribution(latestLaunch?.metadata);
+    if (app.rootConfig.ENTRY_AD_ATTRIBUTION_GATE_ENABLED) {
+      let attribution;
+      if (adId !== undefined) {
+        attribution = classifyLaunchAttribution({ launchQuery: adId === null ? {} : { adId } });
+      } else {
+        const latestLaunch = await measureDatabase(request, () => app.prisma.audienceActivityEvent.findFirst({
+          where: { userId: request.user.sub, eventType: 'APP_LAUNCH_CONTEXT' },
+          orderBy: { createdAt: 'desc' }, select: { metadata: true }
+        }));
+        attribution = classifyLaunchAttribution(latestLaunch?.metadata);
+      }
+      if (attribution.status !== 'ATTRIBUTED') return { required: false as const };
     }
-    if (attribution.status !== 'ATTRIBUTED') return { required: false as const };
     const saved = await measureDatabase(request, () => app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } }));
     let policy = saved ?? disabledPolicy(app, releaseId);
     if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {

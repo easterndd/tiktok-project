@@ -19,6 +19,7 @@ const env: Env = {
   API_CORS_ORIGIN: 'http://localhost:5173',
   TRUSTED_PROXY_CIDRS: '',
   TRUST_GEO_COUNTRY_HEADER: true,
+  ENTRY_AD_ATTRIBUTION_GATE_ENABLED: false,
   JWT_SECRET: 'test-secret-that-is-longer-than-32-characters',
   USER_JWT_EXPIRES_IN: 3_600,
   ADMIN_JWT_EXPIRES_IN: 28_800,
@@ -1013,8 +1014,8 @@ describe('QuicK ReeLS API', () => {
     assert.equal(history.json().items.length, 1);
   });
 
-  it('skips entry strong ads for explicit missing or placeholder ad IDs and keeps the configured flow for attributed entries', async () => {
-    const app = await createTestApp();
+  it('can gate entry strong ads by attribution when the server switch is enabled', async () => {
+    const app = await createTestApp({ ENTRY_AD_ATTRIBUTION_GATE_ENABLED: true });
     apps.push(app);
     const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
     const userHeaders = { authorization: `Bearer ${await token(app, 'user')}` };
