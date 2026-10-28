@@ -47,7 +47,9 @@ export async function recordSharedIpVisit(db: PrismaClient, input: { ipAddress: 
   const hash = ipHash(ip, input.secret);
   const key = visitKey(input.miniAppKey, input.clientSessionId, input.secret);
   await db.$transaction(async (tx) => {
-    const previous = await tx.$queryRaw<Array<{ ipHash: string }>>(Prisma.sql`SELECT "ipHash" FROM "SharedIpVisit" WHERE "idempotencyKey" = ${key}`);
+    // Prisma binds strings as text. Cast the parameter to the CHAR(64) key type;
+    // casting the indexed column to text instead forces a full-table scan.
+    const previous = await tx.$queryRaw<Array<{ ipHash: string }>>(Prisma.sql`SELECT "ipHash" FROM "SharedIpVisit" WHERE "idempotencyKey" = ${key}::char(64)`);
     if (previous.length) return;
     await tx.$executeRaw`
       INSERT INTO "SharedIpAddress" ("ipHash", "ipAddress", "lastMiniAppKey", "countryCode")
@@ -63,7 +65,7 @@ export async function recordSharedIpVisit(db: PrismaClient, input: { ipAddress: 
       ON CONFLICT ("idempotencyKey") DO NOTHING
       RETURNING "idempotencyKey"`;
     if (inserted.length) await tx.$executeRaw`
-      UPDATE "SharedIpAddress" SET "visitCount" = "visitCount" + 1 WHERE "ipHash" = ${hash}`;
+      UPDATE "SharedIpAddress" SET "visitCount" = "visitCount" + 1 WHERE "ipHash" = ${hash}::char(64)`;
   });
 }
 
@@ -73,7 +75,7 @@ export async function listSharedIps(db: PrismaClient, input: { search: string; m
   const normalized = input.search ? normalizeIp(input.search) : null;
   if (input.search && !normalized) return [];
   const filters = [
-    normalized ? Prisma.sql`a."ipHash" = ${ipHash(normalized, input.secret)}` : Prisma.empty,
+    normalized ? Prisma.sql`a."ipHash" = ${ipHash(normalized, input.secret)}::char(64)` : Prisma.empty,
     input.miniAppKey ? Prisma.sql`EXISTS (SELECT 1 FROM "SharedIpVisit" v WHERE v."ipHash" = a."ipHash" AND v."miniAppKey" = ${input.miniAppKey})` : Prisma.empty
   ].filter((part) => part !== Prisma.empty);
   const filter = filters.length ? Prisma.sql`WHERE ${Prisma.join(filters, ' AND ')}` : Prisma.empty;
@@ -88,14 +90,14 @@ export async function listSharedIps(db: PrismaClient, input: { search: string; m
 export async function listViewerIdsForIp(db: PrismaClient, miniAppKey: MiniAppKey, ip: string, secret: string) {
   return db.$queryRaw<Array<{ userId: string }>>(Prisma.sql`
     SELECT DISTINCT "userId" FROM "SharedIpVisit"
-    WHERE "miniAppKey" = ${miniAppKey} AND "ipHash" = ${ipHash(ip, secret)}
+    WHERE "miniAppKey" = ${miniAppKey} AND "ipHash" = ${ipHash(ip, secret)}::char(64)
     ORDER BY "userId" LIMIT 5000`);
 }
 
 export async function listSharedIpVisits(db: PrismaClient, ip: string, secret: string, limit: number, offset: number, miniAppKey?: MiniAppKey) {
   return db.$queryRaw<Array<{ miniAppKey: string; userId: string; createdAt: Date }>>(Prisma.sql`
     SELECT "miniAppKey", "userId", "createdAt" FROM "SharedIpVisit"
-    WHERE "ipHash" = ${ipHash(ip, secret)} ${miniAppKey ? Prisma.sql`AND "miniAppKey" = ${miniAppKey}` : Prisma.empty}
+    WHERE "ipHash" = ${ipHash(ip, secret)}::char(64) ${miniAppKey ? Prisma.sql`AND "miniAppKey" = ${miniAppKey}` : Prisma.empty}
     ORDER BY "createdAt" DESC LIMIT ${limit} OFFSET ${offset}`);
 }
 
