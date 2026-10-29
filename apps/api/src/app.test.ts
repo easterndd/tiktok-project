@@ -1101,14 +1101,26 @@ describe('QuicK ReeLS API', () => {
       payload: { launchId: 'cbffb69f-29cb-4d45-a26c-3c4139df90d2' } });
     const sessionId = started.json().sessionId as string;
     const before = (app.prisma as any)._state.adEvents.size;
+    const unauthenticatedRequested = await app.inject({ method: 'POST', url: '/api/v1/ad-events',
+      payload: { clientEventId: 'entry-request-only-legacy', adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'REQUESTED', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1 } });
+    assert.equal(unauthenticatedRequested.statusCode, 200, unauthenticatedRequested.body);
+    assert.deepEqual(unauthenticatedRequested.json(), { accepted: true });
+
     const requested = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers: userHeaders,
       payload: { clientEventId: 'entry-request-only', adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'REQUESTED', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1 } });
     assert.equal(requested.statusCode, 200, requested.body);
     assert.deepEqual(requested.json(), { accepted: true });
+    const unauthenticatedFailed = await app.inject({ method: 'POST', url: '/api/v1/ad-events', payload: { eventType: 'FAILED' } });
+    assert.equal(unauthenticatedFailed.statusCode, 401, unauthenticatedFailed.body);
     assert.equal((app.prisma as any)._state.adEvents.size, before);
     const progress = await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } });
     assert.equal(progress!.completedCount, 0);
     assert.equal(progress!.status, 'ACTIVE');
+    const closed = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers: userHeaders,
+      payload: { clientEventId: 'entry-close-only', adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'CLOSED_INCOMPLETE', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1 } });
+    assert.equal(closed.statusCode, 200, closed.body);
+    assert.deepEqual(closed.json(), { accepted: true });
+    assert.equal((app.prisma as any)._state.adEvents.size, before);
   });
 
   it('filters viewers by exact IP and mini app and bulk updates entry-ad exemptions', async () => {

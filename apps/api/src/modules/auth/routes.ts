@@ -101,16 +101,20 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
       const metadata = existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? existing.metadata as Record<string, unknown> : {};
       const existingQuery = metadata.launchQuery && typeof metadata.launchQuery === 'object' && !Array.isArray(metadata.launchQuery)
         ? metadata.launchQuery as Record<string, string> : {};
-      await app.prisma.audienceActivityEvent.update({ where: { id: existing.id }, data: {
-        metadata: {
-          ...metadata,
-          rawUrl: context.rawUrl ?? metadata.rawUrl,
-          sdkPayloadRaw: context.sdkPayloadRaw ?? metadata.sdkPayloadRaw,
-          launchScene: context.launchScene ?? metadata.launchScene,
-          launchPath: context.launchPath ?? metadata.launchPath,
-          launchQuery: { ...existingQuery, ...launchQuery }
-        } as Prisma.InputJsonValue
-      } });
+      const nextMetadata = {
+        ...metadata,
+        rawUrl: context.rawUrl ?? metadata.rawUrl,
+        sdkPayloadRaw: context.sdkPayloadRaw ?? metadata.sdkPayloadRaw,
+        launchScene: context.launchScene ?? metadata.launchScene,
+        launchPath: context.launchPath ?? metadata.launchPath,
+        launchQuery: { ...existingQuery, ...launchQuery }
+      } as Prisma.InputJsonValue;
+      // Anonymous bootstrap and authenticated launch-context reporting can
+      // carry the same entry twice. Avoid rewriting the JSON row when no
+      // launch information actually changed.
+      if (JSON.stringify(nextMetadata) !== JSON.stringify(metadata)) {
+        await app.prisma.audienceActivityEvent.update({ where: { id: existing.id }, data: { metadata: nextMetadata } });
+      }
       return true;
     }
     await app.prisma.audienceActivityEvent.create({ data: {

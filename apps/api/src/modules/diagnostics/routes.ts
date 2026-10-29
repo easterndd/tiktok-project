@@ -19,6 +19,27 @@ export function redactDiagnostic(value: string) {
     .replace(/((?:token|password|secret|authorization)\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]');
 }
 
+const duplicateWindowMs = 30_000;
+const maxDiagnosticKeys = 10_000;
+const recentDiagnosticKeys = new Map<string, number>();
+
+function shouldPersistDiagnostic(app: FastifyInstance, body: z.infer<typeof diagnosticInput>, message: string, path?: string) {
+  const now = Date.now();
+  for (const [key, seenAt] of recentDiagnosticKeys) {
+    if (now - seenAt >= duplicateWindowMs) recentDiagnosticKeys.delete(key);
+  }
+  const miniAppKey = (app as FastifyInstance & { config?: { MINI_APP_KEY?: string } }).config?.MINI_APP_KEY ?? 'unknown';
+  const key = [miniAppKey, body.releaseId, body.kind, body.phase, message, path ?? '', body.statusCode ?? ''].join('\u001f');
+  const seenAt = recentDiagnosticKeys.get(key);
+  if (seenAt !== undefined && now - seenAt < duplicateWindowMs) return false;
+  if (recentDiagnosticKeys.size >= maxDiagnosticKeys) {
+    const oldest = recentDiagnosticKeys.keys().next().value;
+    if (oldest) recentDiagnosticKeys.delete(oldest);
+  }
+  recentDiagnosticKeys.set(key, now);
+  return true;
+}
+
 export async function registerDiagnosticRoutes(app: FastifyInstance) {
   // Startup failures must be reportable before an anonymous session exists.
   app.post('/runtime-errors', {
@@ -26,9 +47,15 @@ export async function registerDiagnosticRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } }
   }, async (request, reply) => {
     const body = diagnosticInput.parse(request.body);
+    const message = redactDiagnostic(body.message);
+    const path = body.path?.split(/[?#]/, 1)[0];
+    // The client already coalesces diagnostics per device. Coalesce the same
+    // signature across devices too; retaining one sample per 30 seconds keeps
+    // the admin signal while preventing startup storms from becoming a DB write
+    // storm. This route is diagnostic-only and does not affect access decisions.
+    if (!shouldPersistDiagnostic(app, body, message, path)) return reply.code(202).send({ accepted: true, deduplicated: true });
     await app.prisma.miniAppRuntimeError.create({ data: {
-      ...body, message: redactDiagnostic(body.message),
-      path: body.path?.split(/[?#]/, 1)[0],
+      ...body, message, path,
       occurredAt: body.occurredAt ? new Date(body.occurredAt) : null
     } });
     return reply.code(202).send({ accepted: true });

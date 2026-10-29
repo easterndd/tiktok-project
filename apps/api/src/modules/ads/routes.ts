@@ -9,8 +9,22 @@ const appEntrySessionTtlMs = 15 * 60 * 1000;
 
 export async function registerAdRoutes(app: FastifyInstance) {
   app.post('/ad-events', {
-    preHandler: requireUser,
-    config: { rateLimit: { max: 120, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
+    preHandler: async (request) => {
+      const body = request.body as { eventType?: string } | undefined;
+      // REQUESTED is an acknowledged no-op. Older Mini bundles still send it
+      // once per ad, so avoid JWT verification on this high-volume event.
+      if (body?.eventType === 'REQUESTED') return;
+      await requireUser(request);
+    },
+    config: { rateLimit: {
+      max: 120,
+      timeWindow: '1 minute',
+      hook: 'preHandler',
+      keyGenerator: (request) => {
+        const body = request.body as { eventType?: string } | undefined;
+        return body?.eventType === 'REQUESTED' ? `requested:${request.ip}` : `user:${request.user.sub}`;
+      }
+    } }
   }, async (request) => {
     const body = z.object({
       clientEventId: z.string().min(1).max(128),
@@ -34,13 +48,20 @@ export async function registerAdRoutes(app: FastifyInstance) {
       if (body.episodeId || body.rewardSessionId || !body.appEntrySessionId || body.sessionId !== body.appEntrySessionId) {
         throw Object.assign(new Error('Invalid app-entry ad event.'), { statusCode: 400 });
       }
-      const session = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({ where: { id: body.appEntrySessionId! } }));
+      const session = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({
+        where: { id: body.appEntrySessionId! },
+        select: { id: true, userId: true, status: true, expiresAt: true, placementId: true, mode: true, requiredCount: true, countMode: true }
+      }));
       const countedImpressionClosed = session && body.eventType === 'CLOSED_INCOMPLETE' && session.countMode === 'SHOWN'
         ? await measureDatabase(request, () => app.prisma.appEntryAdCompletion.findUnique({ where: { sessionId_adIndex: { sessionId: session.id, adIndex: body.adIndex } }, select: { id: true } }))
         : null;
       if (!session || session.userId !== request.user.sub || (session.status !== 'ACTIVE' && !countedImpressionClosed) || (session.expiresAt <= now && !countedImpressionClosed) || session.placementId !== body.placementId || session.mode !== (body.adType === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED_GATED') || body.adIndex > session.requiredCount) {
         throw Object.assign(new Error('App-entry ad session is unavailable.'), { statusCode: 409 });
       }
+      // SHOWN mode has already advanced the durable entitlement counter in
+      // /shown. The later incomplete close is diagnostic-only, so avoid an
+      // indexed AdEvent write for every impression close.
+      if (body.eventType === 'CLOSED_INCOMPLETE' && session.countMode === 'SHOWN') return { accepted: true };
       shouldRenewShown = body.eventType === 'SHOWN' && session.expiresAt.getTime() <= now.getTime() + 2 * 60 * 1000;
     } else {
       if (body.adType !== 'REWARDED' || !body.episodeId || !body.rewardSessionId || body.appEntrySessionId || body.sessionId !== body.rewardSessionId) {
