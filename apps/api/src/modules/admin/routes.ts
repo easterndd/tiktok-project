@@ -40,18 +40,25 @@ const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 type AnalyticsCacheEntry = { expiresAt: number; value: unknown };
 const analyticsCaches = new WeakMap<FastifyInstance, Map<string, AnalyticsCacheEntry>>();
 const ANALYTICS_CACHE_TTL_MS = 15_000;
-async function cachedAnalytics<T>(app: FastifyInstance, key: string, load: () => Promise<T>): Promise<T> {
+async function cachedAnalytics<T>(app: FastifyInstance, key: string, load: () => Promise<T>, ttlMs = ANALYTICS_CACHE_TTL_MS): Promise<T> {
   const analyticsCache = analyticsCaches.get(app) ?? new Map<string, AnalyticsCacheEntry>();
   analyticsCaches.set(app, analyticsCache);
   const now = Date.now();
   const cached = analyticsCache.get(key);
   if (cached && cached.expiresAt > now) return cached.value as T;
-  const value = await load();
-  analyticsCache.set(key, { expiresAt: now + ANALYTICS_CACHE_TTL_MS, value });
-  if (analyticsCache.size > 100) {
-    for (const [entryKey, entry] of analyticsCache) if (entry.expiresAt <= now) analyticsCache.delete(entryKey);
+  const entry = { expiresAt: Number.POSITIVE_INFINITY, value: load() };
+  analyticsCache.set(key, entry);
+  try {
+    const value = await entry.value;
+    if (analyticsCache.get(key) === entry) analyticsCache.set(key, { expiresAt: Date.now() + ttlMs, value });
+    if (analyticsCache.size > 100) {
+      for (const [entryKey, cachedEntry] of analyticsCache) if (cachedEntry.expiresAt <= Date.now()) analyticsCache.delete(entryKey);
+    }
+    return value;
+  } catch (error) {
+    if (analyticsCache.get(key) === entry) analyticsCache.delete(key);
+    throw error;
   }
-  return value;
 }
 async function checkDisplayMetadataOwner(app: FastifyInstance, request: FastifyRequest, shared: any) {
   const operator = await app.prisma.adminUser.findUniqueOrThrow({ where: { id: request.user.sub } });
@@ -1831,32 +1838,34 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   });
   app.get('/admin/analytics/health', { preHandler: requireAdmin }, async (request) => {
     const { minutes } = z.object({ minutes: z.coerce.number().int().min(5).max(1440).default(30) }).parse(request.query);
-    const windowStart = new Date(Date.now() - minutes * 60_000);
-    const runtimeModel = app.prisma.miniAppRuntimeError;
-    const runtimeGroups = runtimeModel ? await runtimeModel.groupBy({ by: ['kind'], where: { createdAt: { gte: windowStart } }, _count: { _all: true } }) : [];
-    const runtimeErrors = runtimeModel ? await runtimeModel.findMany({ where: { createdAt: { gte: windowStart } }, orderBy: { createdAt: 'desc' }, take: 30 }) : [];
-    const runtimeCount = (kind: string) => runtimeGroups.find((row) => row.kind === kind)?._count._all ?? 0;
-    const [adFailures, playbackErrors, uploadFailures, platformFailures, recentAds, recentPlayback, recentUploads, recentPlatform] = await Promise.all([
-      app.prisma.adEvent.count({ where: { createdAt: { gte: windowStart }, eventType: 'FAILED' } }),
-      app.prisma.playbackQualityEvent.count({ where: { createdAt: { gte: windowStart }, eventType: 'ERROR' } }),
-      app.prisma.uploadJob.count({ where: { completedAt: { gte: windowStart }, status: 'FAILED' } }),
-      app.prisma.platformSyncJob.count({ where: { updatedAt: { gte: windowStart }, status: { in: ['FAILED', 'CONFLICT'] } } }),
-      app.prisma.adEvent.findMany({ where: { createdAt: { gte: windowStart }, eventType: 'FAILED' }, select: { createdAt: true, errorCode: true, placementId: true, scope: true }, orderBy: { createdAt: 'desc' }, take: 5 }),
-      app.prisma.playbackQualityEvent.findMany({ where: { createdAt: { gte: windowStart }, eventType: 'ERROR' }, select: { createdAt: true, errorCode: true, episode: { select: { title: true } } }, orderBy: { createdAt: 'desc' }, take: 5 }),
-      app.prisma.uploadJob.findMany({ where: { completedAt: { gte: windowStart }, status: 'FAILED' }, select: { completedAt: true, errorMessage: true, episode: { select: { title: true } } }, orderBy: { completedAt: 'desc' }, take: 5 }),
-      app.prisma.platformSyncJob.findMany({ where: { updatedAt: { gte: windowStart }, status: { in: ['FAILED', 'CONFLICT'] } }, select: { updatedAt: true, kind: true, status: true, errorMessage: true, album: { select: { title: true } } }, orderBy: { updatedAt: 'desc' }, take: 5 })
-    ]);
-    return {
-      generatedAt: new Date().toISOString(), windowStart: windowStart.toISOString(),
-      counts: { adFailures, playbackErrors, uploadFailures, platformFailures, startupErrors: runtimeCount('STARTUP'), apiErrors: runtimeCount('API') + runtimeCount('PLAYBACK'), scriptErrors: runtimeCount('SCRIPT'), clientAdErrors: runtimeCount('AD') },
-      recent: [
-        ...runtimeErrors.map((item) => ({ kind: ({ STARTUP: '启动异常', API: '接口加载失败', PLAYBACK: '剧集加载失败', SCRIPT: '脚本异常', AD: '广告运行异常' } as Record<string, string>)[item.kind] ?? item.kind, createdAt: item.createdAt, message: `${item.phase} · ${item.message}`, releaseId: item.releaseId, path: item.path, requestId: item.requestId, durationMs: item.durationMs, statusCode: item.statusCode, occurredAt: item.occurredAt })),
-        ...recentAds.map((item) => ({ kind: '广告失败', createdAt: item.createdAt, message: `${item.scope} · ${item.errorCode ?? '未知错误'} · ${item.placementId}` })),
-        ...recentPlayback.map((item) => ({ kind: '播放错误', createdAt: item.createdAt, message: `${item.episode.title} · ${item.errorCode ?? '未知错误'}` })),
-        ...recentUploads.map((item) => ({ kind: '上传失败', createdAt: item.completedAt!, message: `${item.episode?.title ?? '分集'} · ${item.errorMessage ?? '未知错误'}` })),
-        ...recentPlatform.map((item) => ({ kind: item.status === 'CONFLICT' ? '平台结果待确认' : '平台同步失败', createdAt: item.updatedAt, message: `${item.album?.title ?? item.kind} · ${item.errorMessage ?? '未知错误'}` }))
-      ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 30)
-    };
+    return cachedAnalytics(app, `health:${minutes}`, async () => {
+      const windowStart = new Date(Date.now() - minutes * 60_000);
+      const runtimeModel = app.prisma.miniAppRuntimeError;
+      const runtimeGroups = runtimeModel ? await runtimeModel.groupBy({ by: ['kind'], where: { createdAt: { gte: windowStart } }, _count: { _all: true } }) : [];
+      const runtimeErrors = runtimeModel ? await runtimeModel.findMany({ where: { createdAt: { gte: windowStart } }, orderBy: { createdAt: 'desc' }, take: 30 }) : [];
+      const runtimeCount = (kind: string) => runtimeGroups.find((row) => row.kind === kind)?._count._all ?? 0;
+      const [adFailures, playbackErrors, uploadFailures, platformFailures, recentAds, recentPlayback, recentUploads, recentPlatform] = await Promise.all([
+        app.prisma.adEvent.count({ where: { createdAt: { gte: windowStart }, eventType: 'FAILED' } }),
+        app.prisma.playbackQualityEvent.count({ where: { createdAt: { gte: windowStart }, eventType: 'ERROR' } }),
+        app.prisma.uploadJob.count({ where: { completedAt: { gte: windowStart }, status: 'FAILED' } }),
+        app.prisma.platformSyncJob.count({ where: { updatedAt: { gte: windowStart }, status: { in: ['FAILED', 'CONFLICT'] } } }),
+        app.prisma.adEvent.findMany({ where: { createdAt: { gte: windowStart }, eventType: 'FAILED' }, select: { createdAt: true, errorCode: true, placementId: true, scope: true }, orderBy: { createdAt: 'desc' }, take: 5 }),
+        app.prisma.playbackQualityEvent.findMany({ where: { createdAt: { gte: windowStart }, eventType: 'ERROR' }, select: { createdAt: true, errorCode: true, episode: { select: { title: true } } }, orderBy: { createdAt: 'desc' }, take: 5 }),
+        app.prisma.uploadJob.findMany({ where: { completedAt: { gte: windowStart }, status: 'FAILED' }, select: { completedAt: true, errorMessage: true, episode: { select: { title: true } } }, orderBy: { completedAt: 'desc' }, take: 5 }),
+        app.prisma.platformSyncJob.findMany({ where: { updatedAt: { gte: windowStart }, status: { in: ['FAILED', 'CONFLICT'] } }, select: { updatedAt: true, kind: true, status: true, errorMessage: true, album: { select: { title: true } } }, orderBy: { updatedAt: 'desc' }, take: 5 })
+      ]);
+      return {
+        generatedAt: new Date().toISOString(), windowStart: windowStart.toISOString(),
+        counts: { adFailures, playbackErrors, uploadFailures, platformFailures, startupErrors: runtimeCount('STARTUP'), apiErrors: runtimeCount('API') + runtimeCount('PLAYBACK'), scriptErrors: runtimeCount('SCRIPT'), clientAdErrors: runtimeCount('AD') },
+        recent: [
+          ...runtimeErrors.map((item) => ({ kind: ({ STARTUP: '启动异常', API: '接口加载失败', PLAYBACK: '剧集加载失败', SCRIPT: '脚本异常', AD: '广告运行异常' } as Record<string, string>)[item.kind] ?? item.kind, createdAt: item.createdAt, message: `${item.phase} · ${item.message}`, releaseId: item.releaseId, path: item.path, requestId: item.requestId, durationMs: item.durationMs, statusCode: item.statusCode, occurredAt: item.occurredAt })),
+          ...recentAds.map((item) => ({ kind: '广告失败', createdAt: item.createdAt, message: `${item.scope} · ${item.errorCode ?? '未知错误'} · ${item.placementId}` })),
+          ...recentPlayback.map((item) => ({ kind: '播放错误', createdAt: item.createdAt, message: `${item.episode.title} · ${item.errorCode ?? '未知错误'}` })),
+          ...recentUploads.map((item) => ({ kind: '上传失败', createdAt: item.completedAt!, message: `${item.episode?.title ?? '分集'} · ${item.errorMessage ?? '未知错误'}` })),
+          ...recentPlatform.map((item) => ({ kind: item.status === 'CONFLICT' ? '平台结果待确认' : '平台同步失败', createdAt: item.updatedAt, message: `${item.album?.title ?? item.kind} · ${item.errorMessage ?? '未知错误'}` }))
+        ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 30)
+      };
+    }, 60_000);
   });
   app.get('/admin/analytics/overview', { preHandler: requireAdmin }, async () => {
     return cachedAnalytics(app, 'overview', async () => {

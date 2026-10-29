@@ -96,6 +96,7 @@ async function createPrismaStub() {
     entryCompletions: new Map<string, any>(),
     appSessions: new Map<string, any>(),
     activityEvents: new Map<string, any>(),
+    healthQueryCalls: { adFailureCount: 0, adFailureList: 0 },
     legacyLaunchMetadata: { metadata: { launchQuery: { adId: 'test-ad-id' } } } as any | null,
     sharedIps: new Map<string, any>(),
     sharedVisits: new Map<string, any>(),
@@ -173,6 +174,7 @@ async function createPrismaStub() {
     },
     adEvent: {
       findUnique: async (args: any) => state.adEvents.get(`${args.where.userId_clientEventId.userId}:${args.where.userId_clientEventId.clientEventId}`) ?? null,
+      findMany: async () => { state.healthQueryCalls.adFailureList += 1; return []; },
       upsert: async (args: any) => {
         const key = `${args.where.userId_clientEventId.userId}:${args.where.userId_clientEventId.clientEventId}`;
         const existing = state.adEvents.get(key);
@@ -202,7 +204,7 @@ async function createPrismaStub() {
         state.adEvents.set(key, event);
         return event;
       },
-      count: async () => state.adEvents.size
+      count: async () => { state.healthQueryCalls.adFailureCount += 1; return state.adEvents.size; }
     },
     albumLike: {
       findUnique: async (args: { where: { userId_albumId: { userId: string; albumId: string } } }) => state.likes.has(`${args.where.userId_albumId.userId}:${args.where.userId_albumId.albumId}`) ? { id: 'like-1' } : null,
@@ -382,6 +384,7 @@ async function createPrismaStub() {
       updateMany: async (args: any) => { for (const [version, item] of state.uiConfigVersions) if (!args.where?.status || item.status === args.where.status) state.uiConfigVersions.set(version, { ...item, ...args.data }); return { count: state.uiConfigVersions.size }; }
     },
     genre: { findMany: async () => [], create: async () => ({ id: 'genre-1' }), update: async () => ({ id: 'genre-1' }) },
+    miniAppRuntimeError: { groupBy: async () => [], findMany: async () => [] },
     playbackQualityEvent: { create: async () => ({ id: 'quality-1' }), groupBy: async () => [], aggregate: async () => ({ _count: 0, _avg: { startupMs: null }, _sum: { bufferMs: null } }), count: async () => 0, findMany: async () => [] },
     playbackSession: {
       findUnique: async (args: any) => state.playbackSessions.get(args.where.id) ?? null,
@@ -394,7 +397,8 @@ async function createPrismaStub() {
       count: async () => state.completionEvents.size
     },
     adRevenue: { findMany: async () => [], upsert: async () => ({ id: 'revenue-1' }) },
-    uploadJob: { findMany: async () => [], findUnique: async () => null, findFirst: async () => null, create: async () => ({ id: 'job-1' }), updateMany: async () => ({ count: 1 }) },
+    uploadJob: { count: async () => 0, findMany: async () => [], findUnique: async () => null, findFirst: async () => null, create: async () => ({ id: 'job-1' }), updateMany: async () => ({ count: 1 }) },
+    platformSyncJob: { count: async () => 0, findMany: async () => [] },
     $transaction: async <T>(callback: (tx: typeof prisma) => Promise<T>) => callback(prisma),
     $executeRaw: async (query: any, ...values: any[]) => {
       const sql = typeof query?.sql === 'string' ? query.sql : Array.isArray(query) ? query.join('?') : String(query);
@@ -1363,6 +1367,26 @@ describe('QuicK ReeLS API', () => {
     assert.equal(analytics.json().from, '2026-09-01');
     assert.equal(analytics.json().to, '2026-09-07');
     assert.equal(analytics.json().timezone, 'Asia/Shanghai');
+  });
+
+  it('caches the admin health summary and coalesces concurrent reads', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const headers = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const url = '/api/v1/admin/analytics/health?minutes=30';
+    const [first, concurrent] = await Promise.all([
+      app.inject({ method: 'GET', url, headers }),
+      app.inject({ method: 'GET', url, headers })
+    ]);
+    assert.equal(first.statusCode, 200, first.body);
+    assert.equal(concurrent.statusCode, 200, concurrent.body);
+    assert.equal((app.prisma as any)._state.healthQueryCalls.adFailureCount, 1);
+    assert.equal((app.prisma as any)._state.healthQueryCalls.adFailureList, 1);
+
+    const cached = await app.inject({ method: 'GET', url, headers });
+    assert.equal(cached.statusCode, 200, cached.body);
+    assert.equal((app.prisma as any)._state.healthQueryCalls.adFailureCount, 1);
+    assert.equal((app.prisma as any)._state.healthQueryCalls.adFailureList, 1);
   });
 
   it('counts distinct audience users in SQL without returning user ID rows', async () => {

@@ -299,7 +299,7 @@ export async function startUploadWorker() {
     } finally { analyticsRunning = false; }
   };
   void refreshAnalytics();
-  const analyticsTimer = setInterval(() => { void refreshAnalytics(); }, 5 * 60_000);
+  const analyticsTimer = setInterval(() => { void refreshAnalytics(); }, 15 * 60_000);
   await run().catch((error) => console.error('Upload worker cycle failed.', error));
   let running = false;
   const timer = setInterval(() => {
