@@ -271,87 +271,78 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
   }, async (request, reply) => {
     const { sessionId } = sessionParams.parse(request.params);
     const { clientEventId, adIndex } = shownInput.parse(request.body);
-    const transact = () => app.prisma.$transaction(async (tx) => {
-      const session = await tx.appEntryAdSession.findUnique({ where: { id: sessionId } });
-      if (!session || session.userId !== request.user.sub) return null;
-      if (session.countMode !== 'SHOWN') return { invalidMode: true as const };
-      const now = new Date();
-      const canAdvance = session.status === 'ACTIVE' && session.expiresAt > now && adIndex <= session.requiredCount;
-      const isNextIndex = adIndex === session.completedCount + 1;
-      if (!canAdvance || !isNextIndex) {
-        const existing = await tx.appEntryAdCompletion.findFirst({
-          where: { sessionId, OR: [{ clientEventId }, { adIndex }] },
-          select: { clientEventId: true, adIndex: true }
-        });
-        if (existing) {
-          if (existing.clientEventId !== clientEventId || existing.adIndex !== adIndex) return { conflict: true as const };
-          const current = await tx.appEntryAdSession.findUnique({ where: { id: sessionId } });
-          if (!current || current.userId !== request.user.sub) return null;
-          return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue: current.status === 'ACTIVE' && current.completedCount < current.requiredCount };
-        }
-        if (canAdvance && !isNextIndex) return { conflict: true as const };
-        return null;
+    // SHOWN acknowledgements are the high-volume path. Claim the counter with
+    // one guarded UPDATE first, then persist audit rows independently. Holding
+    // an interactive transaction while clients compete for a small pool caused
+    // P2028 transaction-start timeouts and amplified client retries.
+    const session = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } }));
+    if (!session || session.userId !== request.user.sub) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
+    if (session.countMode !== 'SHOWN') return reply.code(409).send({ error: { code: 'COUNT_MODE_MISMATCH', message: 'This entry-ad session does not count impressions.', requestId: request.id } });
+    const now = new Date();
+    const canAdvance = session.status === 'ACTIVE' && session.expiresAt > now && adIndex <= session.requiredCount;
+    const isNextIndex = adIndex === session.completedCount + 1;
+    const findExisting = () => measureDatabase(request, () => app.prisma.appEntryAdCompletion.findFirst({
+      where: { sessionId, OR: [{ clientEventId }, { adIndex }] },
+      select: { clientEventId: true, adIndex: true }
+    }));
+    const readCurrent = () => measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } }));
+    if (!canAdvance || !isNextIndex) {
+      const existing = await findExisting();
+      if (existing) {
+        if (existing.clientEventId !== clientEventId || existing.adIndex !== adIndex) return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
+        const current = await readCurrent();
+        if (!current || current.userId !== request.user.sub) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
+        const shouldContinue = current.status === 'ACTIVE' && current.completedCount < current.requiredCount;
+        return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue, access: shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
       }
-      const adType = session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' as const : 'REWARDED' as const;
-      let event = await tx.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } });
-      if (event) {
-        if (event.eventType !== 'SHOWN' || event.scope !== 'APP_ENTRY' || event.adType !== adType || event.placementId !== session.placementId || event.sessionId !== sessionId || event.appEntrySessionId !== sessionId || event.adIndex !== adIndex) {
-          return { conflict: true as const };
-        }
+      if (canAdvance && !isNextIndex) return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
+      return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
+    }
+    const adType = session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' as const : 'REWARDED' as const;
+    const event = await measureDatabase(request, () => app.prisma.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } }));
+    if (event && (event.eventType !== 'SHOWN' || event.scope !== 'APP_ENTRY' || event.adType !== adType || event.placementId !== session.placementId || event.sessionId !== sessionId || event.appEntrySessionId !== sessionId || event.adIndex !== adIndex)) {
+      return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
+    }
+    const completedCount = adIndex;
+    const status = completedCount >= session.requiredCount ? 'COMPLETED' as const : 'ACTIVE' as const;
+    const advanced = await measureDatabase(request, () => app.prisma.appEntryAdSession.updateMany({
+      where: {
+        id: sessionId,
+        userId: request.user.sub,
+        countMode: 'SHOWN',
+        status: 'ACTIVE',
+        expiresAt: { gt: now },
+        completedCount: adIndex - 1,
+        requiredCount: { gte: adIndex }
+      },
+      data: { completedCount, status, expiresAt: new Date(now.getTime() + sessionTtlMs) }
+    }));
+    if (!advanced.count) {
+      const existing = await findExisting();
+      if (existing) {
+        if (existing.clientEventId !== clientEventId || existing.adIndex !== adIndex) return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
+        const current = await readCurrent();
+        if (!current || current.userId !== request.user.sub) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
+        const shouldContinue = current.status === 'ACTIVE' && current.completedCount < current.requiredCount;
+        return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue, access: shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
       }
-
-      // The guarded update is the per-session counter claim. Concurrent retries
-      // for the same index cannot both advance the session.
-      const completedCount = adIndex;
-      const status = completedCount >= session.requiredCount ? 'COMPLETED' as const : 'ACTIVE' as const;
-      const advanced = await tx.appEntryAdSession.updateMany({
-        where: {
-          id: sessionId,
-          userId: request.user.sub,
-          countMode: 'SHOWN',
-          status: 'ACTIVE',
-          expiresAt: { gt: now },
-          completedCount: adIndex - 1,
-          requiredCount: { gte: adIndex }
-        },
-        data: { completedCount, status, expiresAt: new Date(now.getTime() + sessionTtlMs) }
-      });
-      if (!advanced.count) {
-        const existing = await tx.appEntryAdCompletion.findFirst({
-          where: { sessionId, OR: [{ clientEventId }, { adIndex }] },
-          select: { clientEventId: true, adIndex: true }
-        });
-        if (existing) {
-          if (existing.clientEventId !== clientEventId || existing.adIndex !== adIndex) return { conflict: true as const };
-          const current = await tx.appEntryAdSession.findUnique({ where: { id: sessionId } });
-          if (!current || current.userId !== request.user.sub) return null;
-          return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue: current.status === 'ACTIVE' && current.completedCount < current.requiredCount };
-        }
-        return { conflict: true as const };
-      }
-      if (!event) {
-        event = await tx.adEvent.create({ data: {
+      return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
+    }
+    let persistedEvent = event;
+    try {
+      if (!persistedEvent) {
+        persistedEvent = await measureDatabase(request, () => app.prisma.adEvent.create({ data: {
           userId: request.user.sub, clientEventId, adType, scope: 'APP_ENTRY', eventType: 'SHOWN',
           placementId: session.placementId, sessionId, appEntrySessionId: sessionId, adIndex
-        } });
+        } }));
       }
-      await tx.appEntryAdCompletion.create({ data: { sessionId, clientEventId, adIndex, adEventId: event.id } });
-      return { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE' };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
-    let result: Awaited<ReturnType<typeof transact>> | undefined;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        result = await measureDatabase(request, transact);
-        break;
-      } catch (error) {
-        const retryable = error instanceof Prisma.PrismaClientKnownRequestError && (error.code === 'P2002' || error.code === 'P2034');
-        if (!retryable || attempt === 2) throw error;
-        await new Promise((resolve) => setTimeout(resolve, Math.min(200, 25 * 2 ** attempt)));
-      }
+      await measureDatabase(request, () => app.prisma.appEntryAdCompletion.create({ data: { sessionId, clientEventId, adIndex, adEventId: persistedEvent!.id } }));
+    } catch (error) {
+      // The counter claim is durable and idempotent. Keep the ad gate moving if
+      // a best-effort telemetry insert loses a race or times out.
+      request.log.warn({ err: error, sessionId, adIndex }, 'Entry ad shown telemetry could not be persisted');
     }
-    if (!result) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
-    if ('invalidMode' in result) return reply.code(409).send({ error: { code: 'COUNT_MODE_MISMATCH', message: 'This entry-ad session does not count impressions.', requestId: request.id } });
-    if ('conflict' in result) return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
+    const result = { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE' };
     return { ...result, access: result.shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
   });
 }
