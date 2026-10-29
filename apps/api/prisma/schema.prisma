@@ -607,6 +607,7 @@ model AudienceActivityEvent {
 
   @@index([createdAt, userId])
   @@index([eventType, createdAt])
+  @@index([userId, eventType, createdAt])
 }
 
 model EpisodeUnlock {

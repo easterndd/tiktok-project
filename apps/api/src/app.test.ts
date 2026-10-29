@@ -765,6 +765,7 @@ describe('QuicK ReeLS API', () => {
 
     assert.equal(allowed.statusCode, 204);
     assert.equal(allowed.headers['access-control-allow-origin'], 'https://microapp.tiktok.com');
+    assert.equal(allowed.headers['access-control-max-age'], '600');
     assert.equal(allowedRootDomain.statusCode, 204);
     assert.equal(allowedRootDomain.headers['access-control-allow-origin'], 'https://tiktok.com');
     assert.equal(allowedMiniRuntime.statusCode, 204);

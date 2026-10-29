@@ -3,7 +3,7 @@ import multipart from '@fastify/multipart';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import type { PrismaClient } from '@prisma/client';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { LogController, type FastifyInstance } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
@@ -81,27 +81,33 @@ function isMiniBootstrapRequest(url: string) {
 export async function buildApp(env: Env, options: { prisma?: PrismaClient; taletvPrisma?: PrismaClient; miniPrisma?: Partial<Record<MiniAppKey, PrismaClient>>; sharedPrisma?: PrismaClient } = {}) {
   const mainEnv: Env = { ...env, MINI_APP_KEY: 'main' };
   const trustedProxies = env.TRUSTED_PROXY_CIDRS.split(',').map((value) => value.trim()).filter(Boolean);
-  const app = Fastify({ logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' }, trustProxy: trustedProxies.length ? trustedProxies : false });
+  const app = Fastify({
+    logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' },
+    logController: new LogController({ disableRequestLogging: env.NODE_ENV === 'production' }),
+    trustProxy: trustedProxies.length ? trustedProxies : false
+  });
   registerErrorHandler(app);
   const configuredCorsOrigins = env.API_CORS_ORIGIN.split(',');
-  // Log before CORS can finish an OPTIONS request, including every Mini App prefix.
   app.addHook('onRequest', (request, _reply, done) => {
-    if (miniPerformancePath.test(request.url.split('?', 1)[0])) requestStartedAt.set(request, performance.now());
-    if (isMiniBootstrapRequest(request.url)) {
+    const isBootstrapRequest = isMiniBootstrapRequest(request.url);
+    const corsAllowed = isAllowedCorsOrigin(request.headers.origin, configuredCorsOrigins);
+    if (isBootstrapRequest && (env.NODE_ENV !== 'production' || !corsAllowed || Math.random() < 0.01)) {
       request.log.info({
         method: request.method,
         path: request.url.split('?', 1)[0],
         origin: request.headers.origin ?? null,
-        corsAllowed: isAllowedCorsOrigin(request.headers.origin, configuredCorsOrigins),
+        corsAllowed,
         requestedMethod: request.headers['access-control-request-method'] ?? null,
         requestedHeaders: request.headers['access-control-request-headers'] ?? null
       }, 'Mini bootstrap request');
     }
+    if (miniPerformancePath.test(request.url.split('?', 1)[0])) requestStartedAt.set(request, performance.now());
     done();
   });
   await app.register(cors, {
     origin: (origin, callback) => callback(null, isAllowedCorsOrigin(origin, configuredCorsOrigins)),
     credentials: true,
+    maxAge: 600,
     exposedHeaders: ['Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Server-Timing'],
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
   });
@@ -119,25 +125,26 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
   app.addHook('onResponse', (request, reply, done) => {
     const startedAt = requestStartedAt.get(request);
     if (startedAt !== undefined) {
-      const databaseMs = getDatabaseDuration(request);
-      request.log.info({
-        method: request.method,
-        path: request.url.split('?', 1)[0],
-        statusCode: reply.statusCode,
-        durationMs: Number((performance.now() - startedAt).toFixed(1)),
-        databaseMs: databaseMs === undefined ? null : Number(databaseMs.toFixed(1))
-      }, 'Mini performance response');
+      const durationMs = Number((performance.now() - startedAt).toFixed(1));
+      const shouldLog = reply.statusCode >= 400 || durationMs >= 2_000 || (env.NODE_ENV !== 'production' || Math.random() < 0.01);
+      if (shouldLog) {
+        const databaseMs = getDatabaseDuration(request);
+        const isBootstrapRequest = isMiniBootstrapRequest(request.url);
+        request.log.info({
+          method: request.method,
+          path: request.url.split('?', 1)[0],
+          statusCode: reply.statusCode,
+          durationMs,
+          databaseMs: databaseMs === undefined ? null : Number(databaseMs.toFixed(1)),
+          sampleRate: reply.statusCode >= 400 || durationMs >= 2_000 ? 1 : 0.01,
+          ...(isBootstrapRequest ? {
+            origin: request.headers.origin ?? null,
+            corsAllowed: isAllowedCorsOrigin(request.headers.origin, configuredCorsOrigins),
+            accessControlAllowOrigin: reply.getHeader('access-control-allow-origin') ?? null
+          } : {})
+        }, isBootstrapRequest ? 'Mini bootstrap response' : 'Mini performance response');
+      }
       requestStartedAt.delete(request);
-    }
-    if (isMiniBootstrapRequest(request.url)) {
-      request.log.info({
-        method: request.method,
-        path: request.url.split('?', 1)[0],
-        statusCode: reply.statusCode,
-        origin: request.headers.origin ?? null,
-        corsAllowed: isAllowedCorsOrigin(request.headers.origin, configuredCorsOrigins),
-        accessControlAllowOrigin: reply.getHeader('access-control-allow-origin') ?? null
-      }, 'Mini bootstrap response');
     }
     done();
   });
