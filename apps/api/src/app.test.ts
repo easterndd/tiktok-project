@@ -194,8 +194,12 @@ async function createPrismaStub() {
         return event;
       },
       create: async (args: any) => {
+        const key = `${args.data.userId}:${args.data.clientEventId}`;
+        if (state.adEvents.has(key)) {
+          throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '6.19.1' });
+        }
         const event = { id: `ad-event-${state.adEvents.size + 1}`, ...args.data };
-        state.adEvents.set(`${event.userId}:${event.clientEventId}`, event);
+        state.adEvents.set(key, event);
         return event;
       },
       count: async () => state.adEvents.size
@@ -318,6 +322,13 @@ async function createPrismaStub() {
         state.entrySessions.set(session.id, session);
         state.entrySessions.set(`${session.userId}:${session.releaseId ?? 'default'}:${session.launchId}`, session);
         return session;
+      },
+      updateMany: async ({ where, data }: any) => {
+        const session = state.entrySessions.get(where.id);
+        if (!session || session.userId !== where.userId || session.countMode !== where.countMode || session.status !== where.status
+          || session.expiresAt <= where.expiresAt.gt || session.completedCount !== where.completedCount || session.requiredCount < where.requiredCount.gte) return { count: 0 };
+        Object.assign(session, data);
+        return { count: 1 };
       }
     },
     appEntryAdCompletion: {
@@ -1508,6 +1519,7 @@ describe('QuicK ReeLS API', () => {
     const firstId = '6bf5a3e1-9e6b-40ba-a4cc-d5c6f8b0e120';
     const first = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: firstId, adIndex: 1 } });
     assert.equal(first.statusCode, 200, first.body);
+    assert.match(String(first.headers['server-timing']), /db;dur=/);
     assert.equal(first.json().completedCount, 1);
     assert.equal(first.json().shouldContinue, true);
     const duplicate = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: firstId, adIndex: 1 } });
@@ -1520,6 +1532,23 @@ describe('QuicK ReeLS API', () => {
     assert.equal(second.json().completedCount, 2);
     assert.equal(second.json().shouldContinue, false);
     assert.equal((await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } }))!.status, 'COMPLETED');
+  });
+
+  it('allows only one concurrent shown acknowledgement to claim an ad index', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const headers = { authorization: `Bearer ${await token(app, 'user')}` };
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 2, countMode: 'SHOWN', onUnavailable: 'BLOCK' } });
+    const started = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId: '4a9b10ba-cd5a-488c-bfeb-e836cd5f54bf' } });
+    const sessionId = started.json().sessionId as string;
+    const responses = await Promise.all([
+      app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: '54d65cf1-59eb-488d-a965-2f6f4c513bde', adIndex: 1 } }),
+      app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: 'a4f2d4b1-4d8a-4817-a69c-c4ee4d5072fb', adIndex: 1 } })
+    ]);
+    assert.deepEqual(responses.map((response) => response.statusCode).sort(), [200, 409]);
+    assert.equal((await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } }))!.completedCount, 1);
+    assert.equal(await (app.prisma as any).adEvent.count(), 1);
   });
 
   it('counts three closed entry ads in shown mode and preserves the session policy snapshot', async () => {
@@ -1574,6 +1603,25 @@ describe('QuicK ReeLS API', () => {
     assert.equal(completed.json().completedCount, 1);
     const afterCompletion = await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } });
     assert.ok(afterCompletion!.expiresAt.getTime() > Date.now() + 14 * 60 * 1000);
+  });
+
+  it('does not rewrite an entry session for failure telemetry while it is still fresh', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 2, countMode: 'COMPLETED', onUnavailable: 'ALLOW' } });
+    const headers = { authorization: `Bearer ${await token(app, 'user')}` };
+    const started = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId: '8c1d76b7-b5e9-47d3-8fd3-7aa1b7a0e2dd' } });
+    const sessionId = started.json().sessionId as string;
+    const freshExpiry = new Date(Date.now() + 10 * 60 * 1000);
+    await app.prisma.appEntryAdSession.update({ where: { id: sessionId }, data: { expiresAt: freshExpiry } });
+    const failure = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers, payload: {
+      clientEventId: '6e5b25af-1dd4-4f38-b0cb-e50dc17a7a72', adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'FAILED',
+      placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1, errorCode: '11006'
+    } });
+    assert.equal(failure.statusCode, 200, failure.body);
+    const afterFailure = await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } });
+    assert.equal(afterFailure!.expiresAt.getTime(), freshExpiry.getTime());
   });
 
   it('treats a second confirmed impression for the same ad index as idempotent', async () => {

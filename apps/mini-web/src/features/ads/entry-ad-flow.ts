@@ -25,6 +25,10 @@ function retryDelayMs(cause: unknown, fallbackMs: number) {
     ? Math.min(300_000, Math.max(1_000, seconds * 1_000)) : fallbackMs;
 }
 
+function showRetryDelayMs(cause: unknown, failures: number) {
+  return retryDelayMs(cause, Math.min(5_000, 1_000 * 2 ** (failures - 1)));
+}
+
 async function acknowledgeShown(actions: {
   complete: (sessionId: string, clientEventId: string, isEnded: boolean, adIndex?: number) => Promise<Progress>;
   wait: (ms: number) => Promise<void>;
@@ -89,7 +93,7 @@ export async function runEntryAdFlow(session: AppEntryAdSession, actions: {
         if (session.onUnavailable === 'ALLOW') return;
         throw cause;
       }
-      await actions.wait(retryDelayMs(cause, Math.min(failures, 5) * 500));
+      await actions.wait(showRetryDelayMs(cause, failures));
       continue;
     }
     if (!actions.isActive()) return;

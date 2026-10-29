@@ -28,6 +28,8 @@ export async function registerAdRoutes(app: FastifyInstance) {
     // A request attempt is diagnostic-only. It does not affect entitlement,
     // and persisting one row per ad request creates avoidable write pressure.
     if (body.eventType === 'REQUESTED') return { accepted: true };
+    const now = new Date();
+    let shouldRenewShown = false;
     if (body.scope === 'APP_ENTRY') {
       if (body.episodeId || body.rewardSessionId || !body.appEntrySessionId || body.sessionId !== body.appEntrySessionId) {
         throw Object.assign(new Error('Invalid app-entry ad event.'), { statusCode: 400 });
@@ -36,9 +38,10 @@ export async function registerAdRoutes(app: FastifyInstance) {
       const countedImpressionClosed = session && body.eventType === 'CLOSED_INCOMPLETE' && session.countMode === 'SHOWN'
         ? await measureDatabase(request, () => app.prisma.appEntryAdCompletion.findUnique({ where: { sessionId_adIndex: { sessionId: session.id, adIndex: body.adIndex } }, select: { id: true } }))
         : null;
-      if (!session || session.userId !== request.user.sub || (session.status !== 'ACTIVE' && !countedImpressionClosed) || (session.expiresAt <= new Date() && !countedImpressionClosed) || session.placementId !== body.placementId || session.mode !== (body.adType === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED_GATED') || body.adIndex > session.requiredCount) {
+      if (!session || session.userId !== request.user.sub || (session.status !== 'ACTIVE' && !countedImpressionClosed) || (session.expiresAt <= now && !countedImpressionClosed) || session.placementId !== body.placementId || session.mode !== (body.adType === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED_GATED') || body.adIndex > session.requiredCount) {
         throw Object.assign(new Error('App-entry ad session is unavailable.'), { statusCode: 409 });
       }
+      shouldRenewShown = body.eventType === 'SHOWN' && session.expiresAt.getTime() <= now.getTime() + 2 * 60 * 1000;
     } else {
       if (body.adType !== 'REWARDED' || !body.episodeId || !body.rewardSessionId || body.appEntrySessionId || body.sessionId !== body.rewardSessionId) {
         throw Object.assign(new Error('Invalid episode-unlock ad event.'), { statusCode: 400 });
@@ -58,17 +61,19 @@ export async function registerAdRoutes(app: FastifyInstance) {
         }
         return true;
       };
-      if (await acceptExisting()) {
-        await measureDatabase(request, () => app.prisma.appEntryAdSession.update({ where: { id: body.appEntrySessionId! }, data: { expiresAt: new Date(Date.now() + appEntrySessionTtlMs) } }));
-        return { accepted: true };
-      }
+      let created = false;
       try {
         await measureDatabase(request, () => app.prisma.adEvent.create({ data: { ...body, userId: request.user.sub } }));
+        created = true;
       } catch (error) {
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
         if (!(await acceptExisting())) throw error;
       }
-      await measureDatabase(request, () => app.prisma.appEntryAdSession.update({ where: { id: body.appEntrySessionId! }, data: { expiresAt: new Date(Date.now() + appEntrySessionTtlMs) } }));
+      // Only a confirmed impression extends the session. Diagnostic retries and
+      // closes must not keep rewriting the same session row.
+      if (created && body.eventType === 'SHOWN' && shouldRenewShown) {
+        await measureDatabase(request, () => app.prisma.appEntryAdSession.update({ where: { id: body.appEntrySessionId! }, data: { expiresAt: new Date(now.getTime() + appEntrySessionTtlMs) } }));
+      }
       return { accepted: true };
     }
     await measureDatabase(request, () => app.prisma.adEvent.upsert({

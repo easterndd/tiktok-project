@@ -71,7 +71,7 @@ function isAllowedCorsOrigin(origin: string | undefined, configuredOrigins: stri
 }
 
 const miniBootstrapPath = new RegExp(`^/api/(?:(?:${miniAppKeys.filter((key) => key !== 'main').join('|')})/)?v1/(?:auth/anonymous/session|app-entry-ad-sessions)$`);
-const miniPerformancePath = /\/(?:auth\/anonymous\/session|app-entry-ad-sessions(?:\/[^/]+\/complete)?|home|ad-events|episode-interstitial\/config|episodes\/[^/]+\/reward-session(?:\/[^/]+\/complete)?)$/;
+const miniPerformancePath = /\/(?:auth\/anonymous\/session|app-entry-ad-sessions(?:\/[^/]+\/(?:complete|shown))?|home|ad-events|episode-interstitial\/config|episodes\/[^/]+\/reward-session(?:\/[^/]+\/complete)?)$/;
 const requestStartedAt = new WeakMap<object, number>();
 
 function isMiniBootstrapRequest(url: string) {

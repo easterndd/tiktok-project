@@ -26,11 +26,14 @@ describe('entry ad gate flow', () => {
 
   it('stops BLOCK playback failures after three attempts without granting access', async () => {
     let shows = 0;
+    const waits = [];
     await assert.rejects(runEntryAdFlow(session, { ...base,
       show: async () => { shows++; throw new Error('no fill'); },
-      complete: async () => { throw new Error('must not complete'); }
+      complete: async () => { throw new Error('must not complete'); },
+      wait: async (ms) => { waits.push(ms); }
     }), /no fill/);
     assert.equal(shows, 3);
+    assert.deepEqual(waits, [1_000, 2_000]);
   });
 
   it('bounds failed acknowledgements without opening another ad', async () => {

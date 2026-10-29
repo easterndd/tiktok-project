@@ -275,32 +275,67 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       const session = await tx.appEntryAdSession.findUnique({ where: { id: sessionId } });
       if (!session || session.userId !== request.user.sub) return null;
       if (session.countMode !== 'SHOWN') return { invalidMode: true as const };
-      const existing = await tx.appEntryAdCompletion.findFirst({
-        where: { sessionId, OR: [{ clientEventId }, { adIndex }] },
-        select: { clientEventId: true, adIndex: true }
-      });
-      if (existing) {
-        if (existing.clientEventId !== clientEventId || existing.adIndex !== adIndex) return { conflict: true as const };
-        return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: session.completedCount < session.requiredCount };
+      const now = new Date();
+      const canAdvance = session.status === 'ACTIVE' && session.expiresAt > now && adIndex <= session.requiredCount;
+      const isNextIndex = adIndex === session.completedCount + 1;
+      if (!canAdvance || !isNextIndex) {
+        const existing = await tx.appEntryAdCompletion.findFirst({
+          where: { sessionId, OR: [{ clientEventId }, { adIndex }] },
+          select: { clientEventId: true, adIndex: true }
+        });
+        if (existing) {
+          if (existing.clientEventId !== clientEventId || existing.adIndex !== adIndex) return { conflict: true as const };
+          const current = await tx.appEntryAdSession.findUnique({ where: { id: sessionId } });
+          if (!current || current.userId !== request.user.sub) return null;
+          return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue: current.status === 'ACTIVE' && current.completedCount < current.requiredCount };
+        }
+        if (canAdvance && !isNextIndex) return { conflict: true as const };
+        return null;
       }
-      if (session.status !== 'ACTIVE' || session.expiresAt <= new Date() || adIndex > session.requiredCount) return null;
-      if (adIndex !== session.completedCount + 1) return { conflict: true as const };
       const adType = session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' as const : 'REWARDED' as const;
       let event = await tx.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } });
       if (event) {
         if (event.eventType !== 'SHOWN' || event.scope !== 'APP_ENTRY' || event.adType !== adType || event.placementId !== session.placementId || event.sessionId !== sessionId || event.appEntrySessionId !== sessionId || event.adIndex !== adIndex) {
           return { conflict: true as const };
         }
-      } else {
+      }
+
+      // The guarded update is the per-session counter claim. Concurrent retries
+      // for the same index cannot both advance the session.
+      const completedCount = adIndex;
+      const status = completedCount >= session.requiredCount ? 'COMPLETED' as const : 'ACTIVE' as const;
+      const advanced = await tx.appEntryAdSession.updateMany({
+        where: {
+          id: sessionId,
+          userId: request.user.sub,
+          countMode: 'SHOWN',
+          status: 'ACTIVE',
+          expiresAt: { gt: now },
+          completedCount: adIndex - 1,
+          requiredCount: { gte: adIndex }
+        },
+        data: { completedCount, status, expiresAt: new Date(now.getTime() + sessionTtlMs) }
+      });
+      if (!advanced.count) {
+        const existing = await tx.appEntryAdCompletion.findFirst({
+          where: { sessionId, OR: [{ clientEventId }, { adIndex }] },
+          select: { clientEventId: true, adIndex: true }
+        });
+        if (existing) {
+          if (existing.clientEventId !== clientEventId || existing.adIndex !== adIndex) return { conflict: true as const };
+          const current = await tx.appEntryAdSession.findUnique({ where: { id: sessionId } });
+          if (!current || current.userId !== request.user.sub) return null;
+          return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue: current.status === 'ACTIVE' && current.completedCount < current.requiredCount };
+        }
+        return { conflict: true as const };
+      }
+      if (!event) {
         event = await tx.adEvent.create({ data: {
           userId: request.user.sub, clientEventId, adType, scope: 'APP_ENTRY', eventType: 'SHOWN',
           placementId: session.placementId, sessionId, appEntrySessionId: sessionId, adIndex
         } });
       }
-      const completedCount = session.completedCount + 1;
-      const status = completedCount >= session.requiredCount ? 'COMPLETED' as const : 'ACTIVE' as const;
       await tx.appEntryAdCompletion.create({ data: { sessionId, clientEventId, adIndex, adEventId: event.id } });
-      await tx.appEntryAdSession.update({ where: { id: sessionId }, data: { completedCount, status, expiresAt: new Date(Date.now() + sessionTtlMs) } });
       return { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE' };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
     let result: Awaited<ReturnType<typeof transact>> | undefined;
