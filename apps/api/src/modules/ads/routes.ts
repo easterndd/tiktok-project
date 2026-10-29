@@ -25,6 +25,9 @@ export async function registerAdRoutes(app: FastifyInstance) {
       adIndex: z.number().int().positive(),
       errorCode: z.string().max(500).optional()
     }).parse(request.body);
+    // A request attempt is diagnostic-only. It does not affect entitlement,
+    // and persisting one row per ad request creates avoidable write pressure.
+    if (body.eventType === 'REQUESTED') return { accepted: true };
     if (body.scope === 'APP_ENTRY') {
       if (body.episodeId || body.rewardSessionId || !body.appEntrySessionId || body.sessionId !== body.appEntrySessionId) {
         throw Object.assign(new Error('Invalid app-entry ad event.'), { statusCode: 400 });

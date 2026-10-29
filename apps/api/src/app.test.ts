@@ -1078,6 +1078,27 @@ describe('QuicK ReeLS API', () => {
     assert.equal(secondComplete.json().shouldContinue, false);
   });
 
+  it('acknowledges ad request telemetry without writing an event or changing entry progress', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const userHeaders = { authorization: `Bearer ${await token(app, 'user')}` };
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders,
+      payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 2, countMode: 'SHOWN', onUnavailable: 'BLOCK' } });
+    const started = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders,
+      payload: { launchId: 'cbffb69f-29cb-4d45-a26c-3c4139df90d2' } });
+    const sessionId = started.json().sessionId as string;
+    const before = (app.prisma as any)._state.adEvents.size;
+    const requested = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers: userHeaders,
+      payload: { clientEventId: 'entry-request-only', adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'REQUESTED', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1 } });
+    assert.equal(requested.statusCode, 200, requested.body);
+    assert.deepEqual(requested.json(), { accepted: true });
+    assert.equal((app.prisma as any)._state.adEvents.size, before);
+    const progress = await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } });
+    assert.equal(progress!.completedCount, 0);
+    assert.equal(progress!.status, 'ACTIVE');
+  });
+
   it('filters viewers by exact IP and mini app and bulk updates entry-ad exemptions', async () => {
     const app = await createTestApp();
     apps.push(app);

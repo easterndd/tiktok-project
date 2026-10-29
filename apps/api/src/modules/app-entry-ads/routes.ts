@@ -302,14 +302,15 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       await tx.appEntryAdCompletion.create({ data: { sessionId, clientEventId, adIndex, adEventId: event.id } });
       await tx.appEntryAdSession.update({ where: { id: sessionId }, data: { completedCount, status, expiresAt: new Date(Date.now() + sessionTtlMs) } });
       return { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE' };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
     let result: Awaited<ReturnType<typeof transact>> | undefined;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         result = await measureDatabase(request, transact);
         break;
       } catch (error) {
-        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt === 4) throw error;
+        const retryable = error instanceof Prisma.PrismaClientKnownRequestError && (error.code === 'P2002' || error.code === 'P2034');
+        if (!retryable || attempt === 2) throw error;
         await new Promise((resolve) => setTimeout(resolve, Math.min(200, 25 * 2 ** attempt)));
       }
     }
