@@ -18,52 +18,81 @@ function translatedText(
   return translations?.find((translation) => translation.locale === locale)?.[field] ?? undefined;
 }
 
+const homeCatalogCacheTtlMs = 15_000;
+
+async function loadHomeCatalog(app: FastifyInstance, now: Date) {
+  const [components, albums, genres, configuredBlocks] = await Promise.all([
+    app.prisma.uiComponent.findMany({ orderBy: { key: 'asc' } }),
+    app.prisma.album.findMany({
+      where: publicAlbumWhere(app.config),
+      orderBy: { updatedAt: 'desc' },
+      take: 20,
+      include: {
+        episodes: { where: { status: 'ONLINE' }, select: { id: true } },
+        translations: true,
+        genres: { include: { genre: { select: { slug: true } } } }
+      }
+    }),
+    app.prisma.genre.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { albums: { where: { album: publicAlbumWhere(app.config) } } } } } }),
+    app.prisma.homeBlock.findMany({
+      where: {
+        enabled: true,
+        AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gte: now } }] }]
+      },
+      orderBy: { sortOrder: 'asc' },
+      include: {
+        items: {
+          where: {
+            AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gte: now } }] }]
+          },
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            album: {
+              include: {
+                episodes: { where: { status: 'ONLINE' }, select: { id: true } },
+                translations: true,
+                genres: { include: { genre: { select: { slug: true } } } }
+              }
+            },
+            targetEpisode: { select: { albumId: true, status: true, localPlaybackUrl: true } }
+          }
+        }
+      }
+    })
+  ]);
+  return { components, albums, genres, configuredBlocks, catalogVersion: now.toISOString() };
+}
+
+type HomeCatalog = Awaited<ReturnType<typeof loadHomeCatalog>>;
+const homeCatalogCache = new Map<string, { expiresAt: number; value: Promise<HomeCatalog> }>();
+
+function getHomeCatalog(app: FastifyInstance, now: Date) {
+  if (app.config.NODE_ENV !== 'production') return loadHomeCatalog(app, now);
+  const key = app.config.MINI_APP_KEY;
+  const cached = homeCatalogCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const value = loadHomeCatalog(app, now);
+  const entry = { expiresAt: Number.POSITIVE_INFINITY, value };
+  homeCatalogCache.set(key, entry);
+  void value.then(() => {
+    if (homeCatalogCache.get(key) === entry) entry.expiresAt = Date.now() + homeCatalogCacheTtlMs;
+  }, () => {
+    if (homeCatalogCache.get(key)?.value === value) homeCatalogCache.delete(key);
+  });
+  return value;
+}
+
 export async function registerHomeRoutes(app: FastifyInstance) {
   app.get('/home', async (request): Promise<HomeResponse> => {
     const { locale } = querySchema.parse(request.query);
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const now = new Date();
     const userPromise = optionalUser(request);
+    const catalogPromise = getHomeCatalog(app, now);
     const catalogStartedAt = performance.now();
-    const [user, components, albums, genres, configuredBlocks, progress] = await Promise.all([
+    const [user, catalog, progress] = await Promise.all([
       userPromise,
-      app.prisma.uiComponent.findMany({ orderBy: { key: 'asc' } }),
-      app.prisma.album.findMany({
-        where: publicAlbumWhere(app.config),
-        orderBy: { updatedAt: 'desc' },
-        take: 20,
-        include: {
-          episodes: { where: { status: 'ONLINE' }, select: { id: true } },
-          translations: true,
-          genres: { include: { genre: { select: { slug: true } } } }
-        }
-      }),
-      app.prisma.genre.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { albums: { where: { album: publicAlbumWhere(app.config) } } } } } }),
-      app.prisma.homeBlock.findMany({
-        where: {
-          enabled: true,
-          AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gte: now } }] }]
-        },
-        orderBy: { sortOrder: 'asc' },
-        include: {
-          items: {
-            where: {
-              AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gte: now } }] }]
-            },
-            orderBy: { sortOrder: 'asc' },
-            include: {
-              album: {
-                include: {
-                  episodes: { where: { status: 'ONLINE' }, select: { id: true } },
-                  translations: true,
-                  genres: { include: { genre: { select: { slug: true } } } }
-                }
-              },
-              targetEpisode: { select: { albumId: true, status: true, localPlaybackUrl: true } }
-            }
-          }
-        }
-      }),
+      catalogPromise,
       userPromise.then((user) => user ? app.prisma.watchProgress.findMany({
         where: { userId: user.sub, completed: false, episode: { status: 'ONLINE', album: publicAlbumWhere(app.config) } },
         orderBy: { updatedAt: 'desc' },
@@ -71,6 +100,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
         include: { episode: { include: { album: { include: { translations: true } } } } }
       }) : [])
     ]);
+    const { components, albums, genres, configuredBlocks, catalogVersion } = catalog;
     addDatabaseDuration(request, performance.now() - catalogStartedAt);
     const visibleAlbums = albums.filter((album) => isAlbumVisibleInCountry(album.regions, country));
     const summaries = visibleAlbums.map((album) => ({
@@ -154,7 +184,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
     }
     return {
       locale: locale as Locale,
-      cacheVersion: `home_${new Date().toISOString()}`,
+      cacheVersion: `home_${catalogVersion}`,
       blocks,
       components: components.length ? components.map((component) => ({ key: component.key as never, page: component.page as never, enabled: component.enabled, config: (component.config as Record<string, unknown> | null) ?? null })) : defaultUiComponents,
       feed: { items: summaries, nextCursor: null }
