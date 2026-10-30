@@ -19,6 +19,15 @@ type SummaryRow = {
   adFailed: bigint;
 };
 
+type PlaybackAggregateRow = {
+  grouping: number;
+  key: string | null;
+  count: bigint;
+  startupCount: bigint;
+  startupSum: bigint | null;
+  bufferMs: bigint | null;
+};
+
 function asNumber(value: bigint | number | null | undefined) {
   return Number(value ?? 0);
 }
@@ -114,19 +123,28 @@ export async function refreshAnalyticsDailySummaries(
     const dayStart = zonedMidnight(day, timezone, day.toISOString().slice(0, 10));
     const nextDay = new Date(day); nextDay.setUTCDate(nextDay.getUTCDate() + 1);
     const dayEnd = zonedMidnight(nextDay, timezone, nextDay.toISOString().slice(0, 10));
-    const createdAt = { gte: dayStart, lt: dayEnd < now ? dayEnd : now };
-    const [totals, eventTypes, definitions, networks] = await Promise.all([
-      prisma.playbackQualityEvent.aggregate({ where: { createdAt }, _count: true, _avg: { startupMs: true }, _sum: { bufferMs: true }, }),
-      prisma.playbackQualityEvent.groupBy({ by: ['eventType'], where: { createdAt }, _count: { _all: true } }),
-      prisma.playbackQualityEvent.groupBy({ by: ['definition'], where: { createdAt, definition: { not: null } }, _count: { _all: true } }),
-      prisma.playbackQualityEvent.groupBy({ by: ['networkType'], where: { createdAt, networkType: { not: null } }, _count: { _all: true } })
-    ]);
-    const startupCount = await prisma.playbackQualityEvent.count({ where: { createdAt, startupMs: { not: null } } });
-    const playbackSummary = { startupCount, startupSum: (totals._avg.startupMs ?? 0) * startupCount,
-      bufferMs: totals._sum.bufferMs ?? 0,
-      eventTypes: eventTypes.map((item) => ({ key: item.eventType, count: item._count._all })),
-      definitions: definitions.map((item) => ({ key: item.definition!, count: item._count._all })),
-      networks: networks.map((item) => ({ key: item.networkType!, count: item._count._all })) };
+    const end = dayEnd < now ? dayEnd : now;
+    // One scan computes the same per-dimension counts and overall sums.
+    const playbackRows = await prisma.$queryRaw<PlaybackAggregateRow[]>(Prisma.sql`
+      SELECT GROUPING("eventType", "definition", "networkType") AS grouping,
+        CASE GROUPING("eventType", "definition", "networkType")
+          WHEN 3 THEN "eventType" WHEN 5 THEN "definition" WHEN 6 THEN "networkType" ELSE NULL
+        END AS key,
+        COUNT(*)::bigint AS count, COUNT("startupMs")::bigint AS "startupCount",
+        SUM("startupMs")::bigint AS "startupSum", SUM("bufferMs")::bigint AS "bufferMs"
+      FROM "PlaybackQualityEvent"
+      WHERE "createdAt" >= ${dayStart} AND "createdAt" < ${end}
+      GROUP BY GROUPING SETS ((), ("eventType"), ("definition"), ("networkType"))
+    `);
+    const totals = playbackRows.find((item) => item.grouping === 7);
+    const groups = (grouping: number) => playbackRows
+      .filter((item): item is PlaybackAggregateRow & { key: string } => item.grouping === grouping && item.key !== null)
+      .map((item) => ({ key: item.key, count: asNumber(item.count) }));
+    const playbackSummary = {
+      startupCount: asNumber(totals?.startupCount), startupSum: asNumber(totals?.startupSum),
+      bufferMs: asNumber(totals?.bufferMs),
+      eventTypes: groups(3), definitions: groups(5), networks: groups(6)
+    };
     await prisma.analyticsDailySummary.upsert({
       where: { day_timezone: { day, timezone } },
       create: {

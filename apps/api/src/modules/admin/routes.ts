@@ -12,6 +12,7 @@ import { requireAdmin, requirePermission } from '../../plugins/auth';
 import { hashPassword, verifyPassword } from '../../services/password';
 import { accessConfigSchema, readMiniAppAccessConfig } from '../../lib/content-access';
 import { publicLocaleSchema } from '../../lib/locales';
+import { singleFlight } from '../../lib/single-flight';
 import { BytePlusVodService } from '../../services/byteplus-vod.service';
 import { assertMediaScope, localUploadDirectory, matchesUploadTags, processLocalUploadJobs, uploadScope, uploadTags } from '../../services/local-upload.service';
 import { LocalObjectStorageService } from '../../services/object-storage.service';
@@ -261,7 +262,7 @@ async function globallySortedViewerIds(db: PrismaClient, input: { search: string
   }
   if (input.viewerIds) filters.push(Prisma.sql`u."id" IN (${Prisma.join(input.viewerIds)})`);
   const where = filters.length ? Prisma.sql`WHERE ${Prisma.join(filters, ' AND ')}` : Prisma.empty;
-  const rows = await db.$queryRaw<ViewerSortRow[]>(Prisma.sql`
+  const rows = await singleFlight(db, `viewer-sort:${JSON.stringify([input.search, input.viewerIds ?? null, input.limit])}`, () => db.$queryRaw<ViewerSortRow[]>(Prisma.sql`
     SELECT u."id"
     FROM "User" AS u
     LEFT JOIN LATERAL (
@@ -274,7 +275,7 @@ async function globallySortedViewerIds(db: PrismaClient, input: { search: string
     ${where}
     ORDER BY latest_session."lastSeenAt" DESC NULLS LAST, u."createdAt" DESC, u."id" DESC
     LIMIT ${input.limit}
-  `);
+  `));
   return rows.map((row) => row.id);
 }
 

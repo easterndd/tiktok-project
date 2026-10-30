@@ -1,9 +1,9 @@
 import { Prisma } from '@prisma/client';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
 import { miniAppAdConfig } from '../../config/mini-apps';
-import { measureDatabase } from '../../lib/request-performance';
+import { measureDatabase, sampleResponseLog, type ResponseLogSampleCache } from '../../lib/request-performance';
 import { singleFlight } from '../../lib/single-flight';
 import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
@@ -23,6 +23,18 @@ type PolicyValue = NonNullable<PolicyRecord> | ReturnType<typeof disabledPolicy>
 type PolicyCacheEntry = { policy: PolicyValue; saved: PolicyRecord; expiresAt: number };
 
 const policyCache = new WeakMap<FastifyInstance, Map<string, PolicyCacheEntry>>();
+const completionLogSamples = new WeakMap<FastifyInstance, ResponseLogSampleCache>();
+
+function logCompletionSample(app: FastifyInstance, request: FastifyRequest, key: string, details: Record<string, unknown>, message: string) {
+  let samples = completionLogSamples.get(app);
+  if (!samples) {
+    samples = new Map();
+    completionLogSamples.set(app, samples);
+  }
+  const suppressed = sampleResponseLog(samples, key, Date.now(), 10_000, 32);
+  if (suppressed === null) return;
+  request.log.warn({ miniAppKey: app.config.MINI_APP_KEY, route: 'entry-ad-complete', ...details, suppressed }, message);
+}
 
 function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
   const placements = miniAppAdConfig(app.config);
@@ -299,18 +311,30 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
         for (let attempt = 0; attempt < 5; attempt++) {
           try {
             transactionResult = await transact();
+            if (attempt > 0) logCompletionSample(app, request, `recovered:${attempt}`, { retryCount: attempt }, 'Entry ad transaction recovered after serialization conflicts');
             break;
           } catch (error) {
-            if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt === 4) throw error;
-            await new Promise((resolve) => setTimeout(resolve, Math.min(200, 25 * 2 ** attempt)));
+            if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034') throw error;
+            if (attempt === 4) {
+              request.log.error({ miniAppKey: app.config.MINI_APP_KEY, retryCount: attempt, route: 'entry-ad-complete', errorCode: 'P2034' }, 'Entry ad transaction retries exhausted');
+              throw error;
+            }
+            const backoffMs = Math.min(200, 25 * 2 ** attempt);
+            // Spread retries from simultaneous requests rather than restarting them in lockstep.
+            const jitterMs = Math.floor(Math.random() * (backoffMs / 2));
+            await new Promise((resolve) => setTimeout(resolve, backoffMs + jitterMs));
           }
         }
         return transactionResult;
       }
     ));
 
-    if (!result) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
+    if (!result) {
+      logCompletionSample(app, request, 'rejected:CONFLICT', { errorCode: 'CONFLICT' }, 'Entry ad completion rejected');
+      return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
+    }
     if ('retryShownAcknowledgement' in result) {
+      logCompletionSample(app, request, 'rejected:AD_NOT_ACKNOWLEDGED', { errorCode: 'AD_NOT_ACKNOWLEDGED' }, 'Entry ad completion rejected');
       return reply.code(409).send({ error: { code: 'AD_NOT_ACKNOWLEDGED', message: 'The ad impression has not been acknowledged yet.', requestId: request.id } });
     }
     return { ...result, access: result.shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
