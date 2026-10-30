@@ -1,0 +1,20 @@
+{
+  "appId": "7697505699680716820",
+  "dev": {
+    "name": "BloomReel",
+    "host": "localhost",
+    "port": 5210,
+    "iconUrl": "",
+    "desc": "BloomReel TikTok Mini. Product, legal, and advertising setup is pending.",
+    "ppLink": "",
+    "tosLink": ""
+  },
+  "navbar": {
+    "bgColorLight": "#0f172a",
+    "bgColorDark": "#0f172a"
+  },
+  "build": {
+    "htmlEntry": "index.html",
+    "outputDir": "dist"
+  }
+}

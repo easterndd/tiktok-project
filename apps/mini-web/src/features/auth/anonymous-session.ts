@@ -2,13 +2,25 @@ import { apiClient, registerUnauthorizedHandler } from '../../lib/api-client';
 import { clearSessionToken, getOrCreateVisitorKey, getSessionToken, isDemoMode, setSessionToken } from '../../lib/storage';
 import { storagePrefix } from '../../lib/app-brand';
 import { getMiniLaunchContext, rememberSdkLaunchPayload, stringifySdkPayload } from '../../lib/launch-context';
+import { getLocalEntryAdPlacementIds } from '../ads/entry-ad-placements';
 
 let pendingSession: Promise<void> | null = null;
 let pendingTikTokSession: Promise<void> | null = null;
-let pendingLaunchRecord: Promise<void> | null = null;
+let pendingLaunchRecord: Promise<MiniLaunchRecordResult> | null = null;
+let launchRecordResult: MiniLaunchRecordResult | undefined;
 const entryId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `entry-${Date.now()}-${Math.random()}`;
 let lastSdkPayloadRaw = '';
 let sdkLaunchListenerInstalled = false;
+
+export type MiniLaunchRecordResult = {
+  saved: boolean;
+  entryAdEligibility?: { showEntryAd: boolean; reason?: string };
+};
+
+function localEntryLaunchFields() {
+  if (getLocalEntryAdPlacementIds().length !== 2) return {};
+  return { localEntryAd: true, releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default' };
+}
 
 export function installTikTokLaunchListener() {
   if (sdkLaunchListenerInstalled || typeof window === 'undefined') return;
@@ -64,19 +76,23 @@ export async function ensureAnonymousSession(options: { force?: boolean } = {}) 
 }
 
 export async function recordMiniLaunch(sdkPayloadRaw?: string) {
-  if (isDemoMode()) return;
+  if (isDemoMode()) return { saved: false };
   if (sdkPayloadRaw) {
-    if (sdkPayloadRaw === lastSdkPayloadRaw) return;
+    if (sdkPayloadRaw === lastSdkPayloadRaw) return launchRecordResult ?? { saved: true };
     const launchEntryId = lastSdkPayloadRaw ? createLaunchEntryId() : entryId;
     await ensureAnonymousSession();
-    await apiClient.post('/auth/launch-context', { ...getMiniLaunchContext(), entryId: launchEntryId, sdkPayloadRaw });
+    const result = await apiClient.post<MiniLaunchRecordResult>('/auth/launch-context', { ...getMiniLaunchContext(), ...localEntryLaunchFields(), entryId: launchEntryId, sdkPayloadRaw });
     lastSdkPayloadRaw = sdkPayloadRaw;
-    return;
+    launchRecordResult = result;
+    return result;
   }
+  if (launchRecordResult) return launchRecordResult;
   if (!pendingLaunchRecord) {
     pendingLaunchRecord = (async () => {
       await ensureAnonymousSession();
-      await apiClient.post('/auth/launch-context', { ...getMiniLaunchContext(), entryId });
+      const result = await apiClient.post<MiniLaunchRecordResult>('/auth/launch-context', { ...getMiniLaunchContext(), ...localEntryLaunchFields(), entryId });
+      launchRecordResult = result;
+      return result;
     })().finally(() => { pendingLaunchRecord = null; });
   }
   return pendingLaunchRecord;

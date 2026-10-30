@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, type ReactNode } from 'react';
 import { EntryAdGate } from '../components/EntryAdGate';
 import { startAppEntryAdSession } from '../features/ads/app-entry-ad';
+import { getLocalEntryAdPlacementIds } from '../features/ads/entry-ad-placements';
 import { ensureAnonymousSession, ensureTikTokSession, recordMiniLaunch } from '../features/auth/anonymous-session';
 import { appKey } from '../lib/app-brand';
 
@@ -19,6 +20,7 @@ function AnonymousSessionBootstrap() {
   useEffect(() => {
     void ensureAnonymousSession()
       .then(async () => {
+        if (getLocalEntryAdPlacementIds().length === 2) return;
         await recordMiniLaunch();
         if (appKey === 'storyland') await startAppEntryAdSession();
       })

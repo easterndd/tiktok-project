@@ -25,7 +25,7 @@ const { prepareRewardedUnlockSession, unlockEpisodeByRewardedAd } = await import
 const previousWindow = globalThis.window;
 after(() => { hooks.deregister(); globalThis.window = previousWindow; delete globalThis.__rewardedAdTestPost; delete globalThis.__rewardedAdTestPerformance; });
 
-it('shows the episode ad without waiting for REQUESTED and confirms SHOWN before unlocking', async () => {
+it('shows the episode ad without sending REQUESTED and confirms SHOWN before unlocking', async () => {
   performanceReports.length = 0;
   let close;
   const requests = [];
@@ -39,7 +39,6 @@ it('shows the episode ad without waiting for REQUESTED and confirms SHOWN before
   post = (path, body) => {
     requests.push({ path, body });
     if (path.endsWith('/reward-session')) return Promise.resolve({ access: 'REWARDED_AD_REQUIRED', sessionId: 'session-1', placementId: 'placement-1' });
-    if (body.eventType === 'REQUESTED') return new Promise(() => {});
     if (body.eventType === 'SHOWN') return Promise.resolve({ accepted: true });
     if (path.endsWith('/complete')) return Promise.resolve({ access: 'PLAYABLE', shouldContinue: false });
     return Promise.resolve({ accepted: true });
@@ -48,7 +47,7 @@ it('shows the episode ad without waiting for REQUESTED and confirms SHOWN before
   const unlock = unlockEpisodeByRewardedAd('episode-1');
   await new Promise(setImmediate);
   assert.equal(ad.shows, 1);
-  assert.equal(requests.some(({ body }) => body.eventType === 'REQUESTED'), true);
+  assert.equal(requests.some(({ body }) => body.eventType === 'REQUESTED'), false);
   close({ isEnded: true });
   await unlock;
   assert.equal(requests.some(({ body }) => body.eventType === 'SHOWN'), true);

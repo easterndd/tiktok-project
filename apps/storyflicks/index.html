@@ -6,6 +6,12 @@
     <meta name="theme-color" content="#0f172a" />
     <title>StoryFlicks</title>
     <script src="https://connect.tiktok-minis.com/drama/sdk.js"></script>
+    <script>
+      if (window.TTMinis) {
+        window.TTMinis.init({ clientKey: 'mnwlm5hc7s3atp12' });
+        window.__tiktokMinisInitialized = true;
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

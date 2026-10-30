@@ -1,14 +1,16 @@
 import { access, readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 const root = join(process.cwd(), 'dist');
+const appKey = basename(process.cwd());
 if (existsSync('.env') && typeof process.loadEnvFile === 'function') process.loadEnvFile('.env');
 const failures = [];
 const apiBaseUrl = process.env.VITE_API_BASE_URL;
 const clientKey = process.env.VITE_TIKTOK_CLIENT_KEY;
 let foundApiBaseUrl = false;
 let foundClientKey = false;
+let builtSources = '';
 
 try {
   await access(join(root, 'minis.config.json'));
@@ -30,6 +32,7 @@ async function scan(directory) {
     if (entry.isDirectory()) await scan(path);
     else if (/\.(html|js|css|json)$/i.test(entry.name)) {
       const content = await readFile(path, 'utf8');
+      if (entry.name.endsWith('.js')) builtSources += content;
       if (apiBaseUrl && content.includes(apiBaseUrl)) foundApiBaseUrl = true;
       if (clientKey && content.includes(clientKey)) foundClientKey = true;
       if (/REPLACE_WITH|your_tiktok_client_key|your_rewarded_placement_id|your_interstitial_placement_id/i.test(content)) failures.push(`${path} contains a placeholder credential`);
@@ -38,6 +41,15 @@ async function scan(directory) {
 }
 
 await scan(root);
+const placementConfigPath = join(process.cwd(), '../mini-web/src/features/ads/entry-ad-placement-config.json');
+try {
+  const placementConfig = JSON.parse(await readFile(placementConfigPath, 'utf8'));
+  for (const placementId of placementConfig[appKey] ?? []) {
+    if (!builtSources.includes(placementId)) failures.push(`built Mini output does not contain configured entry placement ${placementId}`);
+  }
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
 if (apiBaseUrl && !foundApiBaseUrl) failures.push('built Mini output does not contain VITE_API_BASE_URL');
 if (clientKey && !foundClientKey) failures.push('built Mini output does not contain VITE_TIKTOK_CLIENT_KEY');
 if (failures.length) {

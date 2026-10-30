@@ -6,6 +6,119 @@ import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../..
 import { measureDatabase } from '../../lib/request-performance';
 
 const appEntrySessionTtlMs = 15 * 60 * 1000;
+const failedAdDuplicateWindowMs = 5_000;
+const maxRecentFailedAdKeys = 20_000;
+const recentFailedAdKeys = new Map<string, number>();
+
+const adEventInput = z.object({
+  clientEventId: z.string().min(1).max(128),
+  adType: z.enum(['REWARDED', 'INTERSTITIAL']),
+  scope: z.enum(['EPISODE_UNLOCK', 'APP_ENTRY', 'EXIT_RETENTION']).default('EPISODE_UNLOCK'),
+  eventType: z.enum(['REQUESTED', 'SHOWN', 'CLOSED_INCOMPLETE', 'FAILED']),
+  placementId: z.string().min(1).max(128),
+  episodeId: z.string().min(1).max(128).optional(),
+  sessionId: z.string().min(1).max(128).optional(),
+  rewardSessionId: z.string().min(1).max(128).optional(),
+  appEntrySessionId: z.string().min(1).max(128).optional(),
+  adIndex: z.number().int().positive(),
+  errorCode: z.string().max(500).optional()
+});
+
+const playbackQualityEventInput = z.object({
+  episodeId: z.string().min(1),
+  eventType: z.enum(['FIRST_FRAME', 'WAITING', 'DEFINITION_CHANGE', 'ERROR', 'ENDED']),
+  sessionId: z.string().min(8).max(128),
+  startupMs: z.number().int().nonnegative().optional(),
+  currentTimeMs: z.number().int().nonnegative().optional(),
+  bufferMs: z.number().int().nonnegative().optional(),
+  networkType: z.string().max(32).optional(),
+  definition: z.string().max(32).optional(),
+  clientVersion: z.string().max(64).optional(),
+  errorCode: z.string().max(128).optional()
+});
+
+function isDiscardedClientAdEvent(value: unknown, persistClientDiagnostics: boolean): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const eventType = (value as { eventType?: unknown }).eventType;
+  return eventType === 'CLOSED_INCOMPLETE'
+    || (!persistClientDiagnostics && eventType === 'FAILED');
+}
+
+function isDiscardedPlaybackQualityEvent(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const eventType = (value as { eventType?: unknown }).eventType;
+  return eventType === 'WAITING' || eventType === 'DEFINITION_CHANGE';
+}
+
+function pruneFailedAdKeys(now: number) {
+  while (true) {
+    const first = recentFailedAdKeys.entries().next().value as [string, number] | undefined;
+    if (!first || now - first[1] < failedAdDuplicateWindowMs) return;
+    recentFailedAdKeys.delete(first[0]);
+  }
+}
+
+function isDuplicateFailedAd(body: {
+  eventType: string;
+  scope: string;
+  adType: string;
+  placementId: string;
+  sessionId?: string;
+  appEntrySessionId?: string;
+  rewardSessionId?: string;
+  adIndex: number;
+  errorCode?: string;
+}, userId: string, now = Date.now()) {
+  if (body.eventType !== 'FAILED') return false;
+  pruneFailedAdKeys(now);
+  const key = [
+    userId,
+    body.scope,
+    body.adType,
+    body.placementId,
+    body.sessionId ?? '',
+    body.appEntrySessionId ?? '',
+    body.rewardSessionId ?? '',
+    body.adIndex,
+    body.errorCode ?? ''
+  ].join('\u001f');
+  const seenAt = recentFailedAdKeys.get(key);
+  if (seenAt !== undefined && now - seenAt < failedAdDuplicateWindowMs) return true;
+  if (recentFailedAdKeys.size >= maxRecentFailedAdKeys) {
+    const oldest = recentFailedAdKeys.keys().next().value;
+    if (oldest) recentFailedAdKeys.delete(oldest);
+  }
+  recentFailedAdKeys.set(key, now);
+  return false;
+}
+
+function hasRecentFailedAd(body: {
+  eventType: string;
+  scope: string;
+  adType: string;
+  placementId: string;
+  sessionId?: string;
+  appEntrySessionId?: string;
+  rewardSessionId?: string;
+  adIndex: number;
+  errorCode?: string;
+}, userId: string, now = Date.now()) {
+  if (body.eventType !== 'FAILED') return false;
+  pruneFailedAdKeys(now);
+  const key = [
+    userId,
+    body.scope,
+    body.adType,
+    body.placementId,
+    body.sessionId ?? '',
+    body.appEntrySessionId ?? '',
+    body.rewardSessionId ?? '',
+    body.adIndex,
+    body.errorCode ?? ''
+  ].join('\u001f');
+  const seenAt = recentFailedAdKeys.get(key);
+  return seenAt !== undefined && now - seenAt < failedAdDuplicateWindowMs;
+}
 
 export async function registerAdRoutes(app: FastifyInstance) {
   app.post('/ad-events', {
@@ -13,7 +126,8 @@ export async function registerAdRoutes(app: FastifyInstance) {
       const body = request.body as { eventType?: string } | undefined;
       // REQUESTED is an acknowledged no-op. Older Mini bundles still send it
       // once per ad, so avoid JWT verification on this high-volume event.
-      if (body?.eventType === 'REQUESTED') return;
+      if (body?.eventType === 'REQUESTED'
+        || isDiscardedClientAdEvent(body, app.rootConfig.PERSIST_CLIENT_AD_DIAGNOSTICS === true)) return;
       await requireUser(request);
     },
     config: { rateLimit: {
@@ -22,26 +136,26 @@ export async function registerAdRoutes(app: FastifyInstance) {
       hook: 'preHandler',
       keyGenerator: (request) => {
         const body = request.body as { eventType?: string } | undefined;
-        return body?.eventType === 'REQUESTED' ? `requested:${request.ip}` : `user:${request.user.sub}`;
+        if (body?.eventType === 'REQUESTED'
+          || isDiscardedClientAdEvent(body, app.rootConfig.PERSIST_CLIENT_AD_DIAGNOSTICS === true)) return `diagnostic:${request.ip}`;
+        return `user:${request.user.sub}`;
       }
     } }
   }, async (request) => {
-    const body = z.object({
-      clientEventId: z.string().min(1).max(128),
-      adType: z.enum(['REWARDED', 'INTERSTITIAL']),
-      scope: z.enum(['EPISODE_UNLOCK', 'APP_ENTRY', 'EXIT_RETENTION']).default('EPISODE_UNLOCK'),
-      eventType: z.enum(['REQUESTED', 'SHOWN', 'CLOSED_INCOMPLETE', 'FAILED']),
-      placementId: z.string().min(1).max(128),
-      episodeId: z.string().min(1).max(128).optional(),
-      sessionId: z.string().min(1).max(128).optional(),
-      rewardSessionId: z.string().min(1).max(128).optional(),
-      appEntrySessionId: z.string().min(1).max(128).optional(),
-      adIndex: z.number().int().positive(),
-      errorCode: z.string().max(500).optional()
-    }).parse(request.body);
+    if (isDiscardedClientAdEvent(request.body, app.rootConfig.PERSIST_CLIENT_AD_DIAGNOSTICS === true)) {
+      return { accepted: true, dropped: true };
+    }
+    const body = adEventInput.parse(request.body);
     // A request attempt is diagnostic-only. It does not affect entitlement,
     // and persisting one row per ad request creates avoidable write pressure.
     if (body.eventType === 'REQUESTED') return { accepted: true };
+    // FAILED is diagnostic-only as well. Keep the endpoint compatible with old
+    // bundles, but drop client failure rows by default so SDK error storms do
+    // not consume database connections or CPU. Entitlement paths never use it.
+    if (body.eventType === 'FAILED' && app.rootConfig.PERSIST_CLIENT_AD_DIAGNOSTICS !== true) return { accepted: true, dropped: true };
+    // The first failed event still goes through normal session validation. Once
+    // accepted, identical SDK retries can return without another DB lookup.
+    if (hasRecentFailedAd(body, request.user.sub)) return { accepted: true, deduplicated: true };
     const now = new Date();
     let shouldRenewShown = false;
     if (body.scope === 'APP_ENTRY') {
@@ -52,16 +166,16 @@ export async function registerAdRoutes(app: FastifyInstance) {
         where: { id: body.appEntrySessionId! },
         select: { id: true, userId: true, status: true, expiresAt: true, placementId: true, mode: true, requiredCount: true, countMode: true }
       }));
-      const countedImpressionClosed = session && body.eventType === 'CLOSED_INCOMPLETE' && session.countMode === 'SHOWN'
-        ? await measureDatabase(request, () => app.prisma.appEntryAdCompletion.findUnique({ where: { sessionId_adIndex: { sessionId: session.id, adIndex: body.adIndex } }, select: { id: true } }))
-        : null;
-      if (!session || session.userId !== request.user.sub || (session.status !== 'ACTIVE' && !countedImpressionClosed) || (session.expiresAt <= now && !countedImpressionClosed) || session.placementId !== body.placementId || session.mode !== (body.adType === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED_GATED') || body.adIndex > session.requiredCount) {
+      if (!session || session.userId !== request.user.sub || session.placementId !== body.placementId || session.mode !== (body.adType === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED_GATED') || body.adIndex > session.requiredCount) {
         throw Object.assign(new Error('App-entry ad session is unavailable.'), { statusCode: 409 });
       }
       // SHOWN mode has already advanced the durable entitlement counter in
       // /shown. The later incomplete close is diagnostic-only, so avoid an
-      // indexed AdEvent write for every impression close.
+      // AdEvent write or completion lookup for every legacy impression close.
       if (body.eventType === 'CLOSED_INCOMPLETE' && session.countMode === 'SHOWN') return { accepted: true };
+      if (session.status !== 'ACTIVE' || session.expiresAt <= now) {
+        throw Object.assign(new Error('App-entry ad session is unavailable.'), { statusCode: 409 });
+      }
       shouldRenewShown = body.eventType === 'SHOWN' && session.expiresAt.getTime() <= now.getTime() + 2 * 60 * 1000;
     } else {
       if (body.adType !== 'REWARDED' || !body.episodeId || !body.rewardSessionId || body.appEntrySessionId || body.sessionId !== body.rewardSessionId) {
@@ -72,6 +186,10 @@ export async function registerAdRoutes(app: FastifyInstance) {
         throw Object.assign(new Error('Rewarded unlock session is unavailable.'), { statusCode: 409 });
       }
     }
+    // SDK failures are diagnostic-only. A quick retry of the same native ad
+    // can produce several identical errors before the SDK settles; retain one
+    // sample per short burst so telemetry cannot become a write amplifier.
+    if (isDuplicateFailedAd(body, request.user.sub)) return { accepted: true, deduplicated: true };
     if (body.scope === 'APP_ENTRY') {
       const where = { userId_clientEventId: { userId: request.user.sub, clientEventId: body.clientEventId } };
       const acceptExisting = async () => {
@@ -116,18 +234,10 @@ export async function registerAdRoutes(app: FastifyInstance) {
     return { accepted: true };
   });
   app.post('/playback-quality-events', { preHandler: requireUser }, async (request) => {
-    const body = z.object({
-      episodeId: z.string().min(1),
-      eventType: z.enum(['FIRST_FRAME', 'WAITING', 'DEFINITION_CHANGE', 'ERROR', 'ENDED']),
-      sessionId: z.string().min(8).max(128),
-      startupMs: z.number().int().nonnegative().optional(),
-      currentTimeMs: z.number().int().nonnegative().optional(),
-      bufferMs: z.number().int().nonnegative().optional(),
-      networkType: z.string().max(32).optional(),
-      definition: z.string().max(32).optional(),
-      clientVersion: z.string().max(64).optional(),
-      errorCode: z.string().max(128).optional()
-    }).parse(request.body);
+    const body = playbackQualityEventInput.parse(request.body);
+    // WAITING and definition changes are high-volume diagnostics only. Playback
+    // progress and completion are stored through their authoritative routes.
+    if (isDiscardedPlaybackQualityEvent(body)) return { accepted: true, dropped: true };
     const episode = await app.prisma.episode.findFirst({ where: { id: body.episodeId, status: 'ONLINE', album: publicAlbumWhere(app.config) }, select: { id: true, album: { select: { regions: true } } } });
     if (!episode || !isAlbumVisibleInCountry(episode.album.regions, requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER))) throw Object.assign(new Error('Episode not found.'), { statusCode: 404 });
     const now = new Date();

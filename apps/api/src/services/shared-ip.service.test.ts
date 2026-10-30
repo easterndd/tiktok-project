@@ -6,7 +6,7 @@ import { it } from 'node:test';
 import { Prisma, PrismaClient } from '@prisma/client';
 import {
   isEntryAdIpExempt, listSharedIps, listSharedIpVisits, listViewerIdsForIp,
-  recordSharedIpVisit, removeEntryAdIpExemption, setEntryAdIpExemption
+  queueSharedIpVisit, recordSharedIpVisit, removeEntryAdIpExemption, setEntryAdIpExemption, waitForSharedIpVisits
 } from './shared-ip.service';
 
 const databaseUrl = process.env.SHARED_IP_TEST_DATABASE_URL;
@@ -15,6 +15,80 @@ type Explain = Array<{ 'QUERY PLAN': Array<{ Plan: Plan }> }>;
 function nodes(plan: Plan): Plan[] {
   return [plan, ...(plan.Plans ?? []).flatMap(nodes)];
 }
+
+function fakeSharedIpTx() {
+  return {
+    $queryRaw: async (query: any) => {
+      if (String(query?.sql ?? '').includes('INSERT INTO "SharedIpVisit"')) return [{ idempotencyKey: 'visit' }];
+      return [];
+    },
+    $executeRaw: async () => 1
+  };
+}
+
+function sharedIpInput(clientSessionId: string, userId = 'viewer-main') {
+  return { ipAddress: '198.51.100.77', miniAppKey: 'main', userId, clientSessionId, countryCode: 'US', secret: 'queue-test-secret' };
+}
+
+it('aggregates repeated user/IP visits while bounding shared IP queue concurrency', async () => {
+  let active = 0;
+  let maxActive = 0;
+  let transactions = 0;
+  const tx = fakeSharedIpTx();
+  const db = {
+    $transaction: async (callback: (client: typeof tx) => Promise<unknown>) => {
+      active += 1;
+      transactions += 1;
+      maxActive = Math.max(maxActive, active);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 3));
+        return await callback(tx);
+      } finally {
+        active -= 1;
+      }
+    }
+  } as unknown as PrismaClient;
+  const errors: unknown[] = [];
+  const duplicate = sharedIpInput('same-session');
+  queueSharedIpVisit(db, duplicate, (error) => errors.push(error));
+  queueSharedIpVisit(db, duplicate, (error) => errors.push(error));
+  queueSharedIpVisit(db, sharedIpInput('another-session-same-user'), (error) => errors.push(error));
+  for (let index = 0; index < 32; index += 1) {
+    queueSharedIpVisit(db, sharedIpInput(`session-${index}`, `viewer-${index}`), (error) => errors.push(error));
+  }
+
+  await waitForSharedIpVisits();
+  assert.equal(transactions, 33, 'same user/IP/app should be written once per aggregation window');
+  assert.ok(maxActive > 1, 'independent visits should not be serialized');
+  assert.ok(maxActive <= 2, 'shared IP writes must stay below the reduced concurrency cap');
+  assert.deepEqual(errors, []);
+});
+
+it('bounds shared IP backlog and aggregates repeated overflow reports', async () => {
+  let releaseTransactions!: () => void;
+  const blocked = new Promise<void>((resolve) => { releaseTransactions = resolve; });
+  let transactions = 0;
+  const tx = fakeSharedIpTx();
+  const db = {
+    $transaction: async (callback: (client: typeof tx) => Promise<unknown>) => {
+      transactions += 1;
+      await blocked;
+      return callback(tx);
+    }
+  } as unknown as PrismaClient;
+  const errors: Error[] = [];
+  for (let index = 0; index < 2_032; index += 1) {
+    queueSharedIpVisit(db, sharedIpInput(`overflow-${index}`, `overflow-viewer-${index}`), (error) => errors.push(error as Error));
+  }
+
+  assert.equal(transactions, 2, 'only the configured worker count should run concurrently');
+  assert.equal(errors.length, 1, 'a burst of overflow should not log once per dropped request');
+  assert.match(errors[0].message, /dropped 1000 visits/);
+
+  releaseTransactions();
+  await waitForSharedIpVisits();
+  assert.equal(transactions, 1_026, 'active work plus the bounded pending queue should drain');
+});
 
 // Use a disposable PostgreSQL database; ordinary API tests still run without one.
 it('uses indexes with real Prisma parameters and preserves shared IP counts, app isolation and exemptions',
@@ -47,7 +121,7 @@ it('uses indexes with real Prisma parameters and preserves shared IP counts, app
         const sqlQuery = (query: TemplateStringsArray | Prisma.Sql, values: unknown[]) =>
           Array.isArray(query) ? Prisma.sql(query as TemplateStringsArray, ...values) : query as Prisma.Sql;
         const inspect = async (query: Prisma.Sql) => {
-          if (/^\s*SELECT/.test(query.sql) || /^\s*UPDATE "SharedIpAddress" SET "visitCount"/.test(query.sql)) {
+          if (/^\s*SELECT/.test(query.sql) || /INSERT INTO "SharedIpVisit"|UPDATE "SharedIpAddress"/.test(query.sql)) {
             const rows = await tx.$queryRaw<Explain>(Prisma.sql`EXPLAIN (FORMAT JSON) ${query}`);
             plans.push(rows[0]['QUERY PLAN'][0].Plan);
           }
@@ -70,11 +144,12 @@ it('uses indexes with real Prisma parameters and preserves shared IP counts, app
         await recordSharedIpVisit(instrumented, input);
         await recordSharedIpVisit(instrumented, input);
         await recordSharedIpVisit(instrumented, { ...input, clientSessionId: 'second-session' });
+        await recordSharedIpVisit(instrumented, { ...input, userId: 'viewer-main-2', clientSessionId: 'third-session' });
         await recordSharedIpVisit(instrumented, { ...input, miniAppKey: 'taletv', userId: 'viewer-taletv' });
         const ips = await listSharedIps(instrumented, { search: input.ipAddress, limit: 10, secret: input.secret, miniAppKey: 'main' });
         assert.equal(ips.length, 1);
-        assert.equal(ips[0].visitCount, 3, 'duplicate session is counted once, same session in another app is distinct');
-        assert.deepEqual(await listViewerIdsForIp(instrumented, 'main', input.ipAddress, input.secret), [{ userId: 'viewer-main' }]);
+        assert.equal(ips[0].visitCount, 2, 'same user/IP/app visits are aggregated within one window');
+        assert.deepEqual(await listViewerIdsForIp(instrumented, 'main', input.ipAddress, input.secret), [{ userId: 'viewer-main' }, { userId: 'viewer-main-2' }]);
         assert.deepEqual(await listViewerIdsForIp(instrumented, 'taletv', input.ipAddress, input.secret), [{ userId: 'viewer-taletv' }]);
         assert.equal((await listSharedIpVisits(instrumented, input.ipAddress, input.secret, 10, 0)).length, 3);
         assert.equal((await listSharedIpVisits(instrumented, input.ipAddress, input.secret, 10, 0, 'main')).length, 2);

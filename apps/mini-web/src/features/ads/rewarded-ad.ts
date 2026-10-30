@@ -73,7 +73,7 @@ async function completeReward(episodeId: string, sessionId: string, eventId: str
   }
 }
 
-async function recordAdEvent(input: { clientEventId: string; eventType: 'REQUESTED' | 'SHOWN' | 'CLOSED_INCOMPLETE' | 'FAILED'; placementId: string; episodeId: string; sessionId: string; adIndex: number; scope: RewardPurpose; errorCode?: string }, required = false) {
+async function recordAdEvent(input: { clientEventId: string; eventType: 'SHOWN' | 'CLOSED_INCOMPLETE' | 'FAILED'; placementId: string; episodeId: string; sessionId: string; adIndex: number; scope: RewardPurpose; errorCode?: string }, required = false) {
   const startedAt = performance.now();
   try {
     await apiClient.post('/ad-events', { adType: 'REWARDED', ...input, rewardSessionId: input.sessionId });
@@ -90,8 +90,6 @@ async function showOneRewardedAd(input: { adUnitId: string; episodeId: string; s
   const { adUnitId, episodeId, sessionId, adIndex, rewardEventId, scope, previousClosedAt } = input;
   const releaseActivity = claimNativeAd('rewarded');
   if (!releaseActivity) throw new Error('AD_BUSY');
-  // REQUESTED is analytics only; network latency must not block the native ad.
-  void recordAdEvent({ clientEventId: `${rewardEventId}:requested`, eventType: 'REQUESTED', placementId: adUnitId, episodeId, sessionId, adIndex, scope });
   let ad;
   try { ad = getRewardedAd(adUnitId); }
   catch (error) { releaseActivity(); reportDiagnostic({ kind: 'AD', phase: 'REWARDED_CREATE', message: error instanceof Error ? error.message : String(error), path: `/episodes/${episodeId}` }); throw error; }

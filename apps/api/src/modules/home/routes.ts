@@ -1,12 +1,12 @@
 import type { HomeResponse, Locale } from '@quickreels/shared-types';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { optionalUser } from '../../plugins/optional-auth';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { defaultUiComponents } from '../ui/routes';
 import { isAlbumVisibleInCountry, isPlatformPublished, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
 import { coverThumbnailUrl } from '../../lib/cover-thumbnail';
-import { addDatabaseDuration } from '../../lib/request-performance';
+import { measureDatabase } from '../../lib/request-performance';
 
 const querySchema = z.object({ locale: publicLocaleSchema.default(defaultLocale) });
 
@@ -18,12 +18,16 @@ function translatedText(
   return translations?.find((translation) => translation.locale === locale)?.[field] ?? undefined;
 }
 
-const homeCatalogCacheTtlMs = 15_000;
+const homeCatalogCacheTtlMs = 30_000;
+const homeProgressCacheTtlMs = 5_000;
+const homeProgressCacheMaxEntries = 5_000;
+const publicHomeResponseCacheTtlMs = 15_000;
+const publicHomeResponseCacheMaxEntries = 64;
 
-async function loadHomeCatalog(app: FastifyInstance, now: Date) {
+async function loadHomeCatalog(app: FastifyInstance, request: FastifyRequest, now: Date) {
   const [components, albums, genres, configuredBlocks] = await Promise.all([
-    app.prisma.uiComponent.findMany({ orderBy: { key: 'asc' } }),
-    app.prisma.album.findMany({
+    measureDatabase(request, () => app.prisma.uiComponent.findMany({ orderBy: { key: 'asc' } })),
+    measureDatabase(request, () => app.prisma.album.findMany({
       where: publicAlbumWhere(app.config),
       orderBy: { updatedAt: 'desc' },
       take: 20,
@@ -32,9 +36,9 @@ async function loadHomeCatalog(app: FastifyInstance, now: Date) {
         translations: true,
         genres: { include: { genre: { select: { slug: true } } } }
       }
-    }),
-    app.prisma.genre.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { albums: { where: { album: publicAlbumWhere(app.config) } } } } } }),
-    app.prisma.homeBlock.findMany({
+    })),
+    measureDatabase(request, () => app.prisma.genre.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { albums: { where: { album: publicAlbumWhere(app.config) } } } } } })),
+    measureDatabase(request, () => app.prisma.homeBlock.findMany({
       where: {
         enabled: true,
         AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gte: now } }] }]
@@ -58,7 +62,7 @@ async function loadHomeCatalog(app: FastifyInstance, now: Date) {
           }
         }
       }
-    })
+    }))
   ]);
   return { components, albums, genres, configuredBlocks, catalogVersion: now.toISOString() };
 }
@@ -66,12 +70,38 @@ async function loadHomeCatalog(app: FastifyInstance, now: Date) {
 type HomeCatalog = Awaited<ReturnType<typeof loadHomeCatalog>>;
 const homeCatalogCache = new Map<string, { expiresAt: number; value: Promise<HomeCatalog> }>();
 
-function getHomeCatalog(app: FastifyInstance, now: Date) {
-  if (app.config.NODE_ENV !== 'production') return loadHomeCatalog(app, now);
+type PublicHomeResponseCache = Map<string, { expiresAt: number; value: Promise<HomeResponse> }>;
+
+function getCachedPublicHomeResponse(cache: PublicHomeResponseCache, key: string, load: () => Promise<HomeResponse>) {
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    cache.delete(key);
+    cache.set(key, cached);
+    return cached.value;
+  }
+
+  const value = load();
+  const entry = { expiresAt: Number.POSITIVE_INFINITY, value };
+  cache.set(key, entry);
+  while (cache.size > publicHomeResponseCacheMaxEntries) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+  void value.then(() => {
+    if (cache.get(key) === entry) entry.expiresAt = Date.now() + publicHomeResponseCacheTtlMs;
+  }, () => {
+    if (cache.get(key) === entry) cache.delete(key);
+  });
+  return value;
+}
+
+function getHomeCatalog(app: FastifyInstance, request: FastifyRequest, now: Date) {
+  if (app.config.NODE_ENV !== 'production') return loadHomeCatalog(app, request, now);
   const key = app.config.MINI_APP_KEY;
   const cached = homeCatalogCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
-  const value = loadHomeCatalog(app, now);
+  const value = loadHomeCatalog(app, request, now);
   const entry = { expiresAt: Number.POSITIVE_INFINITY, value };
   homeCatalogCache.set(key, entry);
   void value.then(() => {
@@ -82,26 +112,73 @@ function getHomeCatalog(app: FastifyInstance, now: Date) {
   return value;
 }
 
+async function loadHomeProgress(app: FastifyInstance, request: FastifyRequest, userId: string) {
+  return measureDatabase(request, () => app.prisma.watchProgress.findMany({
+    where: { userId, completed: false, episode: { status: 'ONLINE', album: publicAlbumWhere(app.config) } },
+    orderBy: { updatedAt: 'desc' },
+    take: 6,
+    select: {
+      episodeId: true,
+      positionMs: true,
+      durationMs: true,
+      episode: {
+        select: {
+          albumId: true,
+          episodeNo: true,
+          album: {
+            select: {
+              regions: true,
+              title: true,
+              coverUrl: true,
+              translations: { select: { locale: true, title: true, description: true, coverUrl: true } }
+            }
+          }
+        }
+      }
+    }
+  }));
+}
+
+type HomeProgress = Awaited<ReturnType<typeof loadHomeProgress>>;
+
 export async function registerHomeRoutes(app: FastifyInstance) {
+  const publicHomeResponseCache: PublicHomeResponseCache = new Map();
+  const progressCache = new Map<string, { expiresAt: number; value: Promise<HomeProgress> }>();
+  const getHomeProgress = (request: FastifyRequest, userId: string) => {
+    const cached = progressCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      progressCache.delete(userId);
+      progressCache.set(userId, cached);
+      return cached.value;
+    }
+
+    const value = loadHomeProgress(app, request, userId);
+    const entry = { expiresAt: Number.POSITIVE_INFINITY, value };
+    progressCache.set(userId, entry);
+    while (progressCache.size > homeProgressCacheMaxEntries) {
+      const oldest = progressCache.keys().next().value;
+      if (oldest === undefined) break;
+      progressCache.delete(oldest);
+    }
+    void value.then(() => {
+      if (progressCache.get(userId) === entry) entry.expiresAt = Date.now() + homeProgressCacheTtlMs;
+    }, () => {
+      if (progressCache.get(userId) === entry) progressCache.delete(userId);
+    });
+    return value;
+  };
+
   app.get('/home', async (request): Promise<HomeResponse> => {
     const { locale } = querySchema.parse(request.query);
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
+    const user = await optionalUser(request);
+    const cacheKey = !user && app.config.NODE_ENV !== 'development' ? `${locale}:${country ?? ''}` : null;
+    const response = async (): Promise<HomeResponse> => {
     const now = new Date();
-    const userPromise = optionalUser(request);
-    const catalogPromise = getHomeCatalog(app, now);
-    const catalogStartedAt = performance.now();
-    const [user, catalog, progress] = await Promise.all([
-      userPromise,
-      catalogPromise,
-      userPromise.then((user) => user ? app.prisma.watchProgress.findMany({
-        where: { userId: user.sub, completed: false, episode: { status: 'ONLINE', album: publicAlbumWhere(app.config) } },
-        orderBy: { updatedAt: 'desc' },
-        take: 6,
-        include: { episode: { include: { album: { include: { translations: true } } } } }
-      }) : [])
-    ]);
+    const catalogPromise = getHomeCatalog(app, request, now);
+    const progressPromise: Promise<HomeProgress> = user ? getHomeProgress(request, user.sub) : Promise.resolve([]);
+    const [catalog, progress] = await Promise.all([catalogPromise, progressPromise]);
     const { components, albums, genres, configuredBlocks, catalogVersion } = catalog;
-    addDatabaseDuration(request, performance.now() - catalogStartedAt);
     const visibleAlbums = albums.filter((album) => isAlbumVisibleInCountry(album.regions, country));
     const summaries = visibleAlbums.map((album) => ({
       id: album.id,
@@ -189,5 +266,7 @@ export async function registerHomeRoutes(app: FastifyInstance) {
       components: components.length ? components.map((component) => ({ key: component.key as never, page: component.page as never, enabled: component.enabled, config: (component.config as Record<string, unknown> | null) ?? null })) : defaultUiComponents,
       feed: { items: summaries, nextCursor: null }
     };
+    };
+    return cacheKey ? getCachedPublicHomeResponse(publicHomeResponseCache, cacheKey, response) : response();
   });
 }

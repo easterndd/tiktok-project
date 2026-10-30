@@ -5,6 +5,10 @@ import { z } from 'zod';
 import { requestCountry } from '../../lib/content-visibility';
 import { requireUser } from '../../plugins/auth';
 import { addDatabaseDuration } from '../../lib/request-performance';
+import { singleFlight } from '../../lib/single-flight';
+import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
+import { readAppEntryAdPolicy } from '../app-entry-ads/routes';
+import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 
 const launchContextInput = z.object({
   entryId: z.string().min(8).max(128).optional(),
@@ -15,6 +19,12 @@ const launchContextInput = z.object({
   launchQuery: z.record(z.string(), z.string().max(128)).optional()
 });
 const recordedLaunchContextInput = launchContextInput.extend({ entryId: z.string().min(8).max(128) });
+const localEntryReleaseIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/);
+const localEntryLaunchContextInput = recordedLaunchContextInput.extend({
+  releaseId: localEntryReleaseIdSchema.optional(),
+  localEntryAd: z.boolean().optional()
+});
+const localEntryAdMiniApps = new Set(['storyflicks', 'dramablaze', 'cinereels', 'dramahit', 'taletv']);
 
 const anonymousSessionInput = z.object({
   visitorKey: z.string().min(32).max(512),
@@ -92,7 +102,9 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
     && !/(?:token|auth|secret|password|email|phone|openid|open_id|user.?id|username|uid|visitor|session|credential|code|url|redirect|callback)/i.test(key)
     && !/(?:https?:\/\/|www\.)/i.test(value)
   ).slice(0, 32));
-  try {
+  const fingerprint = createHash('sha256').update(JSON.stringify({ context, launchQuery })).digest('hex');
+  return singleFlight(app, `launch-context:${userId}:${entryId}:${fingerprint}`, async () => {
+    try {
     const existing = await app.prisma.audienceActivityEvent.findFirst({
       where: { userId, eventType: 'APP_LAUNCH_CONTEXT', metadata: { path: ['entryId'], equals: entryId } },
       select: { id: true, metadata: true }
@@ -129,10 +141,46 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
       } as Prisma.InputJsonValue
     } });
     return true;
-  } catch (error) {
-    request.log.warn({ err: error }, 'Mini app launch context could not be saved');
-    return false;
+    } catch (error) {
+      request.log.warn({ err: error }, 'Mini app launch context could not be saved');
+      return false;
+    }
+  });
+}
+
+async function readLocalEntryAdEligibility(app: FastifyInstance, request: FastifyRequest, input: {
+  releaseId?: string;
+  launchQuery?: Record<string, string>;
+  rawUrl?: string;
+}, userExempt: boolean) {
+  if (!localEntryAdMiniApps.has(app.config.MINI_APP_KEY)) return { showEntryAd: false, reason: 'APP_NOT_CONFIGURED' };
+  const releaseId = input.releaseId;
+  if (!releaseId || (releaseId !== 'default' && !releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
+    return { showEntryAd: false, reason: 'INVALID_RELEASE' };
   }
+  if (app.rootConfig.ENTRY_AD_ATTRIBUTION_GATE_ENABLED
+    && classifyLaunchAttribution({ launchQuery: input.launchQuery, rawUrl: input.rawUrl }).status !== 'ATTRIBUTED') {
+    return { showEntryAd: false, reason: 'UNATTRIBUTED' };
+  }
+
+  const databaseStartedAt = performance.now();
+  const policy = await readAppEntryAdPolicy(app, releaseId);
+  addDatabaseDuration(request, performance.now() - databaseStartedAt);
+  if (!policy?.enabled) return { showEntryAd: false, reason: 'POLICY_DISABLED' };
+  if (policy.mode !== 'REWARDED_GATED') return { showEntryAd: false, reason: 'REWARDED_MODE_REQUIRED' };
+  if (userExempt) return { showEntryAd: false, reason: 'USER_EXEMPT' };
+
+  try {
+    const exemptionStartedAt = performance.now();
+    const ipExempt = await isEntryAdIpExempt(app.sharedPrisma, request.ip);
+    addDatabaseDuration(request, performance.now() - exemptionStartedAt);
+    if (ipExempt) return { showEntryAd: false, reason: 'IP_EXEMPT' };
+  } catch (error) {
+    request.log.warn({ err: error }, 'Shared IP exemption lookup failed; skipping local entry ad');
+    return { showEntryAd: false, reason: 'EXEMPTION_LOOKUP_FAILED' };
+  }
+
+  return { showEntryAd: true, reason: 'ELIGIBLE' };
 }
 
 export async function registerAuthRoutes(app: FastifyInstance) {
@@ -144,6 +192,10 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     const { visitorKey, clientSessionId, platform, clientVersion, source, launchContext } = anonymousSessionInput.parse(request.body);
     const countryCode = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress);
     const visitorKeyHash = createHmac('sha256', app.config.JWT_SECRET).update(visitorKey).digest('base64url');
+    const fingerprint = createHash('sha256').update(JSON.stringify({
+      visitorKeyHash, clientSessionId, platform, clientVersion, source, countryCode, launchContext
+    })).digest('hex');
+    return singleFlight(app, `anonymous-session:${fingerprint}`, async () => {
     const databaseStartedAt = performance.now();
     let user = await app.prisma.user.upsert({
       where: { visitorKeyHash },
@@ -164,16 +216,31 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       expiresIn: app.config.USER_JWT_EXPIRES_IN,
       viewer: { id: user.id, type: user.identityType }
     };
+    });
   });
 
   app.post('/auth/launch-context', {
     preHandler: requireUser,
     config: { rateLimit: { max: 30, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
-    const context = recordedLaunchContextInput.parse(request.body);
-    let user = await app.prisma.user.findUniqueOrThrow({ where: { id: request.user.sub }, select: { id: true, mergedIntoUserId: true } });
-    if (user.mergedIntoUserId) user = await app.prisma.user.findUniqueOrThrow({ where: { id: user.mergedIntoUserId }, select: { id: true, mergedIntoUserId: true } });
-    return { saved: await saveLaunchContext(app, request, user.id, context) };
+    const context = localEntryLaunchContextInput.parse(request.body);
+    let user = await app.prisma.user.findUniqueOrThrow({ where: { id: request.user.sub }, select: { id: true, mergedIntoUserId: true, appEntryAdExempt: true } });
+    if (user.mergedIntoUserId) user = await app.prisma.user.findUniqueOrThrow({ where: { id: user.mergedIntoUserId }, select: { id: true, mergedIntoUserId: true, appEntryAdExempt: true } });
+    const saved = await saveLaunchContext(app, request, user.id, context);
+    const localEntryAd = context.localEntryAd === true && localEntryAdMiniApps.has(app.config.MINI_APP_KEY);
+    if (!localEntryAd) return { saved };
+
+    queueSharedIpVisit(app.sharedPrisma, {
+      ipAddress: request.ip,
+      miniAppKey: app.config.MINI_APP_KEY,
+      userId: request.user.sub,
+      clientSessionId: context.entryId,
+      countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
+      secret: app.rootConfig.JWT_SECRET
+    }, (error) => request.log.warn({ err: error }, 'Shared IP visit could not be recorded'));
+
+    const entryAdEligibility = await readLocalEntryAdEligibility(app, request, context, user.appEntryAdExempt);
+    return { saved, entryAdEligibility };
   });
 
   app.post('/auth/tiktok/session', {

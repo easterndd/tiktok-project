@@ -16,7 +16,7 @@ import { BytePlusVodService } from '../../services/byteplus-vod.service';
 import { assertMediaScope, localUploadDirectory, matchesUploadTags, processLocalUploadJobs, uploadScope, uploadTags } from '../../services/local-upload.service';
 import { LocalObjectStorageService } from '../../services/object-storage.service';
 import { defaultUiComponents } from '../ui/routes';
-import { readAppEntryAdPolicy } from '../app-entry-ads/routes';
+import { invalidateAppEntryAdPolicyCache, readAppEntryAdPolicy } from '../app-entry-ads/routes';
 import {
   enqueueAlbumAction,
   enqueueAlbumVersionSync,
@@ -39,7 +39,7 @@ const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 
 type AnalyticsCacheEntry = { expiresAt: number; value: unknown };
 const analyticsCaches = new WeakMap<FastifyInstance, Map<string, AnalyticsCacheEntry>>();
-const ANALYTICS_CACHE_TTL_MS = 15_000;
+const ANALYTICS_CACHE_TTL_MS = 60_000;
 async function cachedAnalytics<T>(app: FastifyInstance, key: string, load: () => Promise<T>, ttlMs = ANALYTICS_CACHE_TTL_MS): Promise<T> {
   const analyticsCache = analyticsCaches.get(app) ?? new Map<string, AnalyticsCacheEntry>();
   analyticsCaches.set(app, analyticsCache);
@@ -812,6 +812,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       create: { id: input.releaseId === 'default' ? 'default' : `release:${input.releaseId}`, ...input, version: 1, updatedBy: request.user.sub },
       update: { ...input, version: current.version + 1, updatedBy: request.user.sub }
     });
+    invalidateAppEntryAdPolicyCache(app, input.releaseId);
     await audit(app, request.user.sub, 'UPDATE', 'AppEntryAdPolicy', policy.id, input);
     return policy;
   });

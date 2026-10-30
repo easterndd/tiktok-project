@@ -48,7 +48,7 @@ async function acknowledgeShown(actions: {
   throw new Error('ENTRY_AD_FLOW_CANCELLED');
 }
 
-export async function runEntryAdFlow(session: AppEntryAdSession, actions: {
+type EntryAdFlowActions = {
   show: (input: ShowInput) => Promise<Playback>;
   complete: (sessionId: string, clientEventId: string, isEnded: boolean, adIndex?: number) => Promise<Progress>;
   refreshSession: () => Promise<AppEntryAdSession>;
@@ -56,7 +56,11 @@ export async function runEntryAdFlow(session: AppEntryAdSession, actions: {
   isActive: () => boolean;
   onError: (cause: unknown) => void;
   onAdShown?: () => void;
-}) {
+};
+
+const activeEntryAdFlows = new Map<string, Promise<void>>();
+
+async function runEntryAdFlowInternal(session: AppEntryAdSession, actions: EntryAdFlowActions) {
   if (!session.sessionId || !session.mode || !session.placementId || !session.requiredCount) throw new Error('ENTRY_AD_SESSION_UNAVAILABLE');
   let { sessionId, mode, placementId, requiredCount } = session;
   let completed = session.completedCount ?? 0;
@@ -150,4 +154,16 @@ export async function runEntryAdFlow(session: AppEntryAdSession, actions: {
     }
     if (refreshRequired) continue;
   }
+}
+
+export function runEntryAdFlow(session: AppEntryAdSession, actions: EntryAdFlowActions) {
+  const key = session.sessionId ?? 'missing-session';
+  const existing = activeEntryAdFlows.get(key);
+  if (existing) return existing;
+  let promise: Promise<void>;
+  promise = runEntryAdFlowInternal(session, actions).finally(() => {
+    if (activeEntryAdFlows.get(key) === promise) activeEntryAdFlows.delete(key);
+  });
+  activeEntryAdFlows.set(key, promise);
+  return promise;
 }

@@ -1,7 +1,9 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { acknowledgeAppEntryAdShown, completeAppEntryAd, showAppEntryAd, startAppEntryAdSession } from '../features/ads/app-entry-ad';
 import { runEntryAdFlow } from '../features/ads/entry-ad-flow';
-import { ensureAnonymousSession, ensureTikTokSession } from '../features/auth/anonymous-session';
+import { getLocalEntryAdPlacementIds } from '../features/ads/entry-ad-placements';
+import { attemptLocalEntryAd } from '../features/ads/local-entry-ad';
+import { ensureAnonymousSession, ensureTikTokSession, recordMiniLaunch } from '../features/auth/anonymous-session';
 import { reportDiagnostic } from '../lib/diagnostics';
 import { ApiError } from '../lib/api-client';
 import styles from './EntryAdGate.module.css';
@@ -29,11 +31,32 @@ function formatGateError(step: GateStep, cause: unknown) {
 }
 
 export function EntryAdGate({ children }: { children: ReactNode }) {
+  const localPlacementIds = getLocalEntryAdPlacementIds();
+  const localEntryMode = localPlacementIds.length === 2;
   const [state, setState] = useState<GateState>('LOADING');
   const [attempt, setAttempt] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
+    if (localEntryMode) {
+      const controller = new AbortController();
+      const anonymousSession = ensureAnonymousSession();
+      void anonymousSession.then(() => setState('READY'), () => setState('READY'));
+      void attemptLocalEntryAd({
+        placementIds: localPlacementIds,
+        getEligibility: async () => {
+          await anonymousSession;
+          void ensureTikTokSession().catch(() => undefined);
+          const result = await recordMiniLaunch();
+          return result?.entryAdEligibility;
+        },
+        isActive: () => !controller.signal.aborted
+      }).catch((cause) => {
+        reportDiagnostic({ kind: 'AD', phase: 'LOCAL_ENTRY_AD', message: cause instanceof Error ? cause.message : String(cause) });
+      });
+      return () => controller.abort();
+    }
+
     const controller = new AbortController();
     const startedAt = Date.now();
     const startupTimer = window.setTimeout(() => {
@@ -95,7 +118,7 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
       controller.abort();
       window.clearTimeout(startupTimer);
     };
-  }, [attempt]);
+  }, [attempt, localEntryMode]);
   return <EntryAdReadyContext.Provider value={state === 'READY'}>
     {children}
     {state === 'ERROR' && <aside className={styles.notice} role="alert"><p>{errorMessage}</p><button onClick={() => { setState('LOADING'); setAttempt((value) => value + 1); }}>Try again</button></aside>}

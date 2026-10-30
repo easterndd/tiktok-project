@@ -265,16 +265,35 @@ it('registers all new Mini routes with separate databases and app-bound admin to
   assert.throws(() => loadEnv({ DATABASE_URL: env.DATABASE_URL, JWT_SECRET: env.JWT_SECRET, BYTEPLUS_ACCOUNT_ID: env.BYTEPLUS_ACCOUNT_ID, BYTEPLUS_SPACE_NAME: env.BYTEPLUS_SPACE_NAME, BYTEPLUS_REGION: env.BYTEPLUS_REGION, CROWNRUSH_DATABASE_URL: 'not-a-url' }), /CROWNRUSH_DATABASE_URL/);
 });
 
+it('keeps BloomReel isolated under AUGUST LANE MEDIA LIMITED', () => {
+  const bloomEnv = {
+    ...env,
+    BLOOMREEL_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=bloomreel',
+    BLOOMREEL_TIKTOK_CLIENT_KEY: 'bloomreel-key',
+    BLOOMREEL_TIKTOK_CLIENT_SECRET: 'bloomreel-secret',
+    BLOOMREEL_TIKTOK_APP_ID: '7697505699680716820'
+  };
+  assert.equal(miniAppOrganization('bloomreel'), 'augustLane');
+  assert.equal(miniAppOrganizations.augustLane.label, 'AUGUST LANE MEDIA LIMITED');
+  assert.deepEqual(miniAppOrganizations.augustLane.miniApps, ['bloomreel']);
+  assert.equal(sameMiniAppOrganization('bloomreel', 'crownrush'), false);
+  assert.equal(configuredMiniAppKeys(bloomEnv).includes('bloomreel'), true);
+  assert.equal(miniAppEnvironment(bloomEnv, 'bloomreel')?.TIKTOK_APP_ID, '7697505699680716820');
+  assert.throws(() => miniAppEnvironment({ ...bloomEnv, BLOOMREEL_DATABASE_URL: env.DATABASE_URL }, 'bloomreel'), /different database or PostgreSQL schema/);
+});
+
 it('keeps mini apps in the configured organization groups and rejects cross-organization sharing', () => {
-  assert.deepEqual(Object.values(miniAppOrganizations).map((group) => group.miniApps.length), [1, 20, 15, 10]);
+  assert.deepEqual(Object.values(miniAppOrganizations).map((group) => group.miniApps.length), [1, 20, 15, 10, 1]);
   assert.deepEqual(Object.values(miniAppOrganizations).flatMap((group) => group.miniApps).sort(), [...miniAppKeys].sort());
   assert.equal(miniAppOrganization('main'), 'quickreels');
   assert.equal(miniAppOrganization('storyland'), miniAppOrganization('taletv'));
   assert.equal(miniAppOrganization('crownrush'), miniAppOrganization('elitedrama'));
   assert.equal(miniAppOrganization('lucidreel'), miniAppOrganization('lumishort'));
+  assert.equal(miniAppOrganization('bloomreel'), 'augustLane');
   assert.equal(miniAppOrganizations.taletv.label, 'Gmart 挂靠组织');
   assert.equal(miniAppOrganizations.crownrush.label, '香港长风组织');
   assert.equal(miniAppOrganizations.newbeat.label, '飞书挂靠');
+  assert.equal(miniAppOrganizations.augustLane.label, 'AUGUST LANE MEDIA LIMITED');
   for (const key of ['sonicreel', 'harborplay', 'dazzleshort', 'fableclip', 'emberreel'] as const) {
     assert.equal(miniAppOrganization(key), 'crownrush');
     assert.equal(miniAppPath(key), key);

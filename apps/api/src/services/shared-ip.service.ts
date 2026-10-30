@@ -4,24 +4,128 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import type { MiniAppKey } from '../config/mini-apps';
 
 const rawIpRetentionMs = 30 * 86_400_000;
+const sharedIpVisitAggregationWindowMs = 15 * 60_000;
 type SharedIpDb = Pick<PrismaClient, '$queryRaw' | '$executeRaw'>;
-const maxPendingSharedIpVisits = 256;
-let pendingSharedIpVisits = 0;
-let sharedIpVisitTail: Promise<void> = Promise.resolve();
+const maxPendingSharedIpVisits = 1_024;
+const maxConcurrentSharedIpVisits = 2;
+const sharedIpVisitOverflowLogInterval = 1_000;
+const completedSharedIpVisitTtlMs = sharedIpVisitAggregationWindowMs;
+const maxCompletedSharedIpVisitKeys = 50_000;
+const entryAdIpExemptionTtlMs = 5_000;
+const maxEntryAdIpExemptionKeys = 10_000;
+type SharedIpVisitJob = {
+  db: PrismaClient;
+  input: Parameters<typeof recordSharedIpVisit>[1];
+  onError: (error: unknown) => void;
+  key: string;
+  windowId: number;
+};
+const pendingSharedIpVisits: SharedIpVisitJob[] = [];
+const pendingSharedIpVisitKeys = new Set<string>();
+const completedSharedIpVisitKeys = new WeakMap<object, Map<string, number>>();
+const entryAdIpExemptionCache = new WeakMap<object, Map<string, { exempt: boolean; expiresAt: number }>>();
+const sharedIpVisitDrainWaiters: Array<() => void> = [];
+let activeSharedIpVisits = 0;
+let droppedSharedIpVisits = 0;
+
+function reportSharedIpVisitQueueState() {
+  if (activeSharedIpVisits !== 0 || pendingSharedIpVisits.length !== 0) return;
+  for (const resolve of sharedIpVisitDrainWaiters.splice(0)) resolve();
+}
+
+function completedSharedIpVisitCache(db: PrismaClient) {
+  let cache = completedSharedIpVisitKeys.get(db);
+  if (!cache) {
+    cache = new Map();
+    completedSharedIpVisitKeys.set(db, cache);
+  }
+  return cache;
+}
+
+function hasRecentlyCompletedSharedIpVisit(db: PrismaClient, key: string, now = Date.now()) {
+  const cache = completedSharedIpVisitCache(db);
+  for (const [cachedKey, completedAt] of cache) {
+    if (now - completedAt < completedSharedIpVisitTtlMs) break;
+    cache.delete(cachedKey);
+  }
+  const completedAt = cache.get(key);
+  return completedAt !== undefined && now - completedAt < completedSharedIpVisitTtlMs;
+}
+
+function rememberCompletedSharedIpVisit(db: PrismaClient, key: string, now = Date.now()) {
+  const cache = completedSharedIpVisitCache(db);
+  cache.set(key, now);
+  while (cache.size > maxCompletedSharedIpVisitKeys) {
+    const oldest = cache.keys().next().value;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
+}
+
+function exemptionCacheFor(db: SharedIpDb) {
+  let cache = entryAdIpExemptionCache.get(db);
+  if (!cache) {
+    cache = new Map();
+    entryAdIpExemptionCache.set(db, cache);
+  }
+  return cache;
+}
+
+function clearEntryAdIpExemptionCache(db: SharedIpDb, ip?: string) {
+  const cache = entryAdIpExemptionCache.get(db);
+  if (!cache) return;
+  if (ip) cache.delete(ip);
+  else cache.clear();
+}
+
+function runSharedIpVisitQueue() {
+  while (activeSharedIpVisits < maxConcurrentSharedIpVisits && pendingSharedIpVisits.length > 0) {
+    const job = pendingSharedIpVisits.shift()!;
+    activeSharedIpVisits += 1;
+    void recordSharedIpVisitForWindow(job.db, job.input, job.windowId)
+      .then(() => rememberCompletedSharedIpVisit(job.db, job.key))
+      .catch((error) => {
+        try { job.onError(error); } catch { /* Logging must not stop queue progress. */ }
+      })
+      .finally(() => {
+        activeSharedIpVisits -= 1;
+        pendingSharedIpVisitKeys.delete(job.key);
+        runSharedIpVisitQueue();
+        reportSharedIpVisitQueueState();
+      });
+  }
+  reportSharedIpVisitQueueState();
+}
+
+function reportSharedIpVisitOverflow(onError: (error: unknown) => void) {
+  droppedSharedIpVisits += 1;
+  if (droppedSharedIpVisits < sharedIpVisitOverflowLogInterval) return;
+  const dropped = droppedSharedIpVisits;
+  droppedSharedIpVisits = 0;
+  try {
+    onError(new Error(`Shared IP visit queue is full; dropped ${dropped} visits since the last report`));
+  } catch { /* Logging must not affect the request path. */ }
+}
 
 export function queueSharedIpVisit(db: PrismaClient, input: Parameters<typeof recordSharedIpVisit>[1], onError: (error: unknown) => void) {
-  if (pendingSharedIpVisits >= maxPendingSharedIpVisits) {
-    onError(new Error('Shared IP visit queue is full'));
+  const ip = input.ipAddress && normalizeIp(input.ipAddress);
+  if (!ip) return;
+  const windowId = Math.floor(Date.now() / sharedIpVisitAggregationWindowMs);
+  const key = visitKey(input.miniAppKey, input.userId, ipHash(ip, input.secret), windowId, input.secret);
+  if (hasRecentlyCompletedSharedIpVisit(db, key)) return;
+  if (pendingSharedIpVisitKeys.has(key)) return;
+  if (pendingSharedIpVisits.length >= maxPendingSharedIpVisits) {
+    reportSharedIpVisitOverflow(onError);
     return;
   }
-  pendingSharedIpVisits++;
-  sharedIpVisitTail = sharedIpVisitTail.then(() => recordSharedIpVisit(db, input))
-    .catch(onError)
-    .finally(() => { pendingSharedIpVisits--; });
+  pendingSharedIpVisitKeys.add(key);
+  pendingSharedIpVisits.push({ db, input: { ...input, ipAddress: ip }, onError, key, windowId });
+  runSharedIpVisitQueue();
 }
 
 export function waitForSharedIpVisits() {
-  return sharedIpVisitTail;
+  if (activeSharedIpVisits === 0 && pendingSharedIpVisits.length === 0) return Promise.resolve();
+  return new Promise<void>((resolve) => sharedIpVisitDrainWaiters.push(resolve));
 }
 
 export function normalizeIp(value: string): string | null {
@@ -37,36 +141,43 @@ function ipHash(ip: string, secret: string) {
   return createHmac('sha256', secret).update(`shared-ip:${ip}`).digest('hex');
 }
 
-function visitKey(appKey: string, clientSessionId: string, secret: string) {
-  return createHmac('sha256', secret).update(['shared-ip-visit', appKey, clientSessionId].join(':')).digest('hex');
+function visitKey(appKey: string, userId: string, hashedIp: string, windowId: number, secret: string) {
+  return createHmac('sha256', secret).update(['shared-ip-visit-v2', appKey, userId, hashedIp, windowId].join(':')).digest('hex');
 }
 
-export async function recordSharedIpVisit(db: PrismaClient, input: { ipAddress: string | null; miniAppKey: string; userId: string; clientSessionId: string; countryCode: string | null; secret: string }) {
+type SharedIpVisitInput = { ipAddress: string | null; miniAppKey: string; userId: string; clientSessionId: string; countryCode: string | null; secret: string };
+
+async function recordSharedIpVisitForWindow(db: PrismaClient, input: SharedIpVisitInput, windowId: number) {
   const ip = input.ipAddress && normalizeIp(input.ipAddress);
   if (!ip) return;
   const hash = ipHash(ip, input.secret);
-  const key = visitKey(input.miniAppKey, input.clientSessionId, input.secret);
+  const key = visitKey(input.miniAppKey, input.userId, hash, windowId, input.secret);
   await db.$transaction(async (tx) => {
-    // Prisma binds strings as text. Cast the parameter to the CHAR(64) key type;
-    // casting the indexed column to text instead forces a full-table scan.
-    const previous = await tx.$queryRaw<Array<{ ipHash: string }>>(Prisma.sql`SELECT "ipHash" FROM "SharedIpVisit" WHERE "idempotencyKey" = ${key}::char(64)`);
-    if (previous.length) return;
     await tx.$executeRaw`
       INSERT INTO "SharedIpAddress" ("ipHash", "ipAddress", "lastMiniAppKey", "countryCode")
       VALUES (${hash}, ${ip}, ${input.miniAppKey}, ${input.countryCode})
-      ON CONFLICT ("ipHash") DO UPDATE SET
-        "ipAddress" = EXCLUDED."ipAddress",
-        "lastSeenAt" = CURRENT_TIMESTAMP,
-        "lastMiniAppKey" = EXCLUDED."lastMiniAppKey",
-        "countryCode" = EXCLUDED."countryCode"`;
-    const inserted = await tx.$queryRaw<Array<{ idempotencyKey: string }>>`
+      ON CONFLICT ("ipHash") DO NOTHING`;
+    await tx.$executeRaw`
+      WITH inserted_visit AS (
       INSERT INTO "SharedIpVisit" ("idempotencyKey", "ipHash", "miniAppKey", "userId")
       VALUES (${key}, ${hash}, ${input.miniAppKey}, ${input.userId})
       ON CONFLICT ("idempotencyKey") DO NOTHING
-      RETURNING "idempotencyKey"`;
-    if (inserted.length) await tx.$executeRaw`
-      UPDATE "SharedIpAddress" SET "visitCount" = "visitCount" + 1 WHERE "ipHash" = ${hash}::char(64)`;
+        RETURNING 1
+      )
+      UPDATE "SharedIpAddress"
+      SET "ipAddress" = ${ip},
+          "lastSeenAt" = CURRENT_TIMESTAMP,
+          "lastMiniAppKey" = ${input.miniAppKey},
+          "countryCode" = ${input.countryCode},
+          "visitCount" = "visitCount" + 1
+      WHERE "ipHash" = ${hash}::char(64)
+        AND EXISTS (SELECT 1 FROM inserted_visit)`;
   });
+}
+
+export async function recordSharedIpVisit(db: PrismaClient, input: SharedIpVisitInput) {
+  const windowId = Math.floor(Date.now() / sharedIpVisitAggregationWindowMs);
+  return recordSharedIpVisitForWindow(db, input, windowId);
 }
 
 export type SharedIpRow = { ipAddress: string | null; ipHash: string; visitCount: number; firstSeenAt: Date; lastSeenAt: Date; lastMiniAppKey: string; countryCode: string | null; exempt: boolean };
@@ -114,9 +225,24 @@ export async function recentViewerIps(db: PrismaClient, miniAppKey: string, user
 export async function isEntryAdIpExempt(db: PrismaClient, ipAddress: string | null) {
   const ip = ipAddress && normalizeIp(ipAddress);
   if (!ip) return false;
+  const cache = exemptionCacheFor(db);
+  const now = Date.now();
+  for (const [cachedIp, entry] of cache) {
+    if (entry.expiresAt > now) break;
+    cache.delete(cachedIp);
+  }
+  const cached = cache.get(ip);
+  if (cached && cached.expiresAt > now) return cached.exempt;
   const rows = await db.$queryRaw<Array<{ exempt: boolean }>>`
     SELECT EXISTS(SELECT 1 FROM "SharedEntryAdIpExemption" WHERE "ipAddress" = ${ip}) AS exempt`;
-  return rows[0]?.exempt === true;
+  const exempt = rows[0]?.exempt === true;
+  cache.set(ip, { exempt, expiresAt: now + entryAdIpExemptionTtlMs });
+  while (cache.size > maxEntryAdIpExemptionKeys) {
+    const oldest = cache.keys().next().value;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
+  return exempt;
 }
 
 export async function listEntryAdIpExemptions(db: PrismaClient) {
@@ -130,11 +256,14 @@ export async function setEntryAdIpExemption(db: SharedIpDb, ip: string, note: st
     INSERT INTO "SharedEntryAdIpExemption" ("ipAddress", "note", "updatedBy") VALUES (${ip}, ${note}, ${admin})
     ON CONFLICT ("ipAddress") DO UPDATE SET "note" = EXCLUDED."note", "updatedBy" = EXCLUDED."updatedBy", "updatedAt" = CURRENT_TIMESTAMP
     RETURNING "ipAddress", "note", "createdAt", "updatedAt", "updatedBy"`;
+  clearEntryAdIpExemptionCache(db, ip);
   return rows[0];
 }
 
 export async function removeEntryAdIpExemption(db: SharedIpDb, ip: string) {
-  return db.$executeRaw`DELETE FROM "SharedEntryAdIpExemption" WHERE "ipAddress" = ${ip}`;
+  const result = await db.$executeRaw`DELETE FROM "SharedEntryAdIpExemption" WHERE "ipAddress" = ${ip}`;
+  clearEntryAdIpExemptionCache(db, ip);
+  return result;
 }
 
 export async function setEntryAdIpExemptions(db: PrismaClient, input: { ips: string[]; exempt: boolean; note: string | null; admin: string }) {

@@ -36,7 +36,7 @@ services:
       pgbouncer:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -225,6 +225,7 @@ services:
         VITE_EMBERREEL_API_BASE_URL: ${VITE_EMBERREEL_API_BASE_URL:-}
         VITE_EMBERREEL_REWARDED_PLACEMENT_ID: ${VITE_EMBERREEL_REWARDED_PLACEMENT_ID:-}
         VITE_EMBERREEL_APP_ENTRY_PLACEMENT_ID: ${VITE_EMBERREEL_APP_ENTRY_PLACEMENT_ID:-}
+        VITE_BLOOMREEL_API_BASE_URL: ${VITE_BLOOMREEL_API_BASE_URL:-}
     restart: unless-stopped
     expose:
       - "80"

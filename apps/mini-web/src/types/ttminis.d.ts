@@ -68,6 +68,7 @@ declare global {
     offClose(callback: (result: { isEnded: boolean }) => void): void;
     onError(callback: (error: unknown) => void): void;
     offError(callback: (error: unknown) => void): void;
+    destroy?(): void;
   }
 
   interface InterstitialAd {

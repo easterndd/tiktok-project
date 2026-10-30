@@ -25,6 +25,7 @@ const environment = z.object({
   TALETV_DATABASE_URL: z.string().url().optional(),
   CINEREELS_DATABASE_URL: z.string().url().optional(),
   TALEREELS_DATABASE_URL: z.string().url().optional(),
+  BLOOMREEL_DATABASE_URL: z.string().url().optional(),
   API_CORS_ORIGIN: z.string().default('http://localhost:5173,http://localhost:5174,http://localhost:5175'),
   // Only the reverse proxy's Docker IP or private subnet belongs here.
   TRUSTED_PROXY_CIDRS: z.string().default(''),
@@ -33,6 +34,10 @@ const environment = z.object({
   TRUST_GEO_COUNTRY_HEADER: z.union([z.boolean(), z.stringbool()]).default(false),
   // Keep launch attribution available for analytics, but gate entry ads only when explicitly enabled.
   ENTRY_AD_ATTRIBUTION_GATE_ENABLED: z.union([z.boolean(), z.stringbool()]).default(false),
+  // Client-side ad diagnostics are useful during an incident but are not part
+  // of entitlement. Keep them disabled by default so SDK error storms cannot
+  // become a database write amplifier; enable temporarily when investigating.
+  PERSIST_CLIENT_AD_DIAGNOSTICS: z.union([z.boolean(), z.stringbool()]).optional(),
   JWT_SECRET: z.string().min(32),
   USER_DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
   USER_JWT_EXPIRES_IN: z.coerce.number().int().positive().default(3_600),
@@ -57,6 +62,9 @@ const environment = z.object({
   TALEREELS_TIKTOK_CLIENT_KEY: z.string().min(1).optional(),
   TALEREELS_TIKTOK_CLIENT_SECRET: z.string().min(1).optional(),
   TALEREELS_TIKTOK_APP_ID: z.string().min(1).optional(),
+  BLOOMREEL_TIKTOK_CLIENT_KEY: z.string().min(1).optional(),
+  BLOOMREEL_TIKTOK_CLIENT_SECRET: z.string().min(1).optional(),
+  BLOOMREEL_TIKTOK_APP_ID: z.string().regex(/^\d+$/).optional(),
   REWARDED_PLACEMENT_ID: z.string().min(1).default('ad7686459794040702993'),
   TALETV_REWARDED_PLACEMENT_ID: z.string().min(1).default('ad7688599028879722512'),
   APP_ENTRY_PLACEMENT_ID: z.string().default('ad7686459458972829697'),

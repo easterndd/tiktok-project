@@ -56,7 +56,9 @@ export function getLaunchId() {
   return launchId;
 }
 
-export async function startAppEntryAdSession(): Promise<AppEntryAdSession> {
+const activeEntryAdSessions = new Map<string, Promise<AppEntryAdSession>>();
+
+async function startAppEntryAdSessionInternal(): Promise<AppEntryAdSession> {
   if (isDemoMode()) return { required: false };
   const startedAt = performance.now();
   const session = await apiClient.post<AppEntryAdSession>('/app-entry-ad-sessions', {
@@ -70,6 +72,18 @@ export async function startAppEntryAdSession(): Promise<AppEntryAdSession> {
     else if (session.mode === 'REWARDED_GATED') prewarmRewardedAd(session.placementId, 1);
   }
   return session;
+}
+
+export function startAppEntryAdSession(): Promise<AppEntryAdSession> {
+  const key = `${import.meta.env.VITE_MINI_RELEASE_ID || 'default'}:${getLaunchId()}`;
+  const existing = activeEntryAdSessions.get(key);
+  if (existing) return existing;
+  let promise: Promise<AppEntryAdSession>;
+  promise = startAppEntryAdSessionInternal().finally(() => {
+    if (activeEntryAdSessions.get(key) === promise) activeEntryAdSessions.delete(key);
+  });
+  activeEntryAdSessions.set(key, promise);
+  return promise;
 }
 
 const shownAcknowledgements = new Map<string, () => Promise<void>>();
@@ -118,7 +132,7 @@ export async function acknowledgeAppEntryAdShown(sessionId: string, clientEventI
   return result;
 }
 
-export function recordAppEntryAdEvent(input: { eventType: 'REQUESTED' | 'SHOWN' | 'CLOSED_INCOMPLETE' | 'FAILED'; placementId: string; sessionId: string; adType: 'REWARDED' | 'INTERSTITIAL'; adIndex: number; errorCode?: string; clientEventId?: string }) {
+export function recordAppEntryAdEvent(input: { eventType: 'SHOWN' | 'CLOSED_INCOMPLETE' | 'FAILED'; placementId: string; sessionId: string; adType: 'REWARDED' | 'INTERSTITIAL'; adIndex: number; errorCode?: string; clientEventId?: string }) {
   const path = '/ad-events';
   const startedAt = performance.now();
   return apiClient.post(path, { ...input, scope: 'APP_ENTRY', appEntrySessionId: input.sessionId, clientEventId: input.clientEventId ?? eventId() }).then((result) => {
@@ -130,7 +144,9 @@ export function recordAppEntryAdEvent(input: { eventType: 'REQUESTED' | 'SHOWN' 
   });
 }
 
-export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; sessionId: string; adIndex: number; requiredCount?: number; countMode?: 'COMPLETED' | 'SHOWN'; onShown?: (playback: { clientEventId: string; isEnded: boolean }) => void }): Promise<{ clientEventId: string; isEnded: boolean }> {
+type AppEntryAdShowInput = { mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; sessionId: string; adIndex: number; requiredCount?: number; countMode?: 'COMPLETED' | 'SHOWN'; onShown?: (playback: { clientEventId: string; isEnded: boolean }) => void };
+
+async function showAppEntryAdInternal(input: AppEntryAdShowInput): Promise<{ clientEventId: string; isEnded: boolean }> {
   const { mode, placementId, sessionId, adIndex, requiredCount, countMode = 'COMPLETED', onShown } = input;
   const adType = mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED';
   const previousClosedAt = entryAdClosedAt.get(sessionId);
@@ -141,8 +157,6 @@ export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_G
   const releaseActivity = claimNativeAd(mode === 'REWARDED_GATED' ? 'rewarded' : 'entry');
   if (!releaseActivity) throw new Error('AD_BUSY');
 
-  // Analytics must not delay the next native ad's show() call.
-  void recordAppEntryAdEvent({ eventType: 'REQUESTED', placementId, sessionId, adType, adIndex }).catch(() => undefined);
   let ad: InterstitialAd | RewardedVideoAd | undefined;
   try {
     const prewarmNext = requiredCount === undefined || adIndex < requiredCount;
@@ -222,6 +236,22 @@ export async function showAppEntryAd(input: { mode: 'INTERSTITIAL' | 'REWARDED_G
       finishClose();
     }, onError, onError);
   });
-  if (!isEnded) void recordAppEntryAdEvent({ eventType: 'CLOSED_INCOMPLETE', placementId, sessionId, adType, adIndex }).catch(() => undefined);
+  if (!isEnded && countMode !== 'SHOWN') {
+    void recordAppEntryAdEvent({ eventType: 'CLOSED_INCOMPLETE', placementId, sessionId, adType, adIndex }).catch(() => undefined);
+  }
   return { clientEventId: completionEventId, isEnded };
+}
+
+const activeEntryAdShows = new Map<string, Promise<{ clientEventId: string; isEnded: boolean }>>();
+
+export function showAppEntryAd(input: AppEntryAdShowInput) {
+  const key = `${input.mode}:${input.placementId}:${input.sessionId}:${input.adIndex}`;
+  const existing = activeEntryAdShows.get(key);
+  if (existing) return existing;
+  let promise: Promise<{ clientEventId: string; isEnded: boolean }>;
+  promise = showAppEntryAdInternal(input).finally(() => {
+    if (activeEntryAdShows.get(key) === promise) activeEntryAdShows.delete(key);
+  });
+  activeEntryAdShows.set(key, promise);
+  return promise;
 }

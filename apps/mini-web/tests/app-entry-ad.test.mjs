@@ -49,7 +49,7 @@ function setup() {
 const input = { mode: 'REWARDED_GATED', placementId: 'placement', sessionId: 'session', adIndex: 1 };
 const flush = () => new Promise(setImmediate);
 
-it('shows without waiting for REQUESTED and overlaps SHOWN with completion', async () => {
+it('does not send REQUESTED and overlaps SHOWN with completion', async () => {
   const ads = setup();
   let acknowledgeShown;
   const shownResponse = new Promise((resolve) => { acknowledgeShown = resolve; });
@@ -57,7 +57,6 @@ it('shows without waiting for REQUESTED and overlaps SHOWN with completion', asy
   let completionAttempts = 0;
   post = (path, body) => {
     requests.push({ path, body });
-    if (body.eventType === 'REQUESTED') return new Promise(() => {});
     if (body.eventType === 'SHOWN') return shownResponse;
     if (path.endsWith('/complete') && ++completionAttempts === 1) {
       throw new globalThis.__entryAdApiError('impression acknowledgement pending', 425);
@@ -67,6 +66,7 @@ it('shows without waiting for REQUESTED and overlaps SHOWN with completion', asy
   const playback = showAppEntryAd(input);
   await flush();
   assert.equal(ads[0].shows, 1);
+  assert.equal(requests.some(({ body }) => body.eventType === 'REQUESTED'), false);
   ads[0].close({ isEnded: true });
   const result = await playback;
   assert.equal(ads[0].close, undefined);
@@ -115,4 +115,22 @@ it('retries the same SHOWN ID and prewarms the next ad instance', async () => {
   assert.equal(earlyClose.isEnded, false);
   await completeAppEntryAd('session', earlyClose.clientEventId, false);
   assert.equal(completed[1].isEnded, false);
+});
+
+it('skips diagnostic close requests when the server counts SHOWN impressions', async () => {
+  const ads = setup();
+  const requests = [];
+  post = async (path, body) => {
+    requests.push({ path, body });
+    return { accepted: true };
+  };
+
+  const playback = showAppEntryAd({ ...input, countMode: 'SHOWN', requiredCount: 2 });
+  await flush();
+  ads[0].close({ isEnded: false });
+  const result = await playback;
+  await flush();
+
+  assert.equal(result.isEnded, false);
+  assert.equal(requests.some(({ body }) => body.eventType === 'CLOSED_INCOMPLETE'), false);
 });

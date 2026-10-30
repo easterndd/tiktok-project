@@ -26,7 +26,7 @@ import { registerAdminRoutes } from './modules/admin/routes';
 import { registerUiRoutes } from './modules/ui/routes';
 import { registerErrorHandler } from './plugins/error-handler';
 import { registerPrisma } from './plugins/prisma';
-import { getDatabaseDuration } from './lib/request-performance';
+import { getDatabaseDuration, sampleResponseLog, type ResponseLogSampleCache } from './lib/request-performance';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -73,6 +73,9 @@ function isAllowedCorsOrigin(origin: string | undefined, configuredOrigins: stri
 const miniBootstrapPath = new RegExp(`^/api/(?:(?:${miniAppKeys.filter((key) => key !== 'main').join('|')})/)?v1/(?:auth/anonymous/session|app-entry-ad-sessions)$`);
 const miniPerformancePath = /\/(?:auth\/anonymous\/session|app-entry-ad-sessions(?:\/[^/]+\/(?:complete|shown))?|home|ad-events|episode-interstitial\/config|episodes\/[^/]+\/reward-session(?:\/[^/]+\/complete)?)$/;
 const requestStartedAt = new WeakMap<object, number>();
+const responseLogSamples: ResponseLogSampleCache = new Map();
+const responseLogSampleIntervalMs = 10_000;
+const maxResponseLogSampleKeys = 4_096;
 
 function isMiniBootstrapRequest(url: string) {
   return miniBootstrapPath.test(url.split('?', 1)[0]);
@@ -126,7 +129,15 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     const startedAt = requestStartedAt.get(request);
     if (startedAt !== undefined) {
       const durationMs = Number((performance.now() - startedAt).toFixed(1));
-      const shouldLog = reply.statusCode >= 400 || durationMs >= 2_000 || (env.NODE_ENV !== 'production' || Math.random() < 0.01);
+      const needsDetailedLog = reply.statusCode >= 400 || durationMs >= 2_000;
+      let shouldLog = needsDetailedLog || env.NODE_ENV !== 'production' || Math.random() < 0.01;
+      let suppressedResponses = 0;
+      if (env.NODE_ENV === 'production' && needsDetailedLog) {
+        const route = request.routeOptions.url ?? request.url.split('?', 1)[0];
+        const sample = sampleResponseLog(responseLogSamples, `${route}:${reply.statusCode}`, Date.now(), responseLogSampleIntervalMs, maxResponseLogSampleKeys);
+        shouldLog = sample !== null;
+        suppressedResponses = sample ?? 0;
+      }
       if (shouldLog) {
         const databaseMs = getDatabaseDuration(request);
         const isBootstrapRequest = isMiniBootstrapRequest(request.url);
@@ -137,6 +148,7 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
           durationMs,
           databaseMs: databaseMs === undefined ? null : Number(databaseMs.toFixed(1)),
           sampleRate: reply.statusCode >= 400 || durationMs >= 2_000 ? 1 : 0.01,
+          ...(suppressedResponses ? { suppressedResponses } : {}),
           ...(isBootstrapRequest ? {
             origin: request.headers.origin ?? null,
             corsAllowed: isAllowedCorsOrigin(request.headers.origin, configuredCorsOrigins),

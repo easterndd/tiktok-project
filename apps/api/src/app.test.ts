@@ -4,6 +4,7 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import { buildApp } from './app';
 import type { Env } from './config/env';
 import type { MiniAppKey } from './config/mini-apps';
+import { miniAppAdConfig } from './config/mini-apps';
 import { loadEnv } from './config/env';
 import { hashPassword } from './services/password';
 import { BytePlusVodService } from './services/byteplus-vod.service';
@@ -406,7 +407,25 @@ async function createPrismaStub() {
         const [hash, ipAddress, lastMiniAppKey, countryCode] = values;
         state.sharedIps.set(hash, { ...(state.sharedIps.get(hash) ?? { ipHash: hash, visitCount: 0, firstSeenAt: new Date() }), ipAddress, lastMiniAppKey, countryCode, lastSeenAt: new Date() }); return 1;
       }
-      if (sql.includes('UPDATE "SharedIpAddress" SET "visitCount"')) { state.sharedIps.get(values[0]).visitCount += 1; return 1; }
+      if (sql.includes('WITH inserted_visit AS') && sql.includes('INSERT INTO "SharedIpVisit"')) {
+        const [idempotencyKey, ipHash, miniAppKey, userId, ipAddress, lastMiniAppKey, countryCode] = values;
+        if (state.sharedVisits.has(idempotencyKey)) return 0;
+        state.sharedVisits.set(idempotencyKey, { idempotencyKey, ipHash, miniAppKey, userId, createdAt: new Date() });
+        const address = state.sharedIps.get(ipHash);
+        if (address) {
+          address.ipAddress = ipAddress;
+          address.lastMiniAppKey = lastMiniAppKey;
+          address.countryCode = countryCode;
+          address.lastSeenAt = new Date();
+          address.visitCount += 1;
+        }
+        return 1;
+      }
+      if (sql.includes('UPDATE "SharedIpAddress"') && sql.includes('"visitCount" = "visitCount" + 1')) {
+        const hash = values.at(-1);
+        state.sharedIps.get(hash).visitCount += 1;
+        return 1;
+      }
       if (sql.includes('DELETE FROM "SharedIpVisit" v USING "SharedIpAddress"')) {
         const [cutoff] = values;
         let deleted = 0;
@@ -506,6 +525,20 @@ describe('QuicK ReeLS API', () => {
   it('parses the production geo header flag as a real boolean', () => {
     assert.equal(loadEnv({ ...env, TRUST_GEO_COUNTRY_HEADER: 'false' } as any).TRUST_GEO_COUNTRY_HEADER, false);
     assert.equal(loadEnv({ ...env, TRUST_GEO_COUNTRY_HEADER: 'true' } as any).TRUST_GEO_COUNTRY_HEADER, true);
+  });
+
+  it('loads episode-interstitial placements independently for each configured Mini', () => {
+    const placements = {
+      storyflicks: '7698625673044428852',
+      dramablaze: 'ad7701250594312390677',
+      cinereels: 'ad7701598971906803713',
+      dramahit: 'ad7701591362000848902',
+      taletv: 'ad7701229465732532245'
+    } as const;
+    for (const [miniAppKey, placementId] of Object.entries(placements) as [keyof typeof placements, string][]) {
+      const configured = loadEnv({ ...env, [`${miniAppKey.toUpperCase()}_EPISODE_INTERSTITIAL_PLACEMENT_ID`]: placementId } as any);
+      assert.equal(miniAppAdConfig(configured, miniAppKey).episodeInterstitialPlacementId, placementId);
+    }
   });
 
   it('uses a forwarded client IP only when the immediate proxy is trusted', async () => {
@@ -791,16 +824,71 @@ describe('QuicK ReeLS API', () => {
   it('serves public home and search without authentication', async () => {
     const app = await createTestApp();
     apps.push(app);
+    const albumModel = app.prisma.album as unknown as { findMany: (...args: any[]) => Promise<unknown[]> };
+    const originalAlbumFindMany = albumModel.findMany.bind(albumModel);
+    let catalogQueries = 0;
+    albumModel.findMany = async (...args) => {
+      catalogQueries += 1;
+      return originalAlbumFindMany(...args);
+    };
+    const progressModel = app.prisma.watchProgress as unknown as { findMany: (...args: any[]) => Promise<unknown[]> };
+    const originalFindMany = progressModel.findMany.bind(progressModel);
+    let progressQueries = 0;
+    progressModel.findMany = async (...args) => {
+      progressQueries += 1;
+      return originalFindMany(...args);
+    };
+
     const home = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { 'x-geo-country': 'US' } });
     assert.equal(home.statusCode, 200);
     assert.match(String(home.headers['server-timing'] ?? ''), /db;dur=\d+(?:\.\d+)?, app;dur=\d+(?:\.\d+)?/);
     assert.equal(home.json().feed.items[0].title, 'Test Drama');
-    const personalized = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { authorization: `Bearer ${await token(app, 'user')}` } });
+    const repeatedPublic = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { 'x-geo-country': 'US' } });
+    assert.equal(repeatedPublic.statusCode, 200);
+    assert.equal(catalogQueries, 1);
+    assert.equal(repeatedPublic.json().blocks.some((block: { type: string }) => block.type === 'CONTINUE_WATCHING'), false);
+    const authorization = `Bearer ${await token(app, 'user')}`;
+    const personalized = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { authorization } });
     assert.equal(personalized.statusCode, 200);
     assert.equal(personalized.json().blocks[0].type, 'CONTINUE_WATCHING');
+    const repeatedPersonalized = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { authorization } });
+    assert.equal(repeatedPersonalized.statusCode, 200);
+    assert.equal(repeatedPersonalized.json().blocks[0].type, 'CONTINUE_WATCHING');
+    assert.equal(progressQueries, 1);
 
     const search = await app.inject({ method: 'GET', url: '/api/v1/search?q=test' });
     assert.equal(search.statusCode, 200);
+  });
+
+  it('coalesces concurrent retries of the same anonymous session request', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const userModel = app.prisma.user as unknown as { upsert: (...args: any[]) => Promise<unknown> };
+    const sessionModel = app.prisma.appSession as unknown as { upsert: (...args: any[]) => Promise<unknown> };
+    const originalUserUpsert = userModel.upsert.bind(userModel);
+    const originalSessionUpsert = sessionModel.upsert.bind(sessionModel);
+    let userUpserts = 0;
+    let sessionUpserts = 0;
+    userModel.upsert = async (...args) => {
+      userUpserts += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return originalUserUpsert(...args);
+    };
+    sessionModel.upsert = async (...args) => {
+      sessionUpserts += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return originalSessionUpsert(...args);
+    };
+    const payload = { visitorKey: 'v'.repeat(64), clientSessionId: 'coalesced-session-0001', platform: 'TIKTOK_MINIS', source: 'APP_LAUNCH' };
+    const responses = await Promise.all([
+      app.inject({ method: 'POST', url: '/api/v1/auth/anonymous/session', payload }),
+      app.inject({ method: 'POST', url: '/api/v1/auth/anonymous/session', payload })
+    ]);
+
+    assert.deepEqual(responses.map((response) => response.statusCode), [200, 200]);
+    assert.equal(responses[0].json().viewer.id, responses[1].json().viewer.id);
+    assert.equal(userUpserts, 1);
+    assert.equal(sessionUpserts, 1);
   });
 
   it('does not expose regional content when the trusted country does not match', async () => {
@@ -880,6 +968,63 @@ describe('QuicK ReeLS API', () => {
     assert.equal(older.json().items[0].metadata.sdkPayloadRaw, '{"query":{"source":"preview"},"launch_from":"anchor"}');
     assert.deepEqual(older.json().items[0].metadata.launchQuery, { src: 'preview', campaign: 'spring' });
     assert.equal(older.json().hasMore, false);
+  });
+
+  it('returns local entry-ad eligibility without writing entry impression records', async () => {
+    const prisma = await createPrismaStub();
+    const releaseId = 'storyflicks-20261029-test';
+    prisma._state.entryPolicies.set(releaseId, { releaseId, enabled: true, mode: 'REWARDED_GATED' });
+    const app = await buildApp({ ...env, STORYFLICKS_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=storyflicks' }, {
+      prisma: prisma as unknown as PrismaClient,
+      miniPrisma: { storyflicks: prisma as unknown as PrismaClient }
+    });
+    apps.push(app);
+
+    const session = await app.inject({ method: 'POST', url: '/api/storyflicks/v1/auth/anonymous/session', payload: {
+      visitorKey: 'l'.repeat(64), clientSessionId: 'local-entry-session-0001'
+    } });
+    assert.equal(session.statusCode, 200, session.body);
+    const response = await app.inject({ method: 'POST', url: '/api/storyflicks/v1/auth/launch-context',
+      headers: { authorization: `Bearer ${session.json().accessToken}` },
+      payload: { entryId: 'local-entry-launch-0001', localEntryAd: true, releaseId, launchQuery: { source: 'storyflicks' } } });
+
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().entryAdEligibility.showEntryAd, true);
+    await waitForSharedIpVisits();
+    assert.equal(prisma._state.sharedVisits.size, 1);
+    assert.equal(prisma._state.entrySessions.size, 0);
+    assert.equal(prisma._state.entryCompletions.size, 0);
+    assert.equal(prisma._state.adEvents.size, 0);
+  });
+
+  it('keeps user and shared-IP entry-ad exemptions on the local eligibility path', async () => {
+    const releaseId = 'storyflicks-20261029-test';
+    const makeApp = async (userExempt: boolean, ipExempt: boolean) => {
+      const prisma = await createPrismaStub();
+      prisma._state.entryPolicies.set(releaseId, { releaseId, enabled: true, mode: 'REWARDED_GATED' });
+      prisma._state.viewer.appEntryAdExempt = userExempt;
+      if (ipExempt) prisma._state.sharedExemptions.set('127.0.0.1', { ipAddress: '127.0.0.1' });
+      const app = await buildApp({ ...env, STORYFLICKS_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=storyflicks' }, {
+        prisma: prisma as unknown as PrismaClient,
+        miniPrisma: { storyflicks: prisma as unknown as PrismaClient }
+      });
+      apps.push(app);
+      const session = await app.inject({ method: 'POST', url: '/api/storyflicks/v1/auth/anonymous/session', payload: {
+        visitorKey: `${userExempt ? 'u' : 'i'}`.repeat(64), clientSessionId: `local-entry-exempt-${userExempt ? 'user' : 'ip'}`
+      } });
+      const response = await app.inject({ method: 'POST', url: '/api/storyflicks/v1/auth/launch-context',
+        headers: { authorization: `Bearer ${session.json().accessToken}` },
+        payload: { entryId: `local-entry-exempt-${userExempt ? 'user' : 'ip'}-launch`, localEntryAd: true, releaseId } });
+      return response;
+    };
+
+    const userResponse = await makeApp(true, false);
+    assert.equal(userResponse.statusCode, 200, userResponse.body);
+    assert.deepEqual(userResponse.json().entryAdEligibility, { showEntryAd: false, reason: 'USER_EXEMPT' });
+    const ipResponse = await makeApp(false, true);
+    assert.equal(ipResponse.statusCode, 200, ipResponse.body);
+    assert.deepEqual(ipResponse.json().entryAdEligibility, { showEntryAd: false, reason: 'IP_EXEMPT' });
+    await waitForSharedIpVisits();
   });
 
   it('accepts launch context from an older Mini build without an entry ID', async () => {
@@ -1114,16 +1259,34 @@ describe('QuicK ReeLS API', () => {
       payload: { clientEventId: 'entry-request-only', adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'REQUESTED', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1 } });
     assert.equal(requested.statusCode, 200, requested.body);
     assert.deepEqual(requested.json(), { accepted: true });
-    const unauthenticatedFailed = await app.inject({ method: 'POST', url: '/api/v1/ad-events', payload: { eventType: 'FAILED' } });
-    assert.equal(unauthenticatedFailed.statusCode, 401, unauthenticatedFailed.body);
+    const unauthenticatedFailed = await app.inject({ method: 'POST', url: '/api/v1/ad-events', payload: {
+      clientEventId: 'entry-failed-only', adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'FAILED',
+      placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1, errorCode: 'SDK_ERROR'
+    } });
+    assert.equal(unauthenticatedFailed.statusCode, 200, unauthenticatedFailed.body);
+    assert.deepEqual(unauthenticatedFailed.json(), { accepted: true, dropped: true });
+    const malformedFailed = await app.inject({ method: 'POST', url: '/api/v1/ad-events', payload: { eventType: 'FAILED' } });
+    assert.equal(malformedFailed.statusCode, 200, malformedFailed.body);
+    assert.deepEqual(malformedFailed.json(), { accepted: true, dropped: true });
+    const unauthenticatedClosed = await app.inject({ method: 'POST', url: '/api/v1/ad-events', payload: {
+      clientEventId: 'entry-close-only-legacy', adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'CLOSED_INCOMPLETE',
+      placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1
+    } });
+    assert.equal(unauthenticatedClosed.statusCode, 200, unauthenticatedClosed.body);
+    assert.deepEqual(unauthenticatedClosed.json(), { accepted: true, dropped: true });
     assert.equal((app.prisma as any)._state.adEvents.size, before);
     const progress = await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } });
     assert.equal(progress!.completedCount, 0);
     assert.equal(progress!.status, 'ACTIVE');
-    const closed = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers: userHeaders,
+    let sessionLookups = 0;
+    const sessionModel = (app.prisma as any).appEntryAdSession;
+    const findSession = sessionModel.findUnique;
+    sessionModel.findUnique = async (...args: any[]) => { sessionLookups += 1; return findSession(...args); };
+    const closed = await app.inject({ method: 'POST', url: '/api/v1/ad-events',
       payload: { clientEventId: 'entry-close-only', adType: 'REWARDED', scope: 'APP_ENTRY', eventType: 'CLOSED_INCOMPLETE', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1 } });
     assert.equal(closed.statusCode, 200, closed.body);
-    assert.deepEqual(closed.json(), { accepted: true });
+    assert.deepEqual(closed.json(), { accepted: true, dropped: true });
+    assert.equal(sessionLookups, 0, 'diagnostic incomplete closes must bypass session reads');
     assert.equal((app.prisma as any)._state.adEvents.size, before);
   });
 
@@ -1209,7 +1372,7 @@ describe('QuicK ReeLS API', () => {
     const staleAt = new Date('2026-07-01T00:00:00.000Z');
     const addVisits = async (ipAddress: string, count: number, prefix: string) => {
       for (let index = 0; index < count; index++) {
-        await recordSharedIpVisit(db, { ipAddress, miniAppKey: 'main', userId: `${prefix}-user`, clientSessionId: `${prefix}-${index}`, countryCode: null, secret });
+        await recordSharedIpVisit(db, { ipAddress, miniAppKey: 'main', userId: `${prefix}-user-${index}`, clientSessionId: `${prefix}-${index}`, countryCode: null, secret });
       }
       const address = [...(db as any)._state.sharedIps.values()].find((item: any) => item.ipAddress === ipAddress);
       address.lastSeenAt = staleAt;
@@ -1224,14 +1387,14 @@ describe('QuicK ReeLS API', () => {
 
     const state = (db as any)._state;
     const shortLivedAddress = [...state.sharedIps.values()].find((item: any) => item.visitCount === 2);
-    const exemptVisit = [...state.sharedVisits.values()].find((item: any) => item.userId === 'exempt-user');
-    const repeatVisit = [...state.sharedVisits.values()].find((item: any) => item.userId === 'repeat-user');
+    const exemptVisit = [...state.sharedVisits.values()].find((item: any) => item.userId.startsWith('exempt-user-'));
+    const repeatVisit = [...state.sharedVisits.values()].find((item: any) => item.userId.startsWith('repeat-user-'));
     assert.equal(shortLivedAddress?.ipAddress, null);
     assert.equal([...state.sharedVisits.values()].filter((visit: any) => visit.ipHash === shortLivedAddress?.ipHash).length, 0);
     assert.equal(state.sharedIps.get(exemptVisit?.ipHash)?.ipAddress, '192.0.2.21');
     assert.equal(state.sharedIps.get(repeatVisit?.ipHash)?.ipAddress, '192.0.2.22');
-    assert.equal([...state.sharedVisits.values()].filter((visit: any) => visit.userId === 'repeat-user').length, 3);
-    assert.equal([...state.sharedVisits.values()].filter((visit: any) => visit.userId === 'exempt-user').length, 1);
+    assert.equal([...state.sharedVisits.values()].filter((visit: any) => visit.userId.startsWith('repeat-user-')).length, 3);
+    assert.equal([...state.sharedVisits.values()].filter((visit: any) => visit.userId.startsWith('exempt-user-')).length, 1);
   });
 
   it('lets an owner exempt a selected user from entry ads without affecting other ad flows', async () => {
@@ -1297,6 +1460,21 @@ describe('QuicK ReeLS API', () => {
   it('records a completed playback session separately from watch progress', async () => {
     const app = await createTestApp();
     apps.push(app);
+    let qualityWrites = 0;
+    const qualityModel = (app.prisma as any).playbackQualityEvent;
+    const createQualityEvent = qualityModel.create;
+    qualityModel.create = async (...args: any[]) => { qualityWrites += 1; return createQualityEvent(...args); };
+    for (const eventType of ['WAITING', 'DEFINITION_CHANGE']) {
+      const diagnostic = await app.inject({
+        method: 'POST',
+        url: '/api/v1/playback-quality-events',
+        headers: { authorization: `Bearer ${await token(app, 'user')}`, 'x-geo-country': 'US' },
+        payload: { episodeId: 'episode-1', sessionId: 'playback-session-0001', eventType, currentTimeMs: 10_000 }
+      });
+      assert.equal(diagnostic.statusCode, 200, diagnostic.body);
+      assert.deepEqual(diagnostic.json(), { accepted: true, dropped: true });
+    }
+    assert.equal(qualityWrites, 0);
     const response = await app.inject({
       method: 'POST',
       url: '/api/v1/playback-quality-events',
@@ -1305,6 +1483,7 @@ describe('QuicK ReeLS API', () => {
     });
     assert.equal(response.statusCode, 200);
     assert.equal(response.json().accepted, true);
+    assert.equal(qualityWrites, 1, 'episode completion telemetry remains persisted');
   });
 
   it('publishes component drafts and serves only the published version to the mini app', async () => {
@@ -1553,12 +1732,16 @@ describe('QuicK ReeLS API', () => {
     const started = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId: '2d734801-9f3d-4427-9d13-f893b2b9e8d0' } });
     const sessionId = started.json().sessionId as string;
     const firstId = '6bf5a3e1-9e6b-40ba-a4cc-d5c6f8b0e120';
+    const completionModel = (app.prisma as any).appEntryAdCompletion;
+    const createCompletion = completionModel.create;
+    let completionWrites = 0;
+    completionModel.create = async (args: unknown) => { completionWrites += 1; return createCompletion(args); };
     const first = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: firstId, adIndex: 1 } });
     assert.equal(first.statusCode, 200, first.body);
     assert.match(String(first.headers['server-timing']), /db;dur=/);
     assert.equal(first.json().completedCount, 1);
     assert.equal(first.json().shouldContinue, true);
-    const duplicate = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: firstId, adIndex: 1 } });
+    const duplicate = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: '4091907e-17c4-4999-9cbe-27f9a6876334', adIndex: 1 } });
     assert.equal(duplicate.statusCode, 200, duplicate.body);
     assert.equal(duplicate.json().completedCount, 1);
     const wrongIndex = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: '9ae88250-1f83-46af-a808-ade9742e9235', adIndex: 3 } });
@@ -1567,10 +1750,40 @@ describe('QuicK ReeLS API', () => {
     assert.equal(second.statusCode, 200, second.body);
     assert.equal(second.json().completedCount, 2);
     assert.equal(second.json().shouldContinue, false);
+    assert.equal(completionWrites, 0);
     assert.equal((await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } }))!.status, 'COMPLETED');
   });
 
-  it('allows only one concurrent shown acknowledgement to claim an ad index', async () => {
+  it('accepts legacy SHOWN-mode incomplete-close events without an extra completion lookup', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const headers = { authorization: `Bearer ${await token(app, 'user')}` };
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 1, countMode: 'SHOWN', onUnavailable: 'BLOCK' } });
+    const started = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId: '9051c9d2-26c0-4b83-bde1-38d5072e8864' } });
+    const sessionId = started.json().sessionId as string;
+    const shown = await app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: 'dbac9cca-8146-466a-894b-0417f11e8c60', adIndex: 1 } });
+    assert.equal(shown.statusCode, 200, shown.body);
+    assert.equal(shown.json().shouldContinue, false);
+
+    const completionModel = (app.prisma as any).appEntryAdCompletion;
+    const findUnique = completionModel.findUnique;
+    let completionLookups = 0;
+    completionModel.findUnique = async (...args: any[]) => {
+      completionLookups += 1;
+      return findUnique(...args);
+    };
+    const closed = await app.inject({ method: 'POST', url: '/api/v1/ad-events', headers, payload: {
+      clientEventId: 'b5d261a1-3876-43f0-ae57-5e02e76e89be', adType: 'REWARDED', scope: 'APP_ENTRY',
+      eventType: 'CLOSED_INCOMPLETE', placementId: 'entry-rewarded', sessionId, appEntrySessionId: sessionId, adIndex: 1
+    } });
+    assert.equal(closed.statusCode, 200, closed.body);
+    assert.deepEqual(closed.json(), { accepted: true, dropped: true });
+    assert.equal(completionLookups, 0);
+    await waitForSharedIpVisits();
+  });
+
+  it('treats concurrent shown acknowledgements for the same ad index as idempotent', async () => {
     const app = await createTestApp();
     apps.push(app);
     const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
@@ -1578,13 +1791,18 @@ describe('QuicK ReeLS API', () => {
     await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 2, countMode: 'SHOWN', onUnavailable: 'BLOCK' } });
     const started = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId: '4a9b10ba-cd5a-488c-bfeb-e836cd5f54bf' } });
     const sessionId = started.json().sessionId as string;
+    const completionModel = (app.prisma as any).appEntryAdCompletion;
+    const createCompletion = completionModel.create;
+    let completionWrites = 0;
+    completionModel.create = async (args: unknown) => { completionWrites += 1; return createCompletion(args); };
     const responses = await Promise.all([
       app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: '54d65cf1-59eb-488d-a965-2f6f4c513bde', adIndex: 1 } }),
       app.inject({ method: 'POST', url: `/api/v1/app-entry-ad-sessions/${sessionId}/shown`, headers, payload: { clientEventId: 'a4f2d4b1-4d8a-4817-a69c-c4ee4d5072fb', adIndex: 1 } })
     ]);
-    assert.deepEqual(responses.map((response) => response.statusCode).sort(), [200, 409]);
+    assert.deepEqual(responses.map((response) => response.statusCode).sort(), [200, 200]);
     assert.equal((await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } }))!.completedCount, 1);
-    assert.equal(await (app.prisma as any).adEvent.count(), 1);
+    assert.equal(await (app.prisma as any).adEvent.count(), 0);
+    assert.equal(completionWrites, 0);
   });
 
   it('counts three closed entry ads in shown mode and preserves the session policy snapshot', async () => {
@@ -1639,6 +1857,31 @@ describe('QuicK ReeLS API', () => {
     assert.equal(completed.json().completedCount, 1);
     const afterCompletion = await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } });
     assert.ok(afterCompletion!.expiresAt.getTime() > Date.now() + 14 * 60 * 1000);
+  });
+
+  it('coalesces concurrent starts for the same app-entry launch', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders, payload: { enabled: true, mode: 'REWARDED_GATED', placementId: 'entry-rewarded', requiredCount: 2, countMode: 'SHOWN', onUnavailable: 'BLOCK' } });
+    const headers = { authorization: `Bearer ${await token(app, 'user')}` };
+    const launchId = '8f1bf9e1-4a5e-4aa0-83b2-96557dc96f11';
+    const sessionModel = app.prisma.appEntryAdSession as any;
+    const findUnique = sessionModel.findUnique.bind(sessionModel);
+    let sessionReads = 0;
+    sessionModel.findUnique = async (...args: any[]) => {
+      sessionReads += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return findUnique(...args);
+    };
+
+    const responses = await Promise.all(Array.from({ length: 8 }, () => app.inject({
+      method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers, payload: { launchId }
+    })));
+
+    assert.deepEqual(responses.map((response) => response.statusCode), Array(8).fill(200));
+    assert.equal(new Set(responses.map((response) => response.json().sessionId)).size, 1);
+    assert.equal(sessionReads, 1);
   });
 
   it('does not rewrite an entry session for failure telemetry while it is still fresh', async () => {

@@ -23,11 +23,24 @@ const duplicateWindowMs = 30_000;
 const maxDiagnosticKeys = 10_000;
 const recentDiagnosticKeys = new Map<string, number>();
 
+function isClientAdDiagnostic(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && (value as { kind?: unknown }).kind === 'AD';
+}
+
+function pruneDiagnosticKeys(now: number) {
+  // Map insertion order is chronological because expired keys are removed
+  // before they are re-added. Stop at the first live key to avoid an O(n)
+  // sweep for every telemetry request.
+  while (true) {
+    const first = recentDiagnosticKeys.entries().next().value as [string, number] | undefined;
+    if (!first || now - first[1] < duplicateWindowMs) return;
+    recentDiagnosticKeys.delete(first[0]);
+  }
+}
+
 function shouldPersistDiagnostic(app: FastifyInstance, body: z.infer<typeof diagnosticInput>, message: string, path?: string) {
   const now = Date.now();
-  for (const [key, seenAt] of recentDiagnosticKeys) {
-    if (now - seenAt >= duplicateWindowMs) recentDiagnosticKeys.delete(key);
-  }
+  pruneDiagnosticKeys(now);
   const miniAppKey = (app as FastifyInstance & { config?: { MINI_APP_KEY?: string } }).config?.MINI_APP_KEY ?? 'unknown';
   const key = [miniAppKey, body.releaseId, body.kind, body.phase, message, path ?? '', body.statusCode ?? ''].join('\u001f');
   const seenAt = recentDiagnosticKeys.get(key);
@@ -46,6 +59,12 @@ export async function registerDiagnosticRoutes(app: FastifyInstance) {
     bodyLimit: 4096,
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } }
   }, async (request, reply) => {
+    // AD diagnostics are explicitly non-persistent by default. Check the
+    // discriminator before parsing/redacting the payload so SDK error storms
+    // spend only the cost of the request acknowledgement.
+    if (app.rootConfig.PERSIST_CLIENT_AD_DIAGNOSTICS !== true && isClientAdDiagnostic(request.body)) {
+      return reply.code(202).send({ accepted: true, dropped: true });
+    }
     const body = diagnosticInput.parse(request.body);
     const message = redactDiagnostic(body.message);
     const path = body.path?.split(/[?#]/, 1)[0];

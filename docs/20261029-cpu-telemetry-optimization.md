@@ -49,3 +49,13 @@
 - `/ready`、主应用、HeartReel、SweetReel、StoryFlicks、DramaFlicks 首页均 HTTP 200。管理后台、PostgreSQL、PgBouncer 容器没有被重建；HeartReel、SweetReel 入口策略哈希不变。
 - 部署后 60 秒数据库增量：HeartReel/SweetReel `AdEvent` 与 `AppEntryAdSession` 均为 `seq_scans=0`，即本窗口未发生全表扫描。API 三次采样约 97.6%、80.7%、91.8%；PostgreSQL 约 34.2%、19.1%、24.5%；Worker 约 0%。
 - 部署后 90 秒 API 日志抽样没有 5xx；HTTP 401/409 主要是无授权、过期 JWT 和不可用的旧入口会话。API CPU 仍偏高，表明剩余压力来自持续的小程序请求量及同机网站容器，需继续按路由和客户端版本治理，不能把本次改动当作扩容替代品。
+
+## 2026-10-29 后端写入与连接压力优化（本地已完成，待受控部署）
+
+- Shared IP 访问记录不再先 `SELECT` 再 `INSERT`；使用现有 `idempotencyKey` 主键的 `INSERT ... ON CONFLICT DO NOTHING`，只有真正新增的访问才更新地址和计数。
+- Shared IP 队列增加按 Prisma 实例隔离的 5 分钟短期完成缓存，吸收同一客户端会话的重复重试；数据库主键仍是跨 API 实例和重启后的最终幂等保障。
+- `SHOWN` 入口广告正常路径移除一次重复的完成记录查询；顺序冲突、重复广告序号和权限校验仍走原有数据库校验。
+- 当 `PERSIST_CLIENT_AD_DIAGNOSTICS` 未启用时，合法的 `FAILED` 广告事件跳过 JWT 校验并直接返回兼容响应；奖励完成、入口计数和会话权限不受影响。
+- 管理后台统计缓存默认 TTL 从 15 秒延长到 60 秒，并继续合并相同缓存键的并发查询；健康概览保持 60 秒缓存。
+
+本地验收：API lint、API build、API 全量测试均通过（226 通过、0 失败、1 个 PostgreSQL 专项测试跳过）。本节修改尚未部署到生产，部署时只替换 API 镜像并保留旧镜像回滚点；不修改前端包、生产策略、Worker、管理后台、PostgreSQL 或 PgBouncer。

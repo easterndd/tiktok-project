@@ -4,17 +4,25 @@ import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
 import { miniAppAdConfig } from '../../config/mini-apps';
 import { measureDatabase } from '../../lib/request-performance';
+import { singleFlight } from '../../lib/single-flight';
 import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { requestCountry } from '../../lib/content-visibility';
 
 const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
+const policyCacheTtlMs = 5_000;
 const releaseIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default');
 const startInput = z.object({ launchId: z.string().uuid(), releaseId: releaseIdSchema, adId: z.string().trim().max(128).nullable().optional() });
 const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.boolean() });
 const shownInput = z.object({ clientEventId: z.string().uuid(), adIndex: z.number().int().positive() });
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
+
+type PolicyRecord = Awaited<ReturnType<FastifyInstance['prisma']['appEntryAdPolicy']['findUnique']>>;
+type PolicyValue = NonNullable<PolicyRecord> | ReturnType<typeof disabledPolicy>;
+type PolicyCacheEntry = { policy: PolicyValue; saved: PolicyRecord; expiresAt: number };
+
+const policyCache = new WeakMap<FastifyInstance, Map<string, PolicyCacheEntry>>();
 
 function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
   const placements = miniAppAdConfig(app.config);
@@ -58,9 +66,38 @@ function sessionResponse(session: { id: string; mode: 'INTERSTITIAL' | 'REWARDED
   };
 }
 
+function getPolicyCache(app: FastifyInstance) {
+  let cache = policyCache.get(app);
+  if (!cache) {
+    cache = new Map();
+    policyCache.set(app, cache);
+  }
+  return cache;
+}
+
+function setPolicyCache(app: FastifyInstance, releaseId: string, policy: PolicyValue, saved: PolicyRecord) {
+  getPolicyCache(app).set(releaseId, { policy, saved, expiresAt: Date.now() + policyCacheTtlMs });
+}
+
+export function invalidateAppEntryAdPolicyCache(app: FastifyInstance, releaseId?: string) {
+  const cache = policyCache.get(app);
+  if (!cache) return;
+  if (releaseId) cache.delete(releaseId);
+  else cache.clear();
+}
+
+async function readAppEntryAdPolicyRecord(app: FastifyInstance, releaseId = 'default') {
+  const cached = getPolicyCache(app).get(releaseId);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+
+  const saved = await app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } });
+  const policy = saved ?? disabledPolicy(app, releaseId);
+  setPolicyCache(app, releaseId, policy, saved);
+  return { policy, saved, expiresAt: Date.now() + policyCacheTtlMs };
+}
+
 export async function readAppEntryAdPolicy(app: FastifyInstance, releaseId = 'default') {
-  return await app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } })
-    ?? disabledPolicy(app, releaseId);
+  return (await readAppEntryAdPolicyRecord(app, releaseId)).policy;
 }
 
 export async function readExitRetentionConfig(app: FastifyInstance, releaseId: string, userId: string, ip: string) {
@@ -110,6 +147,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
       secret: app.rootConfig.JWT_SECRET
     }, (error) => request.log.warn({ err: error }, 'Shared IP visit could not be recorded'));
+    return singleFlight(app, `entry-session:${request.user.sub}:${request.ip}:${releaseId}:${launchId}:${JSON.stringify(adId)}`, async () => {
     if (app.rootConfig.ENTRY_AD_ATTRIBUTION_GATE_ENABLED) {
       let attribution;
       if (adId !== undefined) {
@@ -123,17 +161,22 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       }
       if (attribution.status !== 'ATTRIBUTED') return { required: false as const };
     }
-    const saved = await measureDatabase(request, () => app.prisma.appEntryAdPolicy.findUnique({ where: { releaseId } }));
-    let policy = saved ?? disabledPolicy(app, releaseId);
+    const loadedPolicy = await measureDatabase(request, () => readAppEntryAdPolicyRecord(app, releaseId));
+    let saved = loadedPolicy.saved;
+    let policy = loadedPolicy.policy;
     if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
       try {
         policy = await measureDatabase(request, () => app.prisma.appEntryAdPolicy.create({ data: { ...disabledPolicy(app, releaseId), firstSeenAt: new Date() } }));
+        invalidateAppEntryAdPolicyCache(app, releaseId);
       } catch (error) {
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
         policy = await measureDatabase(request, () => readAppEntryAdPolicy(app, releaseId));
       }
     }
-    if (saved && !saved.firstSeenAt) await measureDatabase(request, () => app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } }));
+    if (saved && !saved.firstSeenAt) {
+      await measureDatabase(request, () => app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } }));
+      invalidateAppEntryAdPolicyCache(app, releaseId);
+    }
     if (!policy.enabled) return { required: false as const };
     const [ipExempt, viewer] = await Promise.all([
       measureDatabase(request, () => isEntryAdIpExempt(app.sharedPrisma, request.ip)).catch((error) => {
@@ -188,6 +231,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       if (!session) throw error;
     }
     return sessionResponse(session, policy.onUnavailable);
+    });
   });
 
   app.post('/app-entry-ad-sessions/:sessionId/complete', {
@@ -247,16 +291,23 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       await tx.appEntryAdSession.update({ where: { id: sessionId }, data: { completedCount, status, expiresAt: new Date(Date.now() + sessionTtlMs) } });
       return { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE', retryCurrent: false };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-    let result: Awaited<ReturnType<typeof transact>> | undefined;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      try {
-        result = await measureDatabase(request, transact);
-        break;
-      } catch (error) {
-        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt === 4) throw error;
-        await new Promise((resolve) => setTimeout(resolve, Math.min(200, 25 * 2 ** attempt)));
+    const result = await measureDatabase(request, () => singleFlight(
+      app,
+      `entry-complete:${request.user.sub}:${sessionId}:${clientEventId}:${isEnded}`,
+      async () => {
+        let transactionResult: Awaited<ReturnType<typeof transact>> | undefined;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            transactionResult = await transact();
+            break;
+          } catch (error) {
+            if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt === 4) throw error;
+            await new Promise((resolve) => setTimeout(resolve, Math.min(200, 25 * 2 ** attempt)));
+          }
+        }
+        return transactionResult;
       }
-    }
+    ));
 
     if (!result) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
     if ('retryShownAcknowledgement' in result) {
@@ -270,38 +321,23 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 60, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request, reply) => {
     const { sessionId } = sessionParams.parse(request.params);
-    const { clientEventId, adIndex } = shownInput.parse(request.body);
-    // SHOWN acknowledgements are the high-volume path. Claim the counter with
-    // one guarded UPDATE first, then persist audit rows independently. Holding
-    // an interactive transaction while clients compete for a small pool caused
-    // P2028 transaction-start timeouts and amplified client retries.
+    const { adIndex } = shownInput.parse(request.body);
+    // The ordered session counter is the durable idempotency record for SHOWN
+    // mode, so avoid a second completion row for every impression.
     const session = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } }));
     if (!session || session.userId !== request.user.sub) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
     if (session.countMode !== 'SHOWN') return reply.code(409).send({ error: { code: 'COUNT_MODE_MISMATCH', message: 'This entry-ad session does not count impressions.', requestId: request.id } });
     const now = new Date();
     const canAdvance = session.status === 'ACTIVE' && session.expiresAt > now && adIndex <= session.requiredCount;
     const isNextIndex = adIndex === session.completedCount + 1;
-    const findExisting = () => measureDatabase(request, () => app.prisma.appEntryAdCompletion.findFirst({
-      where: { sessionId, OR: [{ clientEventId }, { adIndex }] },
-      select: { clientEventId: true, adIndex: true }
-    }));
     const readCurrent = () => measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } }));
     if (!canAdvance || !isNextIndex) {
-      const existing = await findExisting();
-      if (existing) {
-        if (existing.clientEventId !== clientEventId || existing.adIndex !== adIndex) return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
-        const current = await readCurrent();
-        if (!current || current.userId !== request.user.sub) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
-        const shouldContinue = current.status === 'ACTIVE' && current.completedCount < current.requiredCount;
-        return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue, access: shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
+      if (adIndex <= session.completedCount) {
+        const shouldContinue = session.status === 'ACTIVE' && session.completedCount < session.requiredCount;
+        return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue, access: shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
       }
       if (canAdvance && !isNextIndex) return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
       return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
-    }
-    const adType = session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' as const : 'REWARDED' as const;
-    const event = await measureDatabase(request, () => app.prisma.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } }));
-    if (event && (event.eventType !== 'SHOWN' || event.scope !== 'APP_ENTRY' || event.adType !== adType || event.placementId !== session.placementId || event.sessionId !== sessionId || event.appEntrySessionId !== sessionId || event.adIndex !== adIndex)) {
-      return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
     }
     const completedCount = adIndex;
     const status = completedCount >= session.requiredCount ? 'COMPLETED' as const : 'ACTIVE' as const;
@@ -318,29 +354,13 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       data: { completedCount, status, expiresAt: new Date(now.getTime() + sessionTtlMs) }
     }));
     if (!advanced.count) {
-      const existing = await findExisting();
-      if (existing) {
-        if (existing.clientEventId !== clientEventId || existing.adIndex !== adIndex) return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
-        const current = await readCurrent();
-        if (!current || current.userId !== request.user.sub) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
+      const current = await readCurrent();
+      if (!current || current.userId !== request.user.sub) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
+      if (current.completedCount >= adIndex) {
         const shouldContinue = current.status === 'ACTIVE' && current.completedCount < current.requiredCount;
         return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue, access: shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
       }
       return reply.code(409).send({ error: { code: 'AD_INDEX_CONFLICT', message: 'This ad index was already acknowledged.', requestId: request.id } });
-    }
-    let persistedEvent = event;
-    try {
-      if (!persistedEvent) {
-        persistedEvent = await measureDatabase(request, () => app.prisma.adEvent.create({ data: {
-          userId: request.user.sub, clientEventId, adType, scope: 'APP_ENTRY', eventType: 'SHOWN',
-          placementId: session.placementId, sessionId, appEntrySessionId: sessionId, adIndex
-        } }));
-      }
-      await measureDatabase(request, () => app.prisma.appEntryAdCompletion.create({ data: { sessionId, clientEventId, adIndex, adEventId: persistedEvent!.id } }));
-    } catch (error) {
-      // The counter claim is durable and idempotent. Keep the ad gate moving if
-      // a best-effort telemetry insert loses a race or times out.
-      request.log.warn({ err: error, sessionId, adIndex }, 'Entry ad shown telemetry could not be persisted');
     }
     const result = { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE' };
     return { ...result, access: result.shouldContinue ? 'ENTRY_AD_REQUIRED' as const : 'APP_PLAYABLE' as const };
