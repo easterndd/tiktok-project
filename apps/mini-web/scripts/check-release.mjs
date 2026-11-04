@@ -4,7 +4,8 @@ import { basename, join } from 'node:path';
 
 const root = join(process.cwd(), 'dist');
 const appKey = basename(process.cwd());
-if (existsSync('.env') && typeof process.loadEnvFile === 'function') process.loadEnvFile('.env');
+const envFile = existsSync('.env.production') ? '.env.production' : '.env';
+if (existsSync(envFile) && typeof process.loadEnvFile === 'function') process.loadEnvFile(envFile);
 const failures = [];
 const apiBaseUrl = process.env.VITE_API_BASE_URL;
 const clientKey = process.env.VITE_TIKTOK_CLIENT_KEY;

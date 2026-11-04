@@ -15,6 +15,8 @@ export const taletvLegalContactEmail = 'SAGATHIYA@voisky.com';
 export const newMiniAppLegalContactEmail = 'caijiarong2@xuyins.com';
 export const breezeLegalContactEmail = 'caijiarong@xuyins.com';
 export const newbeatLegalContactEmail = 'caijiarong2@xuyins.com';
+export const augustLaneLegalContactEmail = 'caijiarong2@xuyins.com';
+export const wowoLeziLegalContactEmail = 'caijiarong2@xuyins.com';
 const newMiniAppNames = {
   cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel',
   dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox',
@@ -26,14 +28,20 @@ const newMiniAppNames = {
   lucidreel: 'LucidReel', astraclip: 'AstraClip', lumoreel: 'LumoReel', orbitplay: 'OrbitPlay',
   zenclip: 'ZenClip', auraclip: 'AuraClip', fluxplay: 'FluxPlay', driftreel: 'DriftReel',
   novaclip: 'NovaClip', lumishort: 'LumiShort', sonicreel: 'SonicReel',
-  harborplay: 'HarborPlay', dazzleshort: 'DazzleShort', fableclip: 'FableClip', emberreel: 'EmberReel'
+  harborplay: 'HarborPlay', dazzleshort: 'DazzleShort', fableclip: 'FableClip', emberreel: 'EmberReel',
+  bloomreel: 'BloomReel', quillshort: 'QuillShort', amberplay: 'AmberPlay',
+  nimbusclip: 'NimbusClip', runereel: 'RuneReel',
+  riftsaga: 'RiftSaga', haloflicks: 'HaloFlicks', threadtale: 'ThreadTale',
+  fablevibe: 'FableVibe', wispreel: 'WispReel', yalareels: 'YalaReels'
 } as const;
 export const breezeApps = ['crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama', 'sonicreel', 'harborplay', 'dazzleshort', 'fableclip', 'emberreel'] as const;
 export const newbeatApps = ['lucidreel', 'astraclip', 'lumoreel', 'orbitplay', 'zenclip', 'auraclip', 'fluxplay', 'driftreel', 'novaclip', 'lumishort'] as const;
-type LegalApp = 'quickreels' | 'taletv' | keyof typeof newMiniAppNames;
+export const augustLaneApps = ['bloomreel', 'quillshort', 'amberplay', 'nimbusclip', 'runereel'] as const;
+export const wowoLeziApps = ['riftsaga', 'haloflicks', 'threadtale', 'fablevibe', 'wispreel', 'yalareels'] as const;
+type LegalApp = 'quickreels' | 'quartzplay' | 'taletv' | keyof typeof newMiniAppNames;
 
 export function legalContactForApp(app: LegalApp) {
-  return app === 'taletv' ? taletvLegalContactEmail : app === 'quickreels' ? legalContactEmail : breezeApps.includes(app as typeof breezeApps[number]) ? breezeLegalContactEmail : newbeatApps.includes(app as typeof newbeatApps[number]) ? newbeatLegalContactEmail : newMiniAppLegalContactEmail;
+  return app === 'taletv' ? taletvLegalContactEmail : app === 'quickreels' || app === 'quartzplay' ? legalContactEmail : breezeApps.includes(app as typeof breezeApps[number]) ? breezeLegalContactEmail : newbeatApps.includes(app as typeof newbeatApps[number]) ? newbeatLegalContactEmail : augustLaneApps.includes(app as typeof augustLaneApps[number]) ? augustLaneLegalContactEmail : wowoLeziApps.includes(app as typeof wowoLeziApps[number]) ? wowoLeziLegalContactEmail : newMiniAppLegalContactEmail;
 }
 
 const companyDetails = `<dl class="detail-list">
@@ -170,6 +178,25 @@ export const legalDocuments: Record<LegalDocumentType, LegalDocument> = {
   }
 };
 
+function evergreenLegalDocument(source: LegalDocument): LegalDocument {
+  const generic = (html: string) => html
+    .replaceAll('a QuicK ReeLS account', 'a separate account')
+    .replaceAll('QuicK ReeLS Privacy Policy', 'Privacy Policy')
+    .replaceAll('QuicK ReeLS', 'the Service')
+    .replaceAll('<p class="policy-copy">the Service', '<p class="policy-copy">The Service')
+    .replaceAll('<p>the Service', '<p>The Service')
+    .replaceAll('September 15, 2026', 'November 2, 2026');
+  return {
+    ...source,
+    title: source.eyebrow,
+    introHtml: source.eyebrow === 'Privacy Policy'
+      ? '<p>This Privacy Policy explains how evergreenprosper (&quot;we,&quot; &quot;us,&quot; or &quot;our&quot;) collects, uses, stores, and shares information when you use the short-drama TikTok Minis we operate (the &quot;Service&quot;).</p><p>This Policy applies across those Minis and does not replace TikTok\'s own terms or privacy notices.</p>'
+      : '<p>These Terms of Service govern your use of short-drama TikTok Minis operated by evergreenprosper (the &quot;Service&quot;). By using the Service, you agree to these Terms and our Privacy Policy.</p><p>If you do not agree to these Terms, do not use the Service.</p>',
+    metaHtml: generic(source.metaHtml),
+    contentHtml: generic(source.contentHtml)
+  };
+}
+
 function sagathiyaLegalDocument(source: LegalDocument, brand: string, contactEmail: string): LegalDocument {
   const forApp = (html: string) => html
     .replaceAll('QuicK ReeLS', brand)
@@ -195,12 +222,79 @@ function sagathiyaLegalDocument(source: LegalDocument, brand: string, contactEma
 
 export function legalDocumentForApp(type: LegalDocumentType, app: LegalApp): LegalDocument {
   const source = legalDocuments[type];
-  if (app === 'quickreels') return source;
+  if (app === 'quickreels' || app === 'quartzplay') return evergreenLegalDocument(source);
   if (app === 'taletv') return sagathiyaLegalDocument(source, 'TaleTV', taletvLegalContactEmail);
   const brand = newMiniAppNames[app];
   if (breezeApps.includes(app as typeof breezeApps[number])) return breezeLegalDocuments[type];
   if (newbeatApps.includes(app as typeof newbeatApps[number])) return newbeatLegalDocument(type);
+  if (augustLaneApps.includes(app as typeof augustLaneApps[number])) return augustLaneLegalDocuments[type];
+  if (wowoLeziApps.includes(app as typeof wowoLeziApps[number])) return wowoLeziLegalDocument(type);
   return sagathiyaLegalDocument(source, brand, newMiniAppLegalContactEmail);
+}
+
+const augustLaneCompanyDetails = `<dl class="detail-list">
+<div><dt>Operator</dt><dd>AUGUST LANE MEDIA LIMITED</dd></div>
+<div><dt>Chinese legal name</dt><dd>八月里傳媒有限公司</dd></div>
+<div><dt>Business registration no.</dt><dd>8130888900009268</dd></div>
+<div><dt>Registered address</dt><dd>Unit 903, 9/F., Cameron Commercial Centre, 458-468 Hennessy Road, Causeway Bay, Hong Kong 999077</dd></div>
+<div><dt>Contact email</dt><dd><a href="mailto:${augustLaneLegalContactEmail}">${augustLaneLegalContactEmail}</a></dd></div>
+</dl>`;
+
+const augustLaneLegalDocuments: Record<LegalDocumentType, LegalDocument> = {
+  privacy: {
+    eyebrow: 'Privacy Policy',
+    title: 'Privacy Policy',
+    introHtml: '<p>This Privacy Policy explains how AUGUST LANE MEDIA LIMITED ("we", "us", or "our") processes personal information when you use our short-drama services through TikTok Minis (the "Service"). It applies to BloomReel, QuillShort, AmberPlay, NimbusClip, and RuneReel.</p><p>TikTok and other providers may process information independently under their own notices.</p>',
+    marketsHtml: '<span class="market-chip">TikTok Minis</span><span class="market-chip">Short-drama service</span>',
+    metaHtml: '<div><dt>Last Updated</dt><dd>November 3, 2026</dd></div><div><dt>Effective Date</dt><dd>November 3, 2026</dd></div><div><dt>Controller</dt><dd>AUGUST LANE MEDIA LIMITED, Hong Kong</dd></div>',
+    tocHtml: '<a href="#section-1"><span>1</span> Operator</a><a href="#section-2"><span>2</span> Information We Process</a><a href="#section-3"><span>3</span> Purposes</a><a href="#section-4"><span>4</span> Sharing and Transfers</a><a href="#section-5"><span>5</span> Retention and Security</a><a href="#section-6"><span>6</span> Your Rights</a><a href="#section-7"><span>7</span> Children</a><a href="#section-8"><span>8</span> Changes and Contact</a>',
+    contentHtml: `<section id="section-1" class="policy-section"><h2><span>1</span> Operator</h2><p>AUGUST LANE MEDIA LIMITED determines how and why personal information is processed for the Service.</p>${augustLaneCompanyDetails}</section>
+<section id="section-2" class="policy-section"><h2><span>2</span> Information We Process</h2><p>Depending on the Mini and features used, we may process a locally generated anonymous identifier; a TikTok-provided identifier or authorization data if platform sign-in is used; viewing history, playback progress, favorites, preferences and episode unlock records; advertisement requests, display, completion and error signals; IP address, approximate country, device and network information, logs, diagnostics, launch and attribution parameters, and information you send when contacting us. We do not require a separate Service password or payment-card details to watch short dramas. TikTok and advertising providers may process information under their own notices.</p></section>
+<section id="section-3" class="policy-section"><h2><span>3</span> Purposes</h2><p>We process this information to deliver playback, remember progress and unlock status, operate advertising-supported access, verify rewards, secure the Service, prevent abuse, measure entry sources, diagnose errors, respond to requests and comply with law. Where required, processing relies on contract, legitimate interests, legal obligations or consent as applicable.</p></section>
+<section id="section-4" class="policy-section"><h2><span>4</span> Sharing and Transfers</h2><p>We may share information with TikTok, video delivery, hosting, advertising, security and support providers, authorized personnel, or authorities where required by law. We do not sell personal information for money. Our application hosting may process data in the United States; providers may process data in other jurisdictions. We use safeguards where required by law.</p></section>
+<section id="section-5" class="policy-section"><h2><span>5</span> Retention and Security</h2><p>We remove raw IP addresses from app-session records after 30 days; country-level session data may remain for reporting. Other information is retained only as reasonably necessary for service operation, security, dispute resolution and legal obligations. We apply reasonable safeguards, but no online service is completely secure.</p></section>
+<section id="section-6" class="policy-section"><h2><span>6</span> Your Rights</h2><p>Depending on applicable law, you may request access, correction, deletion, restriction, portability or object to processing. Contact us using the address below. We may need to verify your request. Clearing local Mini storage does not by itself delete server records.</p></section>
+<section id="section-7" class="policy-section"><h2><span>7</span> Children</h2><p>The Service is subject to TikTok's age requirements and applicable law. Contact us if you believe a child has provided information contrary to applicable law.</p></section>
+<section id="section-8" class="policy-section"><h2><span>8</span> Changes and Contact</h2><p>We may update this Policy and publish a new effective date. For privacy questions and requests, contact:</p>${augustLaneCompanyDetails}</section>`
+  },
+  terms: {
+    eyebrow: 'Terms of Service',
+    title: 'Terms of Service',
+    introHtml: '<p>These Terms govern the short-drama TikTok Minis operated by AUGUST LANE MEDIA LIMITED (the "Service"), including BloomReel, QuillShort, AmberPlay, NimbusClip, and RuneReel. By using the Service, you agree to these Terms and our Privacy Policy.</p>',
+    marketsHtml: '<span class="market-chip">TikTok Minis</span><span class="market-chip">Ad-supported access</span>',
+    metaHtml: '<div><dt>Last Updated</dt><dd>November 3, 2026</dd></div><div><dt>Effective Date</dt><dd>November 3, 2026</dd></div><div><dt>Operator</dt><dd>AUGUST LANE MEDIA LIMITED</dd></div><div><dt>Governing Law</dt><dd>Hong Kong, subject to mandatory local law</dd></div>',
+    tocHtml: '<a href="#section-1"><span>1</span> The Service</a><a href="#section-2"><span>2</span> Eligibility</a><a href="#section-3"><span>3</span> Advertising</a><a href="#section-4"><span>4</span> Content and Conduct</a><a href="#section-5"><span>5</span> Availability</a><a href="#section-6"><span>6</span> Third Parties</a><a href="#section-7"><span>7</span> Liability</a><a href="#section-8"><span>8</span> Privacy and Changes</a><a href="#section-9"><span>9</span> Law and Contact</a>',
+    contentHtml: `<section id="section-1" class="policy-section"><h2><span>1</span> The Service</h2><p>We offer short-drama discovery and playback through TikTok Minis. Titles and features may vary by region, license and platform. These Terms apply to Minis operated by AUGUST LANE MEDIA LIMITED.</p></section>
+<section id="section-2" class="policy-section"><h2><span>2</span> Eligibility</h2><p>You must meet TikTok's age and account requirements and comply with applicable law. Do not use the Service where prohibited.</p></section>
+<section id="section-3" class="policy-section"><h2><span>3</span> Advertising</h2><p>Where enabled, advertisements may appear before or during viewing, and some episodes may require completion of a rewarded advertisement. Availability and eligibility vary. Completing an advertisement does not transfer ownership of content or guarantee permanent access if rights change. The Service currently does not offer direct purchases or subscriptions.</p></section>
+<section id="section-4" class="policy-section"><h2><span>4</span> Content and Conduct</h2><p>Content and the Service are protected by intellectual-property rights. You receive a limited, personal, non-commercial right to use the Service. Do not copy, redistribute, bypass locks or ad verification, automate impressions, interfere with security or reverse engineer except where law permits.</p></section>
+<section id="section-5" class="policy-section"><h2><span>5</span> Availability</h2><p>We may modify, restrict or discontinue content or features for licensing, security, legal, operational or platform reasons, with notice where required by law.</p></section>
+<section id="section-6" class="policy-section"><h2><span>6</span> Third Parties</h2><p>The Service relies on TikTok and third-party hosting, video and advertising services. Their own terms may apply.</p></section>
+<section id="section-7" class="policy-section"><h2><span>7</span> Liability</h2><p>We use reasonable care but cannot guarantee uninterrupted availability or that each title or advertisement will be available. Nothing excludes rights or liabilities that cannot lawfully be excluded.</p></section>
+<section id="section-8" class="policy-section"><h2><span>8</span> Privacy and Changes</h2><p>Our Privacy Policy explains how we process information. We may update these Terms and publish the effective date. Material changes will be handled as required by law.</p></section>
+<section id="section-9" class="policy-section"><h2><span>9</span> Law and Contact</h2><p>These Terms are governed by Hong Kong law, subject to mandatory protections where you live. Contact us first to try to resolve a dispute. Nothing removes a right to bring a claim in a competent forum where applicable law grants it.</p>${augustLaneCompanyDetails}</section>`
+  }
+};
+
+const wowoLeziCompanyDetails = `<dl class="detail-list">
+<div><dt>Operator</dt><dd>WOWO LEZI CULTURE MEDIA (HONG KONG) LIMITED</dd></div>
+<div><dt>Contact email</dt><dd><a href="mailto:${wowoLeziLegalContactEmail}">${wowoLeziLegalContactEmail}</a></dd></div>
+</dl>`;
+
+function wowoLeziLegalDocument(type: LegalDocumentType): LegalDocument {
+  const source = augustLaneLegalDocuments[type];
+  const adapt = (html: string) => html
+    .replaceAll(augustLaneCompanyDetails, wowoLeziCompanyDetails)
+    .replaceAll('AUGUST LANE MEDIA LIMITED', 'WOWO LEZI CULTURE MEDIA (HONG KONG) LIMITED')
+    .replaceAll('BloomReel, QuillShort, AmberPlay, NimbusClip, and RuneReel', 'RiftSaga, HaloFlicks, ThreadTale, FableVibe, WispReel, and YalaReels')
+    .replaceAll('Hong Kong, subject to mandatory local law', 'Applicable law')
+    .replaceAll('These Terms are governed by Hong Kong law, subject to mandatory protections where you live.', 'These Terms are subject to applicable law, including mandatory protections where you live.');
+  return {
+    ...source,
+    introHtml: adapt(source.introHtml),
+    metaHtml: adapt(source.metaHtml),
+    contentHtml: adapt(source.contentHtml)
+  };
 }
 
 const breezeCompanyDetails = `<dl class="detail-list">

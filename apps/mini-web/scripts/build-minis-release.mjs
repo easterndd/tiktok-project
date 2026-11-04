@@ -4,7 +4,7 @@ import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const appRoot = process.cwd();
-const appKey = basename(appRoot);
+const appKey = basename(appRoot) === 'mini-web' ? 'main' : basename(appRoot);
 if (!/^[a-z][a-z0-9-]*$/.test(appKey)) throw new Error('Invalid mini app directory name.');
 
 const builtAt = new Date();

@@ -11,6 +11,7 @@ const enableMockFallback = import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
 function shouldMeasureRequest(path: string) {
   const route = path.split('?', 1)[0];
   return route === '/home'
+    || route === '/home/progress'
     || route === '/auth/anonymous/session'
     || route === '/app-entry-ad-sessions'
     || /^\/app-entry-ad-sessions\/[^/]+\/complete$/.test(route)
@@ -44,7 +45,7 @@ export class ApiError extends Error {
 }
 
 class ApiClient {
-  async request<T>(path: string, options: RequestInit = {}, retried = false): Promise<T> {
+  async request<T>(path: string, options: RequestInit = {}, retried = false, authenticate = true): Promise<T> {
     const method = options.method ?? 'GET';
     const parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
     if (useMockApi) return mockApiRequest<T>({ method, path, body: parsedBody });
@@ -64,23 +65,23 @@ class ApiClient {
         headers: {
           Accept: 'application/json',
           ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(authenticate && token ? { Authorization: `Bearer ${token}` } : {}),
           ...options.headers
         }
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null) as ApiErrorResponse | null;
-        if (response.status === 401 && !retried && !path.startsWith('/auth/') && unauthorizedHandler) {
+        if (authenticate && response.status === 401 && !retried && !path.startsWith('/auth/') && unauthorizedHandler) {
           pendingUnauthorizedRecovery ??= unauthorizedHandler().finally(() => { pendingUnauthorizedRecovery = null; });
           await pendingUnauthorizedRecovery;
-          return this.request<T>(path, options, true);
+          return this.request<T>(path, options, true, authenticate);
         }
         throw new ApiError(
           body?.error.message ?? 'The request could not be completed.',
           response.status,
           body?.error.code,
           body?.error.requestId,
-          response.status === 429 ? parseRetryAfter(response.headers.get('Retry-After')) : undefined
+          response.status === 429 || response.status === 503 ? parseRetryAfter(response.headers.get('Retry-After')) : undefined
         );
       }
       const data = response.status === 204 ? undefined as T : await response.json() as T;
@@ -108,6 +109,7 @@ class ApiClient {
   }
 
   get<T>(path: string) { return this.request<T>(path); }
+  getPublic<T>(path: string) { return this.request<T>(path, {}, false, false); }
   post<T>(path: string, body: unknown) { return this.request<T>(path, { method: 'POST', body: JSON.stringify(body) }); }
   put<T>(path: string, body: unknown) { return this.request<T>(path, { method: 'PUT', body: JSON.stringify(body) }); }
   patch<T>(path: string, body: unknown) { return this.request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }); }

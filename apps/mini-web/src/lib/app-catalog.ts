@@ -1,4 +1,5 @@
 export const newMiniApps = {
+  quartzplay: 'QuartzPlay',
   cinereels: 'CineReels', talereels: 'TaleReels',
   storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel',
   dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault',
@@ -13,7 +14,11 @@ export const newMiniApps = {
   zenclip: 'ZenClip', auraclip: 'AuraClip', fluxplay: 'FluxPlay', driftreel: 'DriftReel',
   novaclip: 'NovaClip', lumishort: 'LumiShort',
   sonicreel: 'SonicReel', harborplay: 'HarborPlay', dazzleshort: 'DazzleShort',
-  fableclip: 'FableClip', emberreel: 'EmberReel'
+  fableclip: 'FableClip', emberreel: 'EmberReel',
+  bloomreel: 'BloomReel', quillshort: 'QuillShort', amberplay: 'AmberPlay',
+  nimbusclip: 'NimbusClip', runereel: 'RuneReel',
+  riftsaga: 'RiftSaga', haloflicks: 'HaloFlicks', threadtale: 'ThreadTale',
+  fablevibe: 'FableVibe', wispreel: 'WispReel', yalareels: 'YalaReels'
 } as const;
 
 export type NewMiniAppKey = keyof typeof newMiniApps;

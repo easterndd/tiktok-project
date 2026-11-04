@@ -12,16 +12,23 @@ const packageRoot = resolve(scriptDir, '..');
 const repoRoot = resolve(packageRoot, '..', '..');
 const app = process.argv[2] ?? 'quickreels';
 const appNames = { quickreels: 'QuicK ReeLS', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks', crownrush: 'CrownRush', sugarreel: 'SugarReel', crimsonshorts: 'CrimsonShorts', sweetreel: 'SweetReel', dramablaze: 'DramaBlaze', heartreel: 'HeartReel', dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama', lucidreel: 'LucidReel', astraclip: 'AstraClip', lumoreel: 'LumoReel', orbitplay: 'OrbitPlay', zenclip: 'ZenClip', auraclip: 'AuraClip', fluxplay: 'FluxPlay', driftreel: 'DriftReel', novaclip: 'NovaClip', lumishort: 'LumiShort', sonicreel: 'SonicReel', harborplay: 'HarborPlay', dazzleshort: 'DazzleShort', fableclip: 'FableClip', emberreel: 'EmberReel' };
+appNames.quartzplay = 'QuartzPlay';
+Object.assign(appNames, { bloomreel: 'BloomReel', quillshort: 'QuillShort', amberplay: 'AmberPlay', nimbusclip: 'NimbusClip', runereel: 'RuneReel' });
+Object.assign(appNames, { riftsaga: 'RiftSaga', haloflicks: 'HaloFlicks', threadtale: 'ThreadTale', fablevibe: 'FableVibe', wispreel: 'WispReel', yalareels: 'YalaReels' });
 if (!(app in appNames)) throw new Error(`Expected one of: ${Object.keys(appNames).join(', ')}.`);
 const appName = appNames[app];
-const publicPath = app;
+const evergreenApp = app === 'quickreels' || app === 'quartzplay';
+const publicPath = evergreenApp ? '' : app;
 const sourcePath = join(packageRoot, 'src', 'pages', 'legal-docs.ts');
 const outputRoot = join(repoRoot, 'deploy', 'website', publicPath);
 const breezeApp = ['crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama', 'sonicreel', 'harborplay', 'dazzleshort', 'fableclip', 'emberreel'].includes(app);
 const newbeatApp = ['lucidreel', 'astraclip', 'lumoreel', 'orbitplay', 'zenclip', 'auraclip', 'fluxplay', 'driftreel', 'novaclip', 'lumishort'].includes(app);
-const publicBaseUrl = newbeatApp ? 'https://xuyins.com/static/newbeat' : breezeApp ? 'https://xuyins.com/static' : app === 'quickreels' ? `https://evergreenprosper.com/${publicPath}` : 'https://www.yya.ai/capy';
-const legalOperator = newbeatApp ? 'NEWBEAT DIGITAL MARKETING LIMITED' : breezeApp ? 'Breeze and Azure Sky Culture Limited' : app === 'quickreels' ? 'evergreenprosper' : 'SAGATHIYA TECHSOLUTIONS PRIVATE LIMITED';
-const legalOperatorUrl = newbeatApp || breezeApp ? 'https://xuyins.com/' : app === 'quickreels' ? 'https://evergreenprosper.com/' : 'https://www.yya.ai/';
+const augustLaneApp = ['bloomreel', 'quillshort', 'amberplay', 'nimbusclip', 'runereel'].includes(app);
+const wowoLeziApp = ['riftsaga', 'haloflicks', 'threadtale', 'fablevibe', 'wispreel', 'yalareels'].includes(app);
+const sharedStaticApp = breezeApp || newbeatApp || augustLaneApp || wowoLeziApp;
+const publicBaseUrl = wowoLeziApp ? 'https://xuyins.com/static/wowolezi' : augustLaneApp ? 'https://xuyins.com/static/augustlane' : newbeatApp ? 'https://xuyins.com/static/newbeat' : breezeApp ? 'https://xuyins.com/static' : evergreenApp ? 'https://evergreenprosper.com' : 'https://www.yya.ai/capy';
+const legalOperator = wowoLeziApp ? 'WOWO LEZI CULTURE MEDIA (HONG KONG) LIMITED' : augustLaneApp ? 'AUGUST LANE MEDIA LIMITED' : newbeatApp ? 'NEWBEAT DIGITAL MARKETING LIMITED' : breezeApp ? 'Breeze and Azure Sky Culture Limited' : evergreenApp ? 'evergreenprosper' : 'SAGATHIYA TECHSOLUTIONS PRIVATE LIMITED';
+const legalOperatorUrl = sharedStaticApp ? 'https://xuyins.com/' : evergreenApp ? 'https://evergreenprosper.com/' : 'https://www.yya.ai/';
 
 function loadLegalDocuments(source) {
   const transpiled = ts.transpileModule(source, {
@@ -46,23 +53,23 @@ function loadLegalDocuments(source) {
 function renderPage(type, legalDocument, legalContactEmail) {
   const otherType = type === 'privacy' ? 'terms' : 'privacy';
   const otherLabel = type === 'privacy' ? 'Terms of Service' : 'Privacy Policy';
-  const canonicalUrl = breezeApp || newbeatApp
+  const canonicalUrl = sharedStaticApp
     ? `${publicBaseUrl}/${type === 'privacy' ? 'privacy-policy' : 'terms-of-service'}.html`
-    : app !== 'quickreels'
+    : !evergreenApp
     ? `${publicBaseUrl}/${type === 'privacy' ? 'privacypolicy.html' : 'termsofservice.html'}`
     : `${publicBaseUrl}/${type}`;
-  const relatedUrl = breezeApp || newbeatApp
+  const relatedUrl = sharedStaticApp
     ? `${publicBaseUrl}/${otherType === 'privacy' ? 'privacy-policy' : 'terms-of-service'}.html`
-    : app !== 'quickreels'
+    : !evergreenApp
     ? `${publicBaseUrl}/${otherType === 'privacy' ? 'privacypolicy.html' : 'termsofservice.html'}`
-    : `/${publicPath}/${otherType}`;
+    : `/${otherType}`;
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${legalDocument.title}${breezeApp || newbeatApp ? '' : ` | ${appName}`}</title>
-  <meta name="description" content="${legalDocument.title} for ${breezeApp || newbeatApp ? 'TikTok Minis short-drama services' : appName}, operated by ${legalOperator}.">
+  <title>${legalDocument.title}${sharedStaticApp || evergreenApp ? '' : ` | ${appName}`}</title>
+  <meta name="description" content="${legalDocument.title} for ${sharedStaticApp || evergreenApp ? 'TikTok Minis short-drama services' : appName}, operated by ${legalOperator}.">
   <link rel="canonical" href="${canonicalUrl}">
   <style>
     :root {
@@ -218,7 +225,7 @@ function renderPage(type, legalDocument, legalContactEmail) {
     <header class="hero">
       <div class="brand">
         <a href="${legalOperatorUrl}">${legalOperator}</a>
-        <span class="mark">${newbeatApp ? 'NB' : breezeApp ? 'BA' : app === 'quickreels' ? 'QR' : app === 'taletv' ? 'TV' : appName.replace(/[^A-Z]/g, '').slice(0, 3) || appName.slice(0, 2).toUpperCase()}</span>
+        <span class="mark">${wowoLeziApp ? 'WL' : augustLaneApp ? 'AL' : newbeatApp ? 'NB' : breezeApp ? 'BA' : evergreenApp ? 'EP' : app === 'taletv' ? 'TV' : appName.replace(/[^A-Z]/g, '').slice(0, 3) || appName.slice(0, 2).toUpperCase()}</span>
       </div>
       <p class="eyebrow">${legalDocument.eyebrow}</p>
       <h1>${legalDocument.title}</h1>
@@ -252,11 +259,16 @@ const contactEmail = legalContactForApp(app);
 for (const type of ['privacy', 'terms']) {
   const directory = join(outputRoot, type);
   await mkdir(directory, { recursive: true });
-  await writeFile(join(directory, 'index.html'), renderPage(type, legalDocumentForApp(type, app), contactEmail), 'utf8');
-  if (breezeApp || newbeatApp) {
-    const staticDirectory = join(repoRoot, 'deploy', 'website', 'static', ...(newbeatApp ? ['newbeat'] : []));
+  const page = renderPage(type, legalDocumentForApp(type, app), contactEmail);
+  await writeFile(join(directory, 'index.html'), page, 'utf8');
+  if (evergreenApp) {
+    const legacyDirectory = join(repoRoot, 'deploy', 'website', 'quickreels', type);
+    await mkdir(legacyDirectory, { recursive: true });
+    await writeFile(join(legacyDirectory, 'index.html'), page, 'utf8');
+  }
+  if (sharedStaticApp) {
+    const staticDirectory = join(repoRoot, 'deploy', 'website', 'static', ...(wowoLeziApp ? ['wowolezi'] : newbeatApp ? ['newbeat'] : augustLaneApp ? ['augustlane'] : []));
     await mkdir(staticDirectory, { recursive: true });
-    const page = renderPage(type, legalDocumentForApp(type, app), contactEmail);
     const suffix = type === 'privacy' ? 'privacy-policy' : 'terms-of-service';
     await writeFile(join(staticDirectory, `${suffix}.html`), page, 'utf8');
     if (breezeApp && ['crownrush', 'sugarreel', 'crimsonshorts'].includes(app)) {

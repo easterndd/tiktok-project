@@ -4,12 +4,11 @@ import { ChevronLeft, ChevronRight, Flame, Play, RefreshCw, Search as SearchIcon
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AlbumCard } from '../components/AlbumCard';
-import { StoryLandEntryAd } from '../components/StoryLandEntryAd';
 import { LoadingState } from '../components/LoadingState';
 import { useEntryAdReady } from '../components/EntryAdGate';
 import { getMockHome } from '../data/mock-data';
 import { apiClient } from '../lib/api-client';
-import { appKey, storagePrefix } from '../lib/app-brand';
+import { storagePrefix } from '../lib/app-brand';
 import { t } from '../lib/i18n';
 import { useLocale, isDemoMode, getSessionToken, subscribeToSession } from '../lib/storage';
 import { componentIsEnabled, useUiComponents } from '../features/cms/ui-components';
@@ -25,7 +24,7 @@ function readCachedHome(locale: HomeResponse['locale']) {
     if (!value) return undefined;
     const cached = JSON.parse(value) as { savedAt?: unknown; data?: HomeResponse };
     if (typeof cached.savedAt !== 'number' || !cached.data || !Array.isArray(cached.data.blocks) || !cached.data.feed) return undefined;
-    return { savedAt: cached.savedAt, data: cached.data };
+    return { savedAt: cached.savedAt, data: publicHomeSnapshot(cached.data) };
   } catch {
     return undefined;
   }
@@ -56,7 +55,6 @@ export function HomePage() {
   const [heroIndex, setHeroIndex] = useState(0);
   const [searchInput, setSearchInput] = useState(params.get('q') ?? '');
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const homeRequestToken = useRef<string | null>(null);
   const cachedHome = useMemo(() => readCachedHome(locale), [locale]);
   const components = useUiComponents();
   const ui = components.data?.items;
@@ -65,14 +63,16 @@ export function HomePage() {
   const activeChannel = requestedChannel === 'new' ? 'new' : 'hot';
   const isSearchOpen = params.get('search') === '1' || Boolean(query);
   const home = useQuery({
-    queryKey: ['home', locale],
+    queryKey: ['home-public', locale],
     initialData: cachedHome?.data,
     initialDataUpdatedAt: cachedHome?.savedAt ?? 0,
-    queryFn: () => {
-      homeRequestToken.current = getSessionToken();
-      return apiClient.get<HomeResponse>(`/home?locale=${encodeURIComponent(locale)}`);
-    },
+    queryFn: () => apiClient.getPublic<HomeResponse>(`/home?locale=${encodeURIComponent(locale)}`),
     placeholderData: (previous) => previous ?? (isDemoMode() ? getMockHome(locale) : undefined)
+  });
+  const progress = useQuery({
+    queryKey: ['home-progress', locale, sessionToken],
+    queryFn: () => apiClient.get<{ items: Extract<HomeResponse['blocks'][number], { type: 'CONTINUE_WATCHING' }>['items'] }>(`/home/progress?locale=${encodeURIComponent(locale)}`),
+    enabled: Boolean(sessionToken)
   });
   const search = useQuery({
     queryKey: ['home-search', query, locale],
@@ -102,7 +102,9 @@ export function HomePage() {
 
   const data = home.data ?? getMockHome(locale);
   const hero = data.blocks.find((block) => block.type === 'CAROUSEL');
-  const continueBlock = data.blocks.find((block) => block.type === 'CONTINUE_WATCHING');
+  const continueBlock = progress.data
+    ? { type: 'CONTINUE_WATCHING' as const, items: progress.data.items }
+    : isDemoMode() ? data.blocks.find((block) => block.type === 'CONTINUE_WATCHING') : undefined;
   const trending = data.blocks.find((block) => block.type === 'TRENDING');
   const fresh = data.blocks.find((block) => block.type === 'NEW_RELEASES');
   const hotItems = trending?.type === 'TRENDING' ? trending.items : data.feed.items;
@@ -119,9 +121,6 @@ export function HomePage() {
   const isFiltering = Boolean(query);
   const searchItems = search.data?.items ?? [];
   const fallbackItems = search.data?.fallbackItems ?? [];
-  useEffect(() => {
-    if (sessionToken && home.isSuccess && homeRequestToken.current !== sessionToken) void home.refetch();
-  }, [home.isSuccess, home.refetch, sessionToken]);
   useEffect(() => {
     if (!home.isSuccess || !home.data) return;
     try {
@@ -175,7 +174,6 @@ export function HomePage() {
   if (home.isError && !home.data) return <section className="state"><p>{t(locale, 'unavailable')}</p><button onClick={() => void home.refetch()}><RefreshCw size={17} aria-hidden="true" /> {t(locale, 'retry')}</button></section>;
 
   return <div className={styles.page}>
-    {appKey === 'storyland' && home.data && !home.isError && <StoryLandEntryAd />}
     <section className={styles.discoveryHeader} aria-label={t(locale, 'discover')}>
       <nav className={styles.channelRail} aria-label={t(locale, 'discover')}>
         <button className={activeChannel === 'hot' ? styles.channelActive : ''} onClick={() => selectChannel('hot')}><Flame size={16} aria-hidden="true" />{t(locale, 'trending')}</button>

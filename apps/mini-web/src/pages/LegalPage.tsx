@@ -13,14 +13,14 @@ export function LegalPage({ type }: { type: LegalDocumentType }) {
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
-    globalThis.document.title = `${legalDocument.title} | ${appName}`;
+    globalThis.document.title = appKey === 'main' || appKey === 'quartzplay' ? legalDocument.title : `${legalDocument.title} | ${appName}`;
   }, [legalDocument.title]);
 
   return <article className={styles.page}>
     <header className={styles.hero}>
       <div className={styles.heroTop}>
         <Link className={styles.backLink} to="/profile"><ArrowLeft size={17} aria-hidden="true" /> Back</Link>
-        <span className={styles.brandMark}>{appKey === 'main' ? 'QR' : appKey === 'taletv' ? 'TV' : brandMark(appName)}</span>
+        <span className={styles.brandMark}>{appKey === 'main' || appKey === 'quartzplay' ? 'EP' : appKey === 'taletv' ? 'TV' : brandMark(appName)}</span>
       </div>
       <p className="eyebrow">{legalDocument.eyebrow}</p>
       <h1>{legalDocument.title}</h1>

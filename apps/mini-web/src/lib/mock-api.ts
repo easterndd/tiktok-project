@@ -33,6 +33,11 @@ export async function mockApiRequest<T>({ method, path, body }: MockRequest): Pr
   const pathname = url.pathname;
 
   if (method === 'GET' && pathname === '/home') return getMockHome((url.searchParams.get('locale') as Locale | null) ?? readPreferences().locale) as T;
+  if (method === 'GET' && pathname === '/home/progress') {
+    const locale = (url.searchParams.get('locale') as Locale | null) ?? readPreferences().locale;
+    const block = getMockHome(locale).blocks.find((item) => item.type === 'CONTINUE_WATCHING');
+    return { items: block?.type === 'CONTINUE_WATCHING' ? block.items : [] } as T;
+  }
   if (method === 'GET' && pathname === '/episode-interstitial/config') return { enabled: false, placementId: null, initialDelaySeconds: 30, intervalSeconds: 60, minIntervalSeconds: 180, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60 } as T;
   if (method === 'GET' && pathname === '/ui-components') return { items: defaultUiComponents } as T;
   const locale = (url.searchParams.get('locale') as Locale | null) ?? readPreferences().locale;

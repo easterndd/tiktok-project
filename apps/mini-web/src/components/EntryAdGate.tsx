@@ -6,6 +6,7 @@ import { attemptLocalEntryAd } from '../features/ads/local-entry-ad';
 import { ensureAnonymousSession, ensureTikTokSession, recordMiniLaunch } from '../features/auth/anonymous-session';
 import { reportDiagnostic } from '../lib/diagnostics';
 import { ApiError } from '../lib/api-client';
+import { appKey } from '../lib/app-brand';
 import styles from './EntryAdGate.module.css';
 
 type GateState = 'LOADING' | 'READY' | 'ERROR';
@@ -79,6 +80,8 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
         try {
           await ensureAnonymousSession();
           if (controller.signal.aborted) return;
+          if (appKey === 'storyland') await ensureTikTokSession().catch(() => undefined);
+          if (controller.signal.aborted) return;
           step = 'ENTRY_AD_POLICY';
           const session = await startAppEntryAdSession();
           if (controller.signal.aborted) return;
@@ -94,7 +97,7 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
           if (!controller.signal.aborted) {
             window.clearTimeout(startupTimer);
             setState('READY');
-            void ensureTikTokSession().catch(() => undefined);
+            if (appKey !== 'storyland') void ensureTikTokSession().catch(() => undefined);
           }
           return;
         } catch (cause) {
