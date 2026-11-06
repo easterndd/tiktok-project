@@ -51,6 +51,36 @@ describe('TikTokShortDramaApiService', () => {
     assert.equal(submitted[0].album_id, '7688551749335058439');
   });
 
+  it('generates a Minis link using the documented bearer token and minis_path body', async () => {
+    const requests: Array<{ url: URL; init?: RequestInit }> = [];
+    const service = new TikTokShortDramaApiService(env, {
+      fetch: async (input, init) => {
+        const url = new URL(String(input));
+        requests.push({ url, init });
+        if (url.pathname === '/v2/oauth/token/') return response({ access_token: 'client-token', expires_in: 7200 });
+        return response({ data: { minis_link: 'https://www.tiktok.com/minis/AbCdEf123' }, error: { code: 'ok' } });
+      }
+    });
+
+    const result = await service.generateMinisLink('/?album_id=123&episode_id=456');
+
+    assert.equal(result.minisLink, 'https://www.tiktok.com/minis/AbCdEf123');
+    assert.equal(requests[1].url.pathname, '/v2/minis/link/generate/');
+    assert.equal(requests[1].url.search, '');
+    assert.equal(requests[1].init?.headers && new Headers(requests[1].init.headers).get('authorization'), 'Bearer client-token');
+    assert.deepEqual(JSON.parse(String(requests[1].init?.body)), { minis_path: '/?album_id=123&episode_id=456' });
+  });
+
+  it('rejects a generated Minis URL outside the TikTok domain', async () => {
+    const service = new TikTokShortDramaApiService(env, {
+      fetch: async (input) => new URL(String(input)).pathname === '/v2/oauth/token/'
+        ? response({ access_token: 'client-token', expires_in: 7200 })
+        : response({ data: { minis_link: 'https://example.com/minis/AbCdEf123' }, error: { code: 'ok' } })
+    });
+
+    await assert.rejects(service.generateMinisLink('/?album_id=123&episode_id=456'), /outside the trusted TikTok domain/);
+  });
+
   it('adds the server-only credentials and BytePlus binding when registering a video', async () => {
     const requests: Array<{ url: URL; body: string | undefined }> = [];
     const service = new TikTokShortDramaApiService(env, {

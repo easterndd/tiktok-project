@@ -307,6 +307,25 @@ export class TikTokShortDramaApiService {
     return { status: asNumber(data.status) ?? input.status, requestId };
   }
 
+  async generateMinisLink(minisPath: string) {
+    const { data, requestId } = await this.request<{ minis_link?: unknown }>(
+      '/v2/minis/link/generate/',
+      'POST',
+      { minis_path: minisPath },
+      undefined,
+      { includeClientKey: false }
+    );
+    const minisLink = asString(data.minis_link);
+    if (!minisLink) throw new TikTokShortDramaApiError('TikTok link generation completed without minis_link.', undefined, requestId, false);
+    let url: URL;
+    try { url = new URL(minisLink); }
+    catch { throw new TikTokShortDramaApiError('TikTok returned an invalid Minis link.', undefined, requestId, false); }
+    if (url.protocol !== 'https:' || !['tiktok.com', 'www.tiktok.com'].includes(url.hostname.toLowerCase()) || !url.pathname.startsWith('/minis/')) {
+      throw new TikTokShortDramaApiError('TikTok returned a Minis link outside the trusted TikTok domain.', undefined, requestId, false);
+    }
+    return { minisLink: url.toString(), requestId };
+  }
+
   async authorizeAlbum(input: { albumId: string; targetClientKeys: string[]; operateType?: 1 | 2 }) {
     const targetClientKeys = [...new Set(input.targetClientKeys.map((value) => value.trim()).filter(Boolean))];
     if (!targetClientKeys.length) throw new TikTokShortDramaApiError('TikTok album authorization requires at least one target client key.');
@@ -319,17 +338,18 @@ export class TikTokShortDramaApiService {
     return { results, requestId, raw: data };
   }
 
-  private async request<T extends Record<string, unknown>>(path: string, method: 'GET' | 'POST', body?: Record<string, unknown>, query?: Record<string, string>) {
+  private async request<T extends Record<string, unknown>>(path: string, method: 'GET' | 'POST', body?: Record<string, unknown>, query?: Record<string, string>, options: { includeClientKey?: boolean } = {}) {
     const token = await this.getAccessToken();
     const url = new URL(path, this.env.TIKTOK_SHORT_DRAMA_API_BASE);
-    for (const [key, value] of Object.entries({ client_key: this.env.TIKTOK_CLIENT_KEY!, ...query })) url.searchParams.set(key, value);
+    const includeClientKey = options.includeClientKey !== false;
+    for (const [key, value] of Object.entries({ ...(includeClientKey ? { client_key: this.env.TIKTOK_CLIENT_KEY! } : {}), ...query })) url.searchParams.set(key, value);
     const response = await this.fetch(url, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
         ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {})
       },
-      ...(method === 'POST' ? { body: JSON.stringify({ client_key: this.env.TIKTOK_CLIENT_KEY!, ...body }) } : {}),
+      ...(method === 'POST' ? { body: JSON.stringify({ ...(includeClientKey ? { client_key: this.env.TIKTOK_CLIENT_KEY! } : {}), ...body }) } : {}),
       signal: AbortSignal.timeout(15_000)
     }).catch(() => {
       throw new TikTokShortDramaApiError('TikTok Short Drama request failed before receiving a response.', undefined, undefined, true);
