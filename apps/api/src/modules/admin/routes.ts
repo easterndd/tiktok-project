@@ -10,7 +10,7 @@ import { Prisma, type AnalyticsDailySummary, type PrismaClient } from '@prisma/c
 import { z } from 'zod';
 import { requireAdmin, requirePermission } from '../../plugins/auth';
 import { hashPassword, verifyPassword } from '../../services/password';
-import { accessConfigSchema, readAccessConfig, readMiniAppAccessConfig } from '../../lib/content-access';
+import { accessConfigSchema, isEpisodeFree, readAccessConfig, readMiniAppAccessConfig } from '../../lib/content-access';
 import { publicAlbumWhere } from '../../lib/content-visibility';
 import { publicLocaleSchema } from '../../lib/locales';
 import { singleFlight } from '../../lib/single-flight';
@@ -37,11 +37,13 @@ import { classifyLaunchAttribution } from '../../services/launch-attribution.ser
 import { assertDisplayMetadataOwner, carryBaseTextChanges, displayMetadataInput, findDisplayMetadataAlbum, readDisplayMetadata, retryDisplayMetadata, saveLocalDisplayMetadata, saveSharedDisplayMetadata } from '../../services/display-metadata.service';
 import { listEntryAdIpExemptions, listSharedIpVisits, listSharedIps, listViewerIdsForIp, normalizeIp, recentViewerIps, removeEntryAdIpExemption, setEntryAdIpExemption, setEntryAdIpExemptions } from '../../services/shared-ip.service';
 import { campaignEntryApps, normalizeCampaignEntryBase } from '../../lib/campaign-entry';
+import { TikTokShortDramaApiService } from '../../services/tiktok-short-drama-api.service';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 
 type AnalyticsCacheEntry = { expiresAt: number; value: unknown };
 const analyticsCaches = new WeakMap<FastifyInstance, Map<string, AnalyticsCacheEntry>>();
+const campaignLinkClients = new WeakMap<FastifyInstance, TikTokShortDramaApiService>();
 const ANALYTICS_CACHE_TTL_MS = 60_000;
 async function cachedAnalytics<T>(app: FastifyInstance, key: string, load: () => Promise<T>, ttlMs = ANALYTICS_CACHE_TTL_MS): Promise<T> {
   const analyticsCache = analyticsCaches.get(app) ?? new Map<string, AnalyticsCacheEntry>();
@@ -886,7 +888,6 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return { url: base?.url ?? null, verifiedAt: base?.verifiedAt ?? null };
   });
   app.get('/admin/campaign-entry/albums', { preHandler: requireAdmin }, async (request) => {
-    if (!campaignEntryApps.has(app.config.MINI_APP_KEY)) return { items: [] };
     const { q } = z.object({ q: z.string().trim().max(100).default('') }).parse(request.query);
     const albums = await app.prisma.album.findMany({
       where: { ...publicAlbumWhere(app.config), tiktokAlbumId: { not: null }, ...(q ? { title: { contains: q, mode: 'insensitive' as const } } : {}) },
@@ -897,10 +898,9 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       select: { targetLocalAlbumId: true, status: true }
     });
     const blocked = new Set(authorizations.filter((item) => item.status !== 'AUTHORIZED').map((item) => item.targetLocalAlbumId));
-    return { items: albums.filter((album) => !blocked.has(album.id)) };
+    return { items: albums.filter((album) => !blocked.has(album.id)), credentialsConfigured: Boolean(app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET) };
   });
   app.get('/admin/campaign-entry/episodes', { preHandler: requireAdmin }, async (request) => {
-    if (!campaignEntryApps.has(app.config.MINI_APP_KEY)) return { items: [] };
     const { albumId } = albumParams.parse(request.query);
     const album = await app.prisma.album.findFirst({ where: { id: albumId, ...publicAlbumWhere(app.config) }, select: { accessConfig: true } });
     if (!album) return { items: [] };
@@ -915,6 +915,34 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       orderBy: { episodeNo: 'asc' }, take: 1000
     });
     return { items: episodes };
+  });
+  app.post('/admin/campaign-entry/generate-link', {
+    preHandler: requirePermission('content.write'),
+    config: { rateLimit: { max: 10, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
+  }, async (request, reply) => {
+    if (!app.config.TIKTOK_CLIENT_KEY || !app.config.TIKTOK_CLIENT_SECRET) {
+      return reply.code(503).send({ error: { code: 'TIKTOK_CREDENTIALS_NOT_CONFIGURED', message: `当前小程序 ${app.config.MINI_APP_KEY} 尚未配置 TikTok Client Key/Secret。`, requestId: request.id } });
+    }
+    const input = z.object({ episodeId: z.string().min(1).max(128) }).parse(request.body);
+    const episode = await app.prisma.episode.findFirst({
+      where: { id: input.episodeId, status: 'ONLINE', tiktokEpisodeId: { not: null }, byteplusVid: { not: null }, album: { ...publicAlbumWhere(app.config), tiktokAlbumId: { not: null } } },
+      select: { id: true, albumId: true, episodeNo: true, isFree: true, tiktokEpisodeId: true, album: { select: { accessConfig: true, tiktokAlbumId: true } } }
+    });
+    if (!episode || !episode.tiktokEpisodeId || !episode.album.tiktokAlbumId || !isEpisodeFree(episode, episode.album.accessConfig)) {
+      return reply.code(400).send({ error: { code: 'INVALID_CAMPAIGN_EPISODE', message: '只能为已上线且免费的分集生成投放链接。', requestId: request.id } });
+    }
+    const authorization = await app.sharedPrisma.miniAppAlbumAuthorization.findFirst({
+      where: { miniAppKey: app.config.MINI_APP_KEY, targetLocalAlbumId: episode.albumId }, select: { status: true }
+    });
+    if (authorization && authorization.status !== 'AUTHORIZED') {
+      return reply.code(409).send({ error: { code: 'ALBUM_NOT_AUTHORIZED', message: '该剧集当前未授权此小程序投放。', requestId: request.id } });
+    }
+    const minisPath = `/?${new URLSearchParams({ album_id: episode.album.tiktokAlbumId, episode_id: episode.tiktokEpisodeId })}`;
+    let tiktok = campaignLinkClients.get(app);
+    if (!tiktok) { tiktok = new TikTokShortDramaApiService(app.config); campaignLinkClients.set(app, tiktok); }
+    const generated = await tiktok.generateMinisLink(minisPath);
+    await audit(app, request.user.sub, 'GENERATE', 'CampaignEntryLink', episode.id, { albumId: episode.albumId, minisPath, requestId: generated.requestId });
+    return { url: generated.minisLink, minisPath, requestId: generated.requestId };
   });
   app.put('/admin/campaign-entry/base', { preHandler: requirePermission('content.write') }, async (request, reply) => {
     if (!campaignEntryApps.has(app.config.MINI_APP_KEY)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Campaign links are unavailable for this app.', requestId: request.id } });

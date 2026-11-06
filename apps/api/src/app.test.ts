@@ -1144,6 +1144,45 @@ describe('QuicK ReeLS API', () => {
     assert.equal(event.metadata.entryId, 'legacy-launch-session-0001');
   });
 
+  it('generates campaign Minis links for a non-legacy app with its own credentials and rechecks free published episodes', async () => {
+    const prisma = await createPrismaStub();
+    const episode = {
+      id: 'episode-1', albumId: 'album-1', episodeNo: 1, isFree: true,
+      tiktokEpisodeId: '7700000000000000002',
+      album: { accessConfig: { freeEpisodeCount: 0 }, tiktokAlbumId: '7700000000000000001' }
+    };
+    prisma.episode.findFirst = async () => episode;
+    const app = await buildApp({ ...env,
+      TALETV_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=taletv',
+      TALETV_TIKTOK_CLIENT_KEY: 'taletv-client-key',
+      TALETV_TIKTOK_CLIENT_SECRET: 'taletv-client-secret'
+    }, { prisma: prisma as unknown as PrismaClient, miniPrisma: { taletv: prisma as unknown as PrismaClient }, sharedPrisma: prisma as unknown as PrismaClient });
+    apps.push(app);
+    const requests: Array<{ url: URL; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input));
+      requests.push({ url, init });
+      if (url.pathname === '/v2/oauth/token/') return new Response(JSON.stringify({ access_token: 'taletv-token', expires_in: 7200 }), { status: 200 });
+      return new Response(JSON.stringify({ data: { minis_link: 'https://www.tiktok.com/minis/Bloom123' }, error: { code: 'ok' } }), { status: 200 });
+    }) as typeof fetch;
+    const adminToken = app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: 'taletv', role: 'OWNER', tokenVersion: 0 });
+
+    const generated = await app.inject({ method: 'POST', url: '/api/taletv/v1/admin/campaign-entry/generate-link',
+      headers: { authorization: `Bearer ${adminToken}` }, payload: { episodeId: 'episode-1' } });
+
+    assert.equal(generated.statusCode, 200, generated.body);
+    assert.equal(generated.json().url, 'https://www.tiktok.com/minis/Bloom123');
+    assert.equal(new URLSearchParams(String(requests[0].init?.body)).get('client_key'), 'taletv-client-key');
+    assert.deepEqual(JSON.parse(String(requests[1].init?.body)), { minis_path: '/?album_id=7700000000000000001&episode_id=7700000000000000002' });
+
+    prisma.episode.findFirst = async () => ({ ...episode, isFree: false });
+    requests.length = 0;
+    const rejected = await app.inject({ method: 'POST', url: '/api/taletv/v1/admin/campaign-entry/generate-link',
+      headers: { authorization: `Bearer ${adminToken}` }, payload: { episodeId: 'episode-1' } });
+    assert.equal(rejected.statusCode, 400);
+    assert.equal(requests.length, 0, 'paid episodes must be rejected before calling TikTok');
+  });
+
   it('stores the resolved client IP and trusted country for regional analytics', async () => {
     const app = await createTestApp({ TRUSTED_PROXY_CIDRS: '172.20.0.2/32' });
     apps.push(app);

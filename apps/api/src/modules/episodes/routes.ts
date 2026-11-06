@@ -11,7 +11,6 @@ import { readExitRetentionConfig } from '../app-entry-ads/routes';
 import { isEpisodeFree, readMiniAppAccessConfig } from '../../lib/content-access';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
-import { campaignEntryApps } from '../../lib/campaign-entry';
 
 const params = z.object({ episodeId: z.string().min(1).max(128) });
 const sessionParams = params.extend({ sessionId: z.string().min(1).max(128) });
@@ -181,7 +180,6 @@ async function completeRewardSession(app: FastifyInstance, userId: string, episo
 
 export async function registerEpisodeRoutes(app: FastifyInstance) {
   app.get('/campaign-entry/resolve', async (request) => {
-    if (!campaignEntryApps.has(app.config.MINI_APP_KEY)) return { status: 'INVALID' as const };
     const parsed = campaignQuery.safeParse(request.query);
     if (!parsed.success) return { status: 'INVALID' as const };
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);

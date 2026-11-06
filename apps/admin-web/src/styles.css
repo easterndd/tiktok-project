@@ -354,6 +354,9 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .entry-link-url { max-width: 460px; overflow-wrap: anywhere; }
 .campaign-link-form { display: grid; gap: 16px; margin: 0 22px 18px; }
 .campaign-entry-panel > .form-help { margin: 0 22px 18px; overflow-wrap: anywhere; }
+.campaign-credential-state { align-self: center; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: #f8fafc; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.campaign-credential-state.ready { border-color: #b7e6cc; color: #167647; background: #effaf4; }
+.campaign-credential-state.missing { border-color: #f0c4c4; color: #a53636; background: #fff5f5; }
 .campaign-search-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
 .campaign-select-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .campaign-link-form label, .campaign-output label { display: grid; min-width: 0; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
@@ -366,7 +369,7 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .campaign-select:has(select:disabled) { opacity: .65; }
 .campaign-output { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin: 0 22px 14px; }
 .campaign-output input { background: #f8fafc; }
-@media (max-width: 680px) { .campaign-select-row { grid-template-columns: 1fr; } .campaign-output { grid-template-columns: 1fr; } }
+@media (max-width: 680px) { .campaign-select-row { grid-template-columns: 1fr; } .campaign-output { grid-template-columns: 1fr; } .campaign-entry-panel > .panel-heading { align-items: flex-start; flex-direction: column; gap: 10px; } }
 .form-success { display: flex; align-items: center; gap: 6px; margin: 0 22px 14px; color: #16834f; font-size: 12px; }
 @media (max-width: 760px) { .entry-link-row { grid-template-columns: 1fr; align-items: stretch; } .entry-link-actions { flex-wrap: wrap; } }
 @media (max-width: 1080px) { .admin-layout { grid-template-columns: 206px minmax(0, 1fr); } .main { padding: 32px 24px 44px; } .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .content-grid, .lower-grid { grid-template-columns: 1fr; } }

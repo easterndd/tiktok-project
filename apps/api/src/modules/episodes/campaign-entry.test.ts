@@ -23,7 +23,7 @@ it('resolves only a published free episode authorized in this Mini app', async (
     id: 'local-episode', albumId: 'local-album', episodeNo: 1, isFree: false,
     album: { accessConfig: { freeEpisodeCount: 1 }, regions: null }
   };
-  app.decorate('config', { MINI_APP_KEY: 'bloomreel', NODE_ENV: 'test', LOCAL_PLAYBACK_ENABLED: true, TRUST_GEO_COUNTRY_HEADER: false } as any);
+  app.decorate('config', { MINI_APP_KEY: 'main', NODE_ENV: 'test', LOCAL_PLAYBACK_ENABLED: true, TRUST_GEO_COUNTRY_HEADER: false } as any);
   app.decorate('prisma', { episode: { findFirst: async ({ where }: any) => {
     if (where.tiktokEpisodeId !== 'platform-episode' || where.album.tiktokAlbumId !== 'platform-album') return null;
     return { ...episode, album: { ...episode.album, accessConfig: { freeEpisodeCount: freeCount } } };
