@@ -1,5 +1,5 @@
 const poolSettings = {
-  maxClientConn: 500,
+  maxClientConn: 750,
   defaultPoolSize: 4,
   reservePoolSize: 2,
   reservePoolTimeout: 1,
