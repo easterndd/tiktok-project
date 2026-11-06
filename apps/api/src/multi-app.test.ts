@@ -105,6 +105,33 @@ it('serves separate content and rejects tokens from the other mini app', async (
   }
 });
 
+it('registers QuartzPlay independently within the evergreenprosper organization', async () => {
+  const quartzEnv = {
+    ...env,
+    QUARTZPLAY_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=quartzplay',
+    QUARTZPLAY_TIKTOK_CLIENT_KEY: 'quartz-key',
+    QUARTZPLAY_TIKTOK_APP_ID: '7703413468036139028'
+  };
+  assert.equal(sameMiniAppOrganization('main', 'quartzplay'), true);
+  assert.equal(miniAppEnvironment(quartzEnv, 'quartzplay')?.TIKTOK_CLIENT_KEY, 'quartz-key');
+  assert.throws(() => miniAppEnvironment({ ...quartzEnv, QUARTZPLAY_DATABASE_URL: env.DATABASE_URL }, 'quartzplay'), /different database or PostgreSQL schema/);
+
+  const app = await buildApp(quartzEnv, {
+    prisma: databaseFor('main-album'),
+    miniPrisma: { quartzplay: databaseFor('quartz-album') }
+  });
+  try {
+    await app.ready();
+    const quartzAlbums = await app.inject('/api/quartzplay/v1/albums');
+    assert.equal(quartzAlbums.statusCode, 200);
+    assert.equal(quartzAlbums.json().items[0].id, 'quartz-album');
+    const mainToken = await app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: 'main', role: 'OWNER', tokenVersion: 0 });
+    assert.equal((await app.inject({ url: '/api/quartzplay/v1/admin/albums', headers: { authorization: `Bearer ${mainToken}` } })).statusCode, 401);
+  } finally {
+    await app.close();
+  }
+});
+
 it('keeps episode interstitial placements independent and disabled when missing', async () => {
   const app = await buildApp({ ...env, EPISODE_INTERSTITIAL_PLACEMENT_ID: 'main-interstitial' }, {
     prisma: databaseFor('main-album'), taletvPrisma: databaseFor('taletv-album')
@@ -275,25 +302,47 @@ it('keeps BloomReel isolated under AUGUST LANE MEDIA LIMITED', () => {
   };
   assert.equal(miniAppOrganization('bloomreel'), 'augustLane');
   assert.equal(miniAppOrganizations.augustLane.label, 'AUGUST LANE MEDIA LIMITED');
-  assert.deepEqual(miniAppOrganizations.augustLane.miniApps, ['bloomreel']);
+  assert.deepEqual(miniAppOrganizations.augustLane.miniApps, ['bloomreel', 'quillshort', 'amberplay', 'nimbusclip', 'runereel']);
   assert.equal(sameMiniAppOrganization('bloomreel', 'crownrush'), false);
   assert.equal(configuredMiniAppKeys(bloomEnv).includes('bloomreel'), true);
   assert.equal(miniAppEnvironment(bloomEnv, 'bloomreel')?.TIKTOK_APP_ID, '7697505699680716820');
   assert.throws(() => miniAppEnvironment({ ...bloomEnv, BLOOMREEL_DATABASE_URL: env.DATABASE_URL }, 'bloomreel'), /different database or PostgreSQL schema/);
+  for (const [key, appId] of [
+    ['quillshort', '7701636896870451221'],
+    ['amberplay', '7701632194380548116'],
+    ['nimbusclip', '7701639446751840277'],
+    ['runereel', '7701632194380564500']
+  ] as const) {
+    const prefix = key.toUpperCase();
+    const appEnv = {
+      ...bloomEnv,
+      [`${prefix}_DATABASE_URL`]: `postgresql://test:test@localhost:5432/test?schema=${key}`,
+      [`${prefix}_TIKTOK_APP_ID`]: appId
+    };
+    assert.equal(miniAppOrganization(key), 'augustLane');
+    assert.equal(sameMiniAppOrganization('bloomreel', key), true);
+    assert.equal(configuredMiniAppKeys(appEnv).includes(key), true);
+    assert.equal(miniAppEnvironment(appEnv, key)?.TIKTOK_APP_ID, appId);
+    assert.throws(() => miniAppEnvironment({ ...appEnv, [`${prefix}_DATABASE_URL`]: bloomEnv.BLOOMREEL_DATABASE_URL }, key), /different database or PostgreSQL schema/);
+  }
 });
 
 it('keeps mini apps in the configured organization groups and rejects cross-organization sharing', () => {
-  assert.deepEqual(Object.values(miniAppOrganizations).map((group) => group.miniApps.length), [1, 20, 15, 10, 1]);
+  assert.deepEqual(Object.values(miniAppOrganizations).map((group) => group.miniApps.length), [2, 20, 15, 10, 5, 6]);
   assert.deepEqual(Object.values(miniAppOrganizations).flatMap((group) => group.miniApps).sort(), [...miniAppKeys].sort());
   assert.equal(miniAppOrganization('main'), 'quickreels');
+  assert.equal(miniAppOrganizations.quickreels.label, 'CobaltClip 组织');
   assert.equal(miniAppOrganization('storyland'), miniAppOrganization('taletv'));
   assert.equal(miniAppOrganization('crownrush'), miniAppOrganization('elitedrama'));
   assert.equal(miniAppOrganization('lucidreel'), miniAppOrganization('lumishort'));
   assert.equal(miniAppOrganization('bloomreel'), 'augustLane');
+  assert.equal(miniAppOrganization('riftsaga'), 'wowoLezi');
+  assert.equal(miniAppOrganization('yalareels'), 'wowoLezi');
   assert.equal(miniAppOrganizations.taletv.label, 'Gmart 挂靠组织');
   assert.equal(miniAppOrganizations.crownrush.label, '香港长风组织');
   assert.equal(miniAppOrganizations.newbeat.label, '飞书挂靠');
   assert.equal(miniAppOrganizations.augustLane.label, 'AUGUST LANE MEDIA LIMITED');
+  assert.equal(miniAppOrganizations.wowoLezi.label, 'WOWO LEZI CULTURE MEDIA (HONG KONG) LIMITED');
   for (const key of ['sonicreel', 'harborplay', 'dazzleshort', 'fableclip', 'emberreel'] as const) {
     assert.equal(miniAppOrganization(key), 'crownrush');
     assert.equal(miniAppPath(key), key);
@@ -303,6 +352,8 @@ it('keeps mini apps in the configured organization groups and rejects cross-orga
   assert.equal(sameMiniAppOrganization('dramacloud', 'cinereels'), true);
   assert.equal(sameMiniAppOrganization('sonicreel', 'dramablaze'), true);
   assert.equal(sameMiniAppOrganization('taletv', 'crownrush'), false);
+  assert.equal(sameMiniAppOrganization('riftsaga', 'haloflicks'), true);
+  assert.equal(sameMiniAppOrganization('riftsaga', 'bloomreel'), false);
   assert.throws(() => assertSameMiniAppOrganization('main', ['taletv']), /同一组织/);
   assert.throws(() => assertSameMiniAppOrganization('storyland', ['crownrush']), /同一组织/);
 });

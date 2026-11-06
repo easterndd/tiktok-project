@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -16,24 +16,32 @@ const env = {
 const instant = new Date('2026-10-10T08:00:00.000Z');
 
 function mediaFor(jobId = 'job-1', owner = env): BytePlusMedia {
-  return { vid: 'vid-1', title: 'Episode 1', spaceName: 'space', tags: uploadTags(uploadScope(owner), jobId) };
+  return { vid: 'vid-1', title: 'Episode 1', spaceName: 'space', publishStatus: 'Published', tags: uploadTags(uploadScope(owner), jobId) };
 }
 
-function vod(input: { items?: BytePlusMedia[]; known?: BytePlusMedia[]; upload?: () => Promise<{ byteplusVid: string }> } = {}) {
+function vod(input: { items?: BytePlusMedia[]; known?: BytePlusMedia[]; upload?: () => Promise<{ byteplusVid: string }>; playable?: () => boolean } = {}) {
   let uploads = 0;
+  let publishes = 0;
   const service = {
     listMedia: async ({ tags }: { tags: string }) => {
       const items = (input.items ?? []).filter((item) => item.tags?.includes(tags));
       return { items, total: items.length };
     },
     getMediaInfos: async () => input.known ?? [],
+    publishMedia: async (vid: string) => {
+      const media = (input.known ?? input.items ?? []).find((item) => item.vid === vid);
+      if (!media) throw new Error('Media not found');
+      publishes++;
+      media.publishStatus = 'Published';
+    },
+    hasPlayableUrl: async () => input.playable?.() ?? true,
     uploadLocalVideo: async ({ tags }: { tags?: string[] }) => {
       assert.equal(tags?.join(',').length, 35);
       uploads++;
       return input.upload ? input.upload() : { byteplusVid: 'vid-1' };
     }
   } as unknown as BytePlusVodService;
-  return { service, uploadCount: () => uploads };
+  return { service, uploadCount: () => uploads, publishCount: () => publishes };
 }
 
 function database(filePath: string | null, overrides: Record<string, unknown> = {}) {
@@ -173,6 +181,55 @@ describe('local upload recovery', () => {
       assert.equal(db.job.status, 'SUCCEEDED');
       assert.equal(db.job.providerJobId, 'vid-1');
       assert.equal(db.episode.byteplusVid, 'vid-1');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('publishes an owned VID and waits for playback without uploading the file twice', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-playback-'));
+    try {
+      const path = join(directory, 'episode.mp4');
+      await writeFile(path, 'video');
+      const db = database(path);
+      const media = { ...mediaFor(), publishStatus: 'Unpublished' };
+      let playable = false;
+      const provider = vod({ known: [media], playable: () => playable });
+      let current = instant;
+      const config = { ...env, LOCAL_UPLOAD_STORAGE_DIR: directory };
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, config, { now: () => current });
+      assert.equal(provider.uploadCount(), 1);
+      assert.equal(provider.publishCount(), 1);
+      assert.equal(db.job.status, 'PROCESSING');
+      assert.equal(db.job.providerJobId, 'vid-1');
+      assert.equal(db.episode.byteplusVid, null);
+      assert.match(db.job.errorMessage, /等待视频可播放/);
+      playable = true;
+      current = new Date(instant.getTime() + 60_000);
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, config, { now: () => current });
+      assert.equal(db.job.status, 'SUCCEEDED');
+      assert.equal(db.episode.byteplusVid, 'vid-1');
+      assert.equal(provider.uploadCount(), 1);
+      assert.equal(provider.publishCount(), 1);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('fails an unplayable VID after the wait limit while retaining its identity and source file', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-playback-timeout-'));
+    try {
+      const path = join(directory, 'episode.mp4');
+      await writeFile(path, 'video');
+      const db = database(path);
+      const provider = vod({ known: [mediaFor()], playable: () => false });
+      let current = instant;
+      const config = { ...env, LOCAL_UPLOAD_STORAGE_DIR: directory };
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, config, { now: () => current });
+      assert.equal(db.job.status, 'PROCESSING');
+      current = new Date(instant.getTime() + 31 * 60_000);
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, config, { now: () => current });
+      assert.equal(db.job.status, 'FAILED');
+      assert.equal(db.job.providerJobId, 'vid-1');
+      assert.equal(provider.uploadCount(), 1);
+      assert.equal((await stat(path)).size, 5);
+      assert.match(db.job.errorMessage, /30 分钟内仍不可播放/);
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
@@ -330,7 +387,8 @@ describe('local upload recovery', () => {
         getMediaInfos: async ({ vids }: { vids: string[] }) => {
           const number = Number(vids[0].split('-')[1]);
           return [{ ...mediaFor(`job-${number}`), vid: vids[0] }];
-        }
+        },
+        hasPlayableUrl: async () => true
       } as unknown as BytePlusVodService;
       const within = <T>(promise: Promise<T>) => Promise.race([promise, new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error('Parallel upload did not advance')), 2_000);

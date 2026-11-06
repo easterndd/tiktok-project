@@ -1,11 +1,21 @@
 import type { FastifyInstance } from 'fastify';
 import { Prisma } from '@prisma/client';
+import { sampleResponseLog, type ResponseLogSampleCache } from '../lib/request-performance';
 import { ZodError } from 'zod';
 import { BytePlusVodError } from '../services/byteplus-vod.service';
 import { ProviderNotConfiguredError } from '../services/tiktok-short-drama.service';
 
 export function registerErrorHandler(app: FastifyInstance) {
+  const busySamples: ResponseLogSampleCache = new Map();
   app.setErrorHandler((error, request, reply) => {
+    if ((error instanceof Prisma.PrismaClientKnownRequestError && ['P2024', 'P2028', 'P2034'].includes(error.code))
+      || (error as { statusCode?: number }).statusCode === 503) {
+      const code = (error as { code?: string }).code ?? 'SERVER_BUSY';
+      const suppressed = sampleResponseLog(busySamples, `${request.routeOptions.url}:${code}`, Date.now(), 10_000, 256);
+      if (suppressed !== null) request.log.warn({ errorCode: code, route: request.routeOptions.url, suppressed }, 'Database admission or transaction busy');
+      reply.header('Retry-After', '2');
+      return reply.status(503).send({ error: { code: 'SERVER_BUSY', message: 'The service is busy. Please retry shortly.', requestId: request.id } });
+    }
     if (error instanceof ZodError) {
       request.log.warn({ issues: error.issues.map((issue) => ({ path: issue.path.join('.'), code: issue.code })) }, 'Request validation failed');
       return reply.status(400).send({ error: { code: 'VALIDATION_ERROR', message: '请求参数不正确。', requestId: request.id } });

@@ -1,5 +1,14 @@
 # Add these lines inside the existing evergreenprosper.com site block,
 # before the final file_server directive.
+@evergreenPrivacy path /privacy
+rewrite @evergreenPrivacy /privacy/index.html
+
+@evergreenTerms path /terms
+rewrite @evergreenTerms /terms/index.html
+
+header /privacy Cache-Control "public, max-age=300"
+header /terms Cache-Control "public, max-age=300"
+
 @quickreelsPrivacy path /quickreels/privacy
 rewrite @quickreelsPrivacy /quickreels/privacy/index.html
 

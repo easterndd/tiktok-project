@@ -28,7 +28,7 @@ function errorCodeFromEvent(event: unknown) {
 
 const createPlaybackSessionId = () => typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `play-${Date.now()}`;
 
-export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [], onEpisodeEnded, onRetry, immersive = false, transitionTiming }: {
+export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [], onEpisodeEnded, onRetry, onPlaybackActiveChange, requestStartedAt, observePlayback = false, immersive = false, transitionTiming }: {
   message?: string;
   coverUrl?: string | null;
   title?: string;
@@ -36,6 +36,9 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
   playlist?: PlayInfo[];
   onEpisodeEnded?: () => void;
   onRetry?: () => void;
+  onPlaybackActiveChange?: (active: boolean) => void;
+  requestStartedAt?: number;
+  observePlayback?: boolean;
   immersive?: boolean;
   transitionTiming?: { kind: 'REWARDED' | 'EPISODE_INTERSTITIAL'; closedAt: number };
 }) {
@@ -45,6 +48,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
   const controller = useRef<DramaPlayerController | undefined>(undefined);
   const playlistRef = useRef(playlist);
   const endedHandlerRef = useRef(onEpisodeEnded);
+  const activeHandlerRef = useRef(onPlaybackActiveChange);
   const [playerError, setPlayerError] = useState('');
   const [playerStarting, setPlayerStarting] = useState(true);
   const [showPlayFallback, setShowPlayFallback] = useState(false);
@@ -53,6 +57,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
   const isLocalPlayback = playInfo?.playbackMode === 'LOCAL' && Boolean(playInfo.sourceUrl);
   playlistRef.current = playlist;
   endedHandlerRef.current = onEpisodeEnded;
+  activeHandlerRef.current = onPlaybackActiveChange;
 
   const playlistKey = playlist.map((item) => `${item.albumId}:${item.episodeId}:${item.vid}`).join('|');
   useEffect(() => {
@@ -71,6 +76,27 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     let firstFrameRecorded = false;
     let playFallbackTimer = 0;
     let playReadyTimer = 0;
+    let seekStartedAt = 0;
+    let seekedAt = 0;
+    let seekTimeUpdates = 0;
+    let seekCount = 0;
+    let seekReports = 0;
+    const setActive = (active: boolean) => activeHandlerRef.current?.(active);
+    const resumeFromSeek = () => {
+      if (!seekStartedAt) return;
+      const durationMs = Math.round(performance.now() - seekStartedAt);
+      seekStartedAt = 0;
+      seekedAt = 0;
+      setActive(true);
+      if (observePlayback) reportPerformance('PLAYER_SEEK_RESUME', `/episodes/${playInfo.localEpisodeId}`, durationMs);
+      seekCount++;
+      if (observePlayback && seekReports < 3 && (durationMs >= 2_000 || seekCount === 1 && Math.random() < 0.1)) {
+        seekReports++;
+        void apiClient.post('/playback-quality-events', { episodeId: playInfo.localEpisodeId, sessionId,
+          eventType: 'SEEK_RESUME', bufferMs: durationMs, currentTimeMs: lastPositionMs,
+          clientVersion: import.meta.env.VITE_MINI_RELEASE_ID || 'default' }).catch(() => undefined);
+      }
+    };
     const recordFirstFrame = () => {
       if (firstFrameRecorded) return;
       firstFrameRecorded = true;
@@ -78,7 +104,8 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
         episodeId: playInfo.localEpisodeId,
         sessionId,
         eventType: 'FIRST_FRAME',
-        startupMs: Math.round(performance.now() - startedAt)
+          startupMs: Math.round(performance.now() - (requestStartedAt ?? startedAt)),
+          ...(observePlayback ? { clientVersion: import.meta.env.VITE_MINI_RELEASE_ID || 'default' } : {})
       }).catch(() => undefined);
     };
     const markPlaybackStarted = () => {
@@ -118,6 +145,8 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       if (positionMs === null) return;
       if (positionMs > 0) {
         recordFirstFrame();
+        if (observePlayback && seekedAt && ++seekTimeUpdates >= 2) resumeFromSeek();
+        if (!seekStartedAt) setActive(true);
         autoplay.markStarted();
         window.clearTimeout(playFallbackTimer);
         setPlayerStarting(false);
@@ -127,11 +156,22 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       reportProgress();
     };
     const onPlay = () => autoplay.markStarted();
-    const onPause = () => reportProgress(false, true);
+    const onPause = () => { setActive(false); reportProgress(false, true); };
+    const onWaiting = () => setActive(false);
+    const onSeeking = () => { if (!observePlayback) return; seekStartedAt = performance.now(); seekedAt = 0; seekTimeUpdates = 0; setActive(false); };
+    const onSeeked = () => {
+      if (!seekStartedAt) return;
+      seekedAt = performance.now();
+      if (observePlayback) reportPerformance('PLAYER_SEEKED', `/episodes/${playInfo.localEpisodeId}`, seekedAt - seekStartedAt);
+    };
+    const onPlaying = () => { if (observePlayback && firstFrameRecorded) { resumeFromSeek(); setActive(true); } };
+    const onLoadedData = () => { if (observePlayback) reportPerformance('PLAYER_LOADED_DATA', `/episodes/${playInfo.localEpisodeId}`, performance.now() - startedAt); };
+    const onCanPlay = () => { if (observePlayback) reportPerformance('PLAYER_CANPLAY', `/episodes/${playInfo.localEpisodeId}`, performance.now() - startedAt); };
     const onLoadStart = () => {
       reportPerformance('PLAYER_LOAD_START', `/episodes/${playInfo.localEpisodeId}`, performance.now() - startedAt);
     };
     const onEnded = () => {
+      setActive(false);
       startedPlayback = true;
       lastPositionMs = playInfo.durationMs ?? lastPositionMs;
       reportProgress(true, true);
@@ -145,6 +185,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     };
     const onError = (event?: unknown) => {
       if (disposed) return;
+      setActive(false);
       const errorCode = errorCodeFromEvent(event);
       reportDiagnostic({ kind: 'PLAYBACK', phase: 'PLAYER_ERROR', message: errorCode, path: `/episodes/${playInfo.localEpisodeId}` });
       setPlayerError('Player playback failed.');
@@ -168,6 +209,13 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       instance.off?.(events.LOAD_START, onLoadStart);
       instance.off?.(events.ENDED, onEnded);
       instance.off?.(events.ERROR, onError);
+      if (events.WAITING) instance.off?.(events.WAITING, onWaiting);
+      if (events.STALLED) instance.off?.(events.STALLED, onWaiting);
+      if (events.SEEKING) instance.off?.(events.SEEKING, onSeeking);
+      if (events.SEEKED) instance.off?.(events.SEEKED, onSeeked);
+      if (events.PLAYING) instance.off?.(events.PLAYING, onPlaying);
+      if (events.LOADED_DATA) instance.off?.(events.LOADED_DATA, onLoadedData);
+      if (events.CANPLAY) instance.off?.(events.CANPLAY, onCanPlay);
     };
 
     const detachLocalVideo = (video: HTMLVideoElement) => {
@@ -177,6 +225,12 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       video.removeEventListener('loadeddata', onLoadStart);
       video.removeEventListener('ended', onEnded);
       video.removeEventListener('error', onError);
+      video.removeEventListener('waiting', onWaiting);
+      video.removeEventListener('stalled', onWaiting);
+      video.removeEventListener('seeking', onSeeking);
+      video.removeEventListener('seeked', onSeeked);
+      video.removeEventListener('playing', onPlaying);
+      video.removeEventListener('canplay', onCanPlay);
     };
 
     setPlayerError('');
@@ -196,6 +250,12 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
       video.addEventListener('loadeddata', onLoadStart, { once: true });
       video.addEventListener('ended', onEnded);
       video.addEventListener('error', onError);
+      video.addEventListener('waiting', onWaiting);
+      video.addEventListener('stalled', onWaiting);
+      video.addEventListener('seeking', onSeeking);
+      video.addEventListener('seeked', onSeeked);
+      video.addEventListener('playing', onPlaying);
+      video.addEventListener('canplay', onCanPlay);
       video.addEventListener('loadedmetadata', restorePosition, { once: true });
       if (video.readyState >= HTMLMediaElement.HAVE_METADATA) restorePosition();
     } else void (async () => {
@@ -206,6 +266,8 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
           ? await playerController.switchTo(playInfo, playlistRef.current)
           : await playerController.start(playInfo, playlistRef.current);
         if (disposed) return;
+        if (observePlayback) reportPerformance('PLAYER_CONSTRUCTED', `/episodes/${playInfo.localEpisodeId}`, performance.now() - startedAt,
+          { preloadHit: instance.preLoadData?.hit ?? null });
         const events = playerController.events;
         if (!events) throw new Error('The official drama player events are unavailable.');
         instance.on(events.TIME_UPDATE, onTimeUpdate);
@@ -215,6 +277,13 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
         instance.on(events.LOAD_START, onLoadStart);
         instance.on(events.ENDED, onEnded);
         instance.on(events.ERROR, onError);
+        if (events.WAITING) instance.on(events.WAITING, onWaiting);
+        if (events.STALLED) instance.on(events.STALLED, onWaiting);
+        if (events.SEEKING) instance.on(events.SEEKING, onSeeking);
+        if (events.SEEKED) instance.on(events.SEEKED, onSeeked);
+        if (events.PLAYING) instance.on(events.PLAYING, onPlaying);
+        if (events.LOADED_DATA) instance.on(events.LOADED_DATA, onLoadedData);
+        if (events.CANPLAY) instance.on(events.CANPLAY, onCanPlay);
         attemptPlay();
         // READY can fire before start/playNext resolves; keep checking for the async kernel.
         playReadyTimer = window.setInterval(attemptPlay, 100);
@@ -237,6 +306,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       disposed = true;
+      setActive(false);
       reportProgress(false, true);
       if (isLocalPlayback && localVideo.current) detachLocalVideo(localVideo.current);
       else detach();

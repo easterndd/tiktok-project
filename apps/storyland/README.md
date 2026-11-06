@@ -6,13 +6,12 @@ Run `pnpm --filter storyland build:minis:release` after completing the server an
 
 In Developer Portal set Domain of your service to `https://www.yya.ai`; separately add `https://api.evergreenprosper.com` to Trusted Domains for API calls. Create a dedicated PostgreSQL schema named `storyland`, migrate it, and provide the real Client Key/Secret before building a release ZIP.
 
-Entry ad behavior: StoryLand does not block app content on startup. The paid
-campaign landing path must be `/?ad_entry=1` for the optional interstitial to
-be considered. It runs at most once per launch after the home catalog loads
-and remains visible for 30 seconds. Unmarked previews, direct visits, legal pages, and episode deep links do
-not request an entry ad. The admin entry policy must be enabled with
-`INTERSTITIAL`, one required impression, and this app's placement ID; `REWARDED_GATED` is not used for
-the StoryLand entry. Verify that the TikTok campaign destination preserves the
-query string before expecting any paid-entry impressions. The `ad_entry=1`
-parameter is a campaign configuration switch, not proof of a TikTok ad click;
-do not use it for billing, attribution, or access control.
+Entry ad behavior: StoryLand uses the shared `EntryAdGate` and loads the entry
+policy for the exact Mini release ID. The admin can configure either
+`REWARDED_GATED` or `INTERSTITIAL`, the required count mode and count, placement,
+and policy status. No `ad_entry=1` query parameter is required. The configured
+policy still applies only when the server considers the visitor eligible; server
+attribution and exemption rules, as well as TikTok ad availability, can make a
+session ineligible or prevent an ad from showing. After uploading a new release,
+open it once so the API can register that release, then enable/configure that
+release in the admin. Policy settings are release-specific.

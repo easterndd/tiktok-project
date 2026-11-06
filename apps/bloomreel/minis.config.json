@@ -1,13 +1,14 @@
 {
   "appId": "7697505699680716820",
   "dev": {
+    "clientKey": "mn9mpf2514kaxl8m",
     "name": "BloomReel",
     "host": "localhost",
     "port": 5210,
     "iconUrl": "",
-    "desc": "BloomReel TikTok Mini. Product, legal, and advertising setup is pending.",
-    "ppLink": "",
-    "tosLink": ""
+    "desc": "BloomReel is a TikTok Minis short-drama app where viewers can discover series, watch episodes, resume viewing, and unlock selected episodes through rewarded ads where available. Content availability varies by region.",
+    "ppLink": "https://xuyins.com/static/augustlane/privacy-policy.html",
+    "tosLink": "https://xuyins.com/static/augustlane/terms-of-service.html"
   },
   "navbar": {
     "bgColorLight": "#0f172a",

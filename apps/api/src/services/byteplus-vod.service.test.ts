@@ -10,9 +10,13 @@ const env: Env = {
   NODE_ENV: 'test',
   PORT: 3000,
   HOST: '127.0.0.1',
-  DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
+  DATABASE_URL: 'postgresql://test:test@localhost:5432/test', API_DATABASE_CONNECTION_LIMIT: 2, WORKER_DATABASE_CONNECTION_LIMIT: 1,
   MINI_APP_KEY: 'main',
   API_CORS_ORIGIN: 'http://localhost:5173',
+  API_DB_CONCURRENCY: 24,
+  API_DB_CONCURRENCY_PER_APP: 2,
+  API_DB_QUEUE_LIMIT: 64,
+  API_DB_QUEUE_LIMIT_PER_APP: 8, API_DB_RESERVED: 8, API_DB_QUEUE_WAIT_MS: 1000,
   TRUST_GEO_COUNTRY_HEADER: false,
   TRUSTED_PROXY_CIDRS: '',
   ENTRY_AD_ATTRIBUTION_GATE_ENABLED: false,
@@ -54,6 +58,25 @@ function okJson(body: unknown) {
 }
 
 describe('BytePlusVodService', () => {
+  it('publishes a VID and requires a nonempty main playback URL', async () => {
+    const publishRequests: unknown[] = [];
+    const playbackRequests: unknown[] = [];
+    let playable = false;
+    const service = new BytePlusVodService(env, { vodService: {
+      UpdateMediaPublishStatus: async (input: unknown) => { publishRequests.push(input); return {}; },
+      GetPlayInfo: async (input: unknown) => {
+        playbackRequests.push(input);
+        return { Result: { PlayInfoList: [{ MainPlayUrl: playable ? 'https://example.com/video.mp4' : '' }] } };
+      }
+    } as never });
+    await service.publishMedia('vid-1');
+    assert.equal(await service.hasPlayableUrl('vid-1'), false);
+    playable = true;
+    assert.equal(await service.hasPlayableUrl('vid-1'), true);
+    assert.deepEqual(publishRequests, [{ Vid: 'vid-1', Status: 'Published' }]);
+    assert.deepEqual(playbackRequests, [{ Vid: 'vid-1', Ssl: '1' }, { Vid: 'vid-1', Ssl: '1' }]);
+  });
+
   it('requests HTTPS playback URLs in the signed play auth token', async () => {
     let signed: { query: unknown; expires?: number } | undefined;
     const service = new BytePlusVodService(env, {

@@ -1,17 +1,41 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { acknowledgeAppEntryAdShown, completeAppEntryAd, showAppEntryAd, startAppEntryAdSession } from '../features/ads/app-entry-ad';
 import { runEntryAdFlow } from '../features/ads/entry-ad-flow';
 import { getLocalEntryAdPlacementIds } from '../features/ads/entry-ad-placements';
 import { attemptLocalEntryAd } from '../features/ads/local-entry-ad';
 import { ensureAnonymousSession, ensureTikTokSession, recordMiniLaunch } from '../features/auth/anonymous-session';
 import { reportDiagnostic } from '../lib/diagnostics';
-import { ApiError } from '../lib/api-client';
+import { ApiError, apiClient } from '../lib/api-client';
+import { campaignLaunchOptionsEvent, getCampaignEntryTarget, hasCampaignEntryIntent } from '../lib/launch-context';
 import { appKey } from '../lib/app-brand';
 import styles from './EntryAdGate.module.css';
 
 type GateState = 'LOADING' | 'READY' | 'ERROR';
 type GateStep = 'ANONYMOUS_SESSION' | 'ENTRY_AD_POLICY' | 'ENTRY_AD_PLAYBACK';
 const EntryAdReadyContext = createContext(true);
+const campaignLaunchWaitMs = 1_200;
+
+function waitForCampaignLaunchOptions(signal: AbortSignal) {
+  if (getCampaignEntryTarget() || hasCampaignEntryIntent()) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener(campaignLaunchOptionsEvent, check);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const check = () => {
+      if (getCampaignEntryTarget() || hasCampaignEntryIntent()) finish();
+    };
+    const timer = window.setTimeout(finish, campaignLaunchWaitMs);
+    window.addEventListener(campaignLaunchOptionsEvent, check);
+    signal.addEventListener('abort', finish, { once: true });
+  });
+}
 
 export function useEntryAdReady() {
   return useContext(EntryAdReadyContext);
@@ -32,6 +56,7 @@ function formatGateError(step: GateStep, cause: unknown) {
 }
 
 export function EntryAdGate({ children }: { children: ReactNode }) {
+  const navigate = useNavigate();
   const localPlacementIds = getLocalEntryAdPlacementIds();
   const localEntryMode = localPlacementIds.length === 2;
   const [state, setState] = useState<GateState>('LOADING');
@@ -39,31 +64,60 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
   const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
-    if (localEntryMode) {
-      const controller = new AbortController();
-      const anonymousSession = ensureAnonymousSession();
-      void anonymousSession.then(() => setState('READY'), () => setState('READY'));
-      void attemptLocalEntryAd({
-        placementIds: localPlacementIds,
-        getEligibility: async () => {
-          await anonymousSession;
-          void ensureTikTokSession().catch(() => undefined);
-          const result = await recordMiniLaunch();
-          return result?.entryAdEligibility;
-        },
-        isActive: () => !controller.signal.aborted
-      }).catch((cause) => {
-        reportDiagnostic({ kind: 'AD', phase: 'LOCAL_ENTRY_AD', message: cause instanceof Error ? cause.message : String(cause) });
-      });
-      return () => controller.abort();
-    }
-
     const controller = new AbortController();
     const startedAt = Date.now();
     const startupTimer = window.setTimeout(() => {
       if (!controller.signal.aborted) reportDiagnostic({ kind: 'STARTUP', phase: 'ENTRY_GATE_SLOW', message: 'Entry gate has not completed after 15 seconds', durationMs: Date.now() - startedAt });
     }, 15_000);
-    const wait = (ms: number) => new Promise<void>((resolve) => {
+    const run = async () => {
+      await waitForCampaignLaunchOptions(controller.signal);
+      if (controller.signal.aborted) return;
+      const campaignTarget = getCampaignEntryTarget();
+      if (!campaignTarget && hasCampaignEntryIntent()) {
+        window.clearTimeout(startupTimer);
+        setState('READY');
+        navigate('/', { replace: true });
+        return;
+      }
+      if (campaignTarget) {
+        try {
+          const query = new URLSearchParams({ album_id: campaignTarget.albumId, episode_id: campaignTarget.episodeId });
+          const target = await apiClient.getPublic<{ status: 'PLAYABLE'; albumId: string; episodeId: string }>(`/campaign-entry/resolve?${query}`);
+          if (target.status !== 'PLAYABLE') throw new ApiError('Campaign episode is unavailable.', 404, 'NOT_FOUND');
+          if (controller.signal.aborted) return;
+          window.clearTimeout(startupTimer);
+          setState('READY');
+          navigate(`/watch/${encodeURIComponent(target.albumId)}/${encodeURIComponent(target.episodeId)}`, { replace: true });
+          return;
+        } catch (cause) {
+          if (controller.signal.aborted) return;
+          if (!(cause instanceof ApiError) || cause.status !== 404) {
+            reportDiagnostic({ kind: 'STARTUP', phase: 'CAMPAIGN_ENTRY_RESOLVE', message: cause instanceof Error ? cause.message : String(cause) });
+          }
+          navigate('/', { replace: true });
+          return;
+        }
+      }
+
+      if (localEntryMode) {
+        const anonymousSession = ensureAnonymousSession();
+        void anonymousSession.then(() => setState('READY'), () => setState('READY'));
+        void attemptLocalEntryAd({
+          placementIds: localPlacementIds,
+          getEligibility: async () => {
+            await anonymousSession;
+            void ensureTikTokSession().catch(() => undefined);
+            const result = await recordMiniLaunch();
+            return result?.entryAdEligibility;
+          },
+          isActive: () => !controller.signal.aborted
+        }).catch((cause) => {
+          reportDiagnostic({ kind: 'AD', phase: 'LOCAL_ENTRY_AD', message: cause instanceof Error ? cause.message : String(cause) });
+        });
+        return;
+      }
+
+      const wait = (ms: number) => new Promise<void>((resolve) => {
       if (controller.signal.aborted) return resolve();
       const timer = window.setTimeout(done, ms);
       function done() {
@@ -73,7 +127,6 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
       }
       controller.signal.addEventListener('abort', done, { once: true });
     });
-    const run = async () => {
       let failures = 0;
       while (!controller.signal.aborted) {
         let step: GateStep = 'ANONYMOUS_SESSION';
@@ -121,7 +174,7 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
       controller.abort();
       window.clearTimeout(startupTimer);
     };
-  }, [attempt, localEntryMode]);
+  }, [attempt, localEntryMode, navigate]);
   return <EntryAdReadyContext.Provider value={state === 'READY'}>
     {children}
     {state === 'ERROR' && <aside className={styles.notice} role="alert"><p>{errorMessage}</p><button onClick={() => { setState('LOADING'); setAttempt((value) => value + 1); }}>Try again</button></aside>}

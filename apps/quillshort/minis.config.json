@@ -1,0 +1,21 @@
+{
+  "appId": "7701636896870451221",
+  "dev": {
+    "clientKey": "mnam4zkg31nkqjxf",
+    "name": "QuillShort",
+    "host": "localhost",
+    "port": 5211,
+    "iconUrl": "",
+    "desc": "QuillShort is a TikTok Minis short-drama app where viewers can discover series, watch episodes, resume viewing, and unlock selected episodes through rewarded ads where available. Content availability varies by region.",
+    "ppLink": "https://xuyins.com/static/augustlane/privacy-policy.html",
+    "tosLink": "https://xuyins.com/static/augustlane/terms-of-service.html"
+  },
+  "navbar": {
+    "bgColorLight": "#0f172a",
+    "bgColorDark": "#0f172a"
+  },
+  "build": {
+    "htmlEntry": "index.html",
+    "outputDir": "dist"
+  }
+}

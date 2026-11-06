@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
 import { miniAppAdConfig } from '../../config/mini-apps';
 import { measureDatabase, sampleResponseLog, type ResponseLogSampleCache } from '../../lib/request-performance';
-import { singleFlight } from '../../lib/single-flight';
+import { serialByKey, singleFlight } from '../../lib/single-flight';
 import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { requestCountry } from '../../lib/content-visibility';
@@ -39,6 +39,8 @@ function logCompletionSample(app: FastifyInstance, request: FastifyRequest, key:
 function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
   const placements = miniAppAdConfig(app.config);
   const mode = placements.appEntryPlacementId ? 'INTERSTITIAL' as const : 'REWARDED_GATED' as const;
+  const v005 = ['bloomreel', 'quillshort', 'amberplay', 'nimbusclip', 'runereel'].includes(app.config.MINI_APP_KEY)
+    && releaseId.startsWith(`${app.config.MINI_APP_KEY}-v005-`);
   return {
     id: releaseId === 'default' ? policyId : `release:${releaseId}`,
     releaseId,
@@ -47,10 +49,10 @@ function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
     exitRetentionAdCount: 1,
     episodeInterstitialEnabled: true,
     episodeInterstitialInitialDelaySeconds: 30,
-    episodeInterstitialIntervalSeconds: 60,
-    episodeInterstitialMinIntervalSeconds: 180,
-    episodeInterstitialMaxPerSession: 2,
-    episodeInterstitialInitialSkipTransitions: 2,
+    episodeInterstitialIntervalSeconds: v005 ? 40 : 60,
+    episodeInterstitialMinIntervalSeconds: v005 ? 40 : 180,
+    episodeInterstitialMaxPerSession: v005 ? 20 : 2,
+    episodeInterstitialInitialSkipTransitions: v005 ? 100 : 2,
     episodeInterstitialEveryTransitions: 3,
     episodeInterstitialRewardedCooldownSeconds: 60,
     mode,
@@ -110,6 +112,26 @@ async function readAppEntryAdPolicyRecord(app: FastifyInstance, releaseId = 'def
 
 export async function readAppEntryAdPolicy(app: FastifyInstance, releaseId = 'default') {
   return (await readAppEntryAdPolicyRecord(app, releaseId)).policy;
+}
+
+export async function observeAppEntryAdRelease(app: FastifyInstance, releaseId: string) {
+  const { policy, saved } = await readAppEntryAdPolicyRecord(app, releaseId);
+  if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
+    try {
+      const created = await app.prisma.appEntryAdPolicy.create({ data: { ...disabledPolicy(app, releaseId), firstSeenAt: new Date() } });
+      setPolicyCache(app, releaseId, created, created);
+      return created;
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+      invalidateAppEntryAdPolicyCache(app, releaseId);
+      return readAppEntryAdPolicy(app, releaseId);
+    }
+  }
+  if (saved && !saved.firstSeenAt) {
+    await app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } });
+    invalidateAppEntryAdPolicyCache(app, releaseId);
+  }
+  return policy;
 }
 
 export async function readExitRetentionConfig(app: FastifyInstance, releaseId: string, userId: string, ip: string) {
@@ -173,22 +195,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       }
       if (attribution.status !== 'ATTRIBUTED') return { required: false as const };
     }
-    const loadedPolicy = await measureDatabase(request, () => readAppEntryAdPolicyRecord(app, releaseId));
-    let saved = loadedPolicy.saved;
-    let policy = loadedPolicy.policy;
-    if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
-      try {
-        policy = await measureDatabase(request, () => app.prisma.appEntryAdPolicy.create({ data: { ...disabledPolicy(app, releaseId), firstSeenAt: new Date() } }));
-        invalidateAppEntryAdPolicyCache(app, releaseId);
-      } catch (error) {
-        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
-        policy = await measureDatabase(request, () => readAppEntryAdPolicy(app, releaseId));
-      }
-    }
-    if (saved && !saved.firstSeenAt) {
-      await measureDatabase(request, () => app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } }));
-      invalidateAppEntryAdPolicyCache(app, releaseId);
-    }
+    const policy = await measureDatabase(request, () => observeAppEntryAdRelease(app, releaseId));
     if (!policy.enabled) return { required: false as const };
     const [ipExempt, viewer] = await Promise.all([
       measureDatabase(request, () => isEntryAdIpExempt(app.sharedPrisma, request.ip)).catch((error) => {
@@ -253,6 +260,9 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     const { sessionId } = sessionParams.parse(request.params);
     const { clientEventId, isEnded } = completionInput.parse(request.body);
     const transact = () => app.prisma.$transaction(async (tx) => {
+      // READ COMMITTED + a single row lock serializes only this session, including
+      // requests routed to another API instance. All eligibility is rechecked below.
+      await tx.$queryRaw`SELECT "id" FROM "AppEntryAdSession" WHERE "id" = ${sessionId} AND "userId" = ${request.user.sub} FOR UPDATE`;
       const session = await tx.appEntryAdSession.findUnique({ where: { id: sessionId } });
       if (!session || session.userId !== request.user.sub) return null;
 
@@ -268,19 +278,11 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
         });
         if (closed) return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: true, retryCurrent: true };
       }
-      const shown = await tx.adEvent.findFirst({
-        where: {
-          userId: request.user.sub,
-          clientEventId,
-          scope: 'APP_ENTRY',
-          eventType: 'SHOWN',
-          appEntrySessionId: sessionId,
-          adType: session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED',
-          placementId: session.placementId
-        },
-        select: { id: true, adIndex: true }
-      });
-      if (!shown) return { retryShownAcknowledgement: true as const };
+      const shown = await tx.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } });
+      if (!shown || shown.eventType !== 'SHOWN' || shown.scope !== 'APP_ENTRY' || shown.appEntrySessionId !== sessionId
+        || shown.adType !== (session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED') || shown.placementId !== session.placementId) {
+        return { retryShownAcknowledgement: true as const };
+      }
       const adIndex = shown.adIndex;
       if (adIndex == null) return null;
       const indexCompletion = await tx.appEntryAdCompletion.findUnique({ where: { sessionId_adIndex: { sessionId, adIndex } } });
@@ -292,21 +294,37 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
         await tx.adEvent.update({ where: { id: shown.id }, data: { eventType: 'CLOSED_INCOMPLETE' } });
         return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: true, retryCurrent: true };
       }
-      const event = await tx.adEvent.upsert({
-        where: { userId_clientEventId: { userId: request.user.sub, clientEventId } },
-        create: { userId: request.user.sub, clientEventId, adType: session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED', scope: 'APP_ENTRY', eventType: isEnded ? 'CLOSED_COMPLETED' : 'CLOSED_INCOMPLETE', placementId: session.placementId, sessionId, appEntrySessionId: sessionId, adIndex },
-        update: { scope: 'APP_ENTRY', eventType: isEnded ? 'CLOSED_COMPLETED' : 'CLOSED_INCOMPLETE', placementId: session.placementId, sessionId, appEntrySessionId: sessionId, adIndex }
+      const event = await tx.adEvent.update({
+        where: { id: shown.id },
+        data: { eventType: isEnded ? 'CLOSED_COMPLETED' : 'CLOSED_INCOMPLETE' }
       });
       await tx.appEntryAdCompletion.create({ data: { sessionId, clientEventId, adIndex, adEventId: event.id } });
       const completedCount = adIndex;
       const status = completedCount >= session.requiredCount ? 'COMPLETED' as const : 'ACTIVE' as const;
       await tx.appEntryAdSession.update({ where: { id: sessionId }, data: { completedCount, status, expiresAt: new Date(Date.now() + sessionTtlMs) } });
       return { completedCount, requiredCount: session.requiredCount, shouldContinue: status === 'ACTIVE', retryCurrent: false };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 1_000, timeout: 3_000 });
     const result = await measureDatabase(request, () => singleFlight(
       app,
       `entry-complete:${request.user.sub}:${sessionId}:${clientEventId}:${isEnded}`,
-      async () => {
+      () => serialByKey(app, `entry-session:${sessionId}`, async () => {
+        const current = await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } });
+        if (!current || current.userId !== request.user.sub) return null;
+        const completed = await app.prisma.appEntryAdCompletion.findUnique({ where: { sessionId_clientEventId: { sessionId, clientEventId } } });
+        if (completed) return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue: current.completedCount < current.requiredCount, retryCurrent: false };
+        if (current.status !== 'ACTIVE' || current.expiresAt <= new Date()) return null;
+        const event = await app.prisma.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } });
+        const matches = event && event.scope === 'APP_ENTRY' && event.appEntrySessionId === sessionId
+          && event.adType === (current.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED') && event.placementId === current.placementId;
+        if (matches && event.eventType === 'CLOSED_INCOMPLETE' && !isEnded && current.countMode === 'COMPLETED') {
+          return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue: true, retryCurrent: true };
+        }
+        // An already consumed index is idempotent even with a different event ID.
+        if (matches && event.adIndex != null) {
+          const consumed = await app.prisma.appEntryAdCompletion.findUnique({ where: { sessionId_adIndex: { sessionId, adIndex: event.adIndex } } });
+          if (consumed) return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue: current.completedCount < current.requiredCount, retryCurrent: false };
+        }
+        if (!matches || event.eventType !== 'SHOWN') return { retryShownAcknowledgement: true as const };
         let transactionResult: Awaited<ReturnType<typeof transact>> | undefined;
         for (let attempt = 0; attempt < 5; attempt++) {
           try {
@@ -326,7 +344,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
           }
         }
         return transactionResult;
-      }
+      })
     ));
 
     if (!result) {

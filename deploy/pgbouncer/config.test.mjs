@@ -9,6 +9,7 @@ test('PgBouncer exposes bounded per-database and overflow pools', () => {
   assert.match(config, /default_pool_size = 4\n/);
   assert.match(config, /reserve_pool_size = 2\n/);
   assert.match(config, /reserve_pool_timeout = 1\n/);
+  assert.match(config, /max_client_conn = 500\n/);
   assert.match(config, /max_user_connections = 60\n/);
   assert.match(config, /pool_mode = transaction\nignore_startup_parameters = search_path\n/);
 });

@@ -1,6 +1,6 @@
 import {
   Activity, AlertTriangle, BarChart3, CalendarDays, CheckCircle2, CircleAlert, Database,
-  Film, FileVideo, Gauge, Image, LayoutDashboard, ListVideo, LogIn, Megaphone, MoreHorizontal, Plus,
+  Film, FileVideo, Gauge, Image, LayoutDashboard, Link2, ListVideo, LogIn, Megaphone, MoreHorizontal, Plus,
   Pencil, RefreshCw, Save, Settings2, Trash2, Upload, Users, Wifi
 } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
@@ -15,16 +15,19 @@ import { HealthPanel, type Health } from './health-panel';
 import { AudiencePage, AudienceCountries, PlaybackPage, type Audience, type Playback } from './analytics-pages';
 import { ViewerAdControls } from './viewer-ad-controls';
 import { SharedIpControls } from './shared-ip-controls';
+import { MiniEntryLinks } from './mini-entry-links';
+import { CampaignEntryLinks, campaignEntryApps } from './campaign-entry-links';
 import './styles.css';
 
-const miniAppNames = { main: 'QuicK ReeLS', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks', crownrush: 'CrownRush', sugarreel: 'SugarReel', crimsonshorts: 'CrimsonShorts', sweetreel: 'SweetReel', dramablaze: 'DramaBlaze', heartreel: 'HeartReel', dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama', lucidreel: 'LucidReel', astraclip: 'AstraClip', lumoreel: 'LumoReel', orbitplay: 'OrbitPlay', zenclip: 'ZenClip', auraclip: 'AuraClip', fluxplay: 'FluxPlay', driftreel: 'DriftReel', novaclip: 'NovaClip', lumishort: 'LumiShort', sonicreel: 'SonicReel', harborplay: 'HarborPlay', dazzleshort: 'DazzleShort', fableclip: 'FableClip', emberreel: 'EmberReel', bloomreel: 'BloomReel' } as const;
+const miniAppNames = { main: 'CobaltClip', quartzplay: 'QuartzPlay', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks', crownrush: 'CrownRush', sugarreel: 'SugarReel', crimsonshorts: 'CrimsonShorts', sweetreel: 'SweetReel', dramablaze: 'DramaBlaze', heartreel: 'HeartReel', dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama', lucidreel: 'LucidReel', astraclip: 'AstraClip', lumoreel: 'LumoReel', orbitplay: 'OrbitPlay', zenclip: 'ZenClip', auraclip: 'AuraClip', fluxplay: 'FluxPlay', driftreel: 'DriftReel', novaclip: 'NovaClip', lumishort: 'LumiShort', sonicreel: 'SonicReel', harborplay: 'HarborPlay', dazzleshort: 'DazzleShort', fableclip: 'FableClip', emberreel: 'EmberReel', bloomreel: 'BloomReel', quillshort: 'QuillShort', amberplay: 'AmberPlay', nimbusclip: 'NimbusClip', runereel: 'RuneReel', riftsaga: 'RiftSaga', haloflicks: 'HaloFlicks', threadtale: 'ThreadTale', fablevibe: 'FableVibe', wispreel: 'WispReel', yalareels: 'YalaReels' } as const;
 type MiniApp = keyof typeof miniAppNames;
 const miniAppOrganizations = [
-  { id: 'quickreels', label: 'Quick Reels 组织', apps: ['main'] },
+  { id: 'quickreels', label: 'CobaltClip 组织', apps: ['main', 'quartzplay'] },
   { id: 'taletv', label: 'Gmart 挂靠组织', apps: ['storyland', 'dramacloud', 'dailyreel', 'dramaone', 'dramaup', 'dramavault', 'talehub', 'talebox', 'storyworld', 'storyhub', 'dramaroom', 'dramazone', 'taleflick', 'dramashort', 'storyshort', 'storyflicks', 'dramaflicks', 'cinereels', 'taletv', 'talereels'] },
   { id: 'crownrush', label: '香港长风组织', apps: ['crownrush', 'sugarreel', 'crimsonshorts', 'sweetreel', 'dramablaze', 'heartreel', 'dramahit', 'crownreel', 'luxereel', 'elitedrama', 'sonicreel', 'harborplay', 'dazzleshort', 'fableclip', 'emberreel'] },
   { id: 'newbeat', label: '飞书挂靠', apps: ['lucidreel', 'astraclip', 'lumoreel', 'orbitplay', 'zenclip', 'auraclip', 'fluxplay', 'driftreel', 'novaclip', 'lumishort'] },
-  { id: 'augustLane', label: 'AUGUST LANE MEDIA LIMITED', apps: ['bloomreel'] }
+  { id: 'augustLane', label: 'AUGUST LANE MEDIA LIMITED', apps: ['bloomreel', 'quillshort', 'amberplay', 'nimbusclip', 'runereel'] },
+  { id: 'wowoLezi', label: 'WOWO LEZI CULTURE MEDIA (HONG KONG) LIMITED', apps: ['riftsaga', 'haloflicks', 'threadtale', 'fablevibe', 'wispreel', 'yalareels'] }
 ] as const satisfies ReadonlyArray<{ id: string; label: string; apps: readonly MiniApp[] }>;
 const miniAppOrganization = (app: MiniApp) => miniAppOrganizations.find((group) => (group.apps as readonly string[]).includes(app))!;
 const miniAppPaths = Object.fromEntries(Object.keys(miniAppNames).filter((key) => key !== 'main').map((key) => [key, key])) as Record<Exclude<MiniApp, 'main'>, string>;
@@ -210,13 +213,13 @@ const portalStatusLabels: Record<PortalStatus, string> = { UNKNOWN: '未核实',
 type AdminRole = 'OWNER' | 'EDITOR' | 'ANALYST' | 'SUPPORT';
 type AdminPermission = 'content.write' | 'content.sync' | 'content.review' | 'content.publish' | 'ads.write';
 type AdminProfile = { id: string; email: string; role: AdminRole; status: string; lastLoginAt?: string | null; passwordChangedAt?: string | null };
-type Tab = 'overview' | 'create' | 'albums' | 'ads' | 'audience' | 'playback' | 'security';
+type Tab = 'overview' | 'create' | 'albums' | 'ads' | 'links' | 'audience' | 'playback' | 'security';
 type ResourceKey = 'admin' | 'overview' | 'health' | 'recentJobs' | 'jobs' | 'albums' | 'episodes' | 'platformJobs' | 'ads' | 'audience' | 'playback';
 type ResourceStatus = { loading: boolean; loaded: boolean; error: string | null };
 const tabResources: Record<Tab, ResourceKey[]> = {
   overview: ['overview', 'health', 'recentJobs'], create: ['albums', 'episodes', 'jobs'],
   albums: ['albums', 'platformJobs'], ads: ['ads'],
-  audience: ['audience'], playback: ['playback'], security: ['admin']
+  links: [], audience: ['audience'], playback: ['playback'], security: ['admin']
 };
 const contentDraftStorageKey = activeApp === 'main' ? 'quickreels_content_draft' : `quickreels_${activeApp}_content_draft`;
 const contentTemplateStorageKey = activeApp === 'main' ? 'quickreels_content_templates' : `quickreels_${activeApp}_content_templates`;
@@ -422,6 +425,7 @@ function AdminApp() {
       case 'create': await Promise.all([loadAlbums(), loadEpisodes(), loadJobs()]); return;
       case 'albums': await Promise.all([loadAlbums(), loadEpisodes(), loadPlatformJobs()]); return;
       case 'ads': await loadEntryAdSettings(); return;
+      case 'links': return;
       case 'audience': await loadResource('audience', (signal) => api<Audience>(`/admin/analytics/audience?${range}`, { signal }), setAudience); return;
       case 'playback': await loadResource('playback', (signal) => api<Playback>(`/admin/analytics/playback-quality?${range}`, { signal }), setPlayback); return;
       case 'security': await loadAdmin(); return;
@@ -1211,11 +1215,12 @@ function AdminApp() {
   const navItems: Array<[Tab, typeof Activity, string]> = [['overview', LayoutDashboard, '概览'], ['audience', Users, '观众数据'], ['playback', Activity, '播放质量']];
   if (canWriteContent) navItems.splice(1, 0, ['create', Plus, '内容创建'], ['albums', ListVideo, '剧集与解锁']);
   if (canWriteAds) navItems.splice(canWriteContent ? 3 : 1, 0, ['ads', Megaphone, '进入广告']);
-  const tabLabels: Record<Tab, string> = { overview: '概览', create: '内容创建', albums: '剧集与解锁', ads: '进入广告', audience: '观众数据', playback: '播放质量', security: '账号安全' };
-  const title = tab === 'overview' ? '内容运营概览' : tab === 'create' ? '内容创建' : tab === 'ads' ? '进入广告策略' : tab === 'audience' ? '观众数据' : tab === 'playback' ? '播放质量' : tab === 'security' ? '账号安全' : '剧集与解锁配置';
+  if (canWriteAds) navItems.splice(canWriteContent ? 4 : 2, 0, ['links', Link2, 'TikTok 入口']);
+  const tabLabels: Record<Tab, string> = { overview: '概览', create: '内容创建', albums: '剧集与解锁', ads: '进入广告', links: 'TikTok 入口', audience: '观众数据', playback: '播放质量', security: '账号安全' };
+  const title = tab === 'overview' ? '内容运营概览' : tab === 'create' ? '内容创建' : tab === 'ads' ? '进入广告策略' : tab === 'links' ? 'TikTok 入口与运行版本' : tab === 'audience' ? '观众数据' : tab === 'playback' ? '播放质量' : tab === 'security' ? '账号安全' : '剧集与解锁配置';
 
   const selectedEntryAdRelease = entryAdVersions.find((item) => item.releaseId === entryAdReleaseId);
-  return <div className="admin-layout"><aside className="sidebar"><div className="brand"><span><Film size={17} /></span>QuicK <span>ReeLS</span></div><MiniAppSelect />{creating && <p className="form-help">上传进行中，完成后可切换小程序。</p>}<p className="workspace-label">运营工作区</p><nav>
+  return <div className="admin-layout"><aside className="sidebar"><div className="brand"><span><Film size={17} /></span>CobaltClip</div><MiniAppSelect />{creating && <p className="form-help">上传进行中，完成后可切换小程序。</p>}<p className="workspace-label">运营工作区</p><nav>
     {navItems.map(([key, Icon, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}><Icon size={17} />{label}</button>)}
   </nav><div className="sidebar-bottom"><button className={tab === 'security' ? 'active' : ''} onClick={() => setTab('security')}><Settings2 size={17} />账号安全</button><div className="account"><span className="account-avatar">{currentAdmin?.email.slice(0, 2).toUpperCase() ?? 'OP'}</span><span><strong>{currentAdmin?.email ?? '运营管理员'}</strong><small>{currentAdmin?.role ?? 'TK小程序管理后台'}</small></span><MoreHorizontal size={16} /></div></div></aside>
     <main className="main"><header className="page-header"><div><p className="eyebrow">{miniAppNames[activeApp]} / {tabLabels[tab]}</p><h1>{title}</h1><p className="subhead">当前展示 {miniAppNames[activeApp]} 的内容和数据。</p></div><div className="header-actions"><button className="secondary" onClick={() => void loadTab(tab)} title="刷新当前页面"><RefreshCw size={15} className={loading ? 'spin' : ''} />刷新</button><button className="secondary" onClick={() => { sessionStorage.removeItem(adminTokenStorageKey); sessionStorage.removeItem(platformSubmissionStorageKey); setPlatformSubmissions([]); setLoggedIn(false); }}>退出登录</button></div></header>{message && <div className="notice"><CheckCircle2 size={16} />{message}</div>}{tabResources[tab].map((key) => resourceStatus[key]?.error && <div key={key} className="load-error" role="alert">{resourceStatus[key]?.error}<button className="secondary" type="button" onClick={() => void loadTab(tab)}>重试</button></div>)}
@@ -1376,7 +1381,7 @@ function AdminApp() {
       {tab === 'albums' && resourceStatus.albums?.loaded && canPublishContent && <Panel title="已审核剧目授权播放">
         <div className="multi-release-controls">
           <label>主剧目 · {miniAppNames[activeApp]}<select value={releaseAlbumId} disabled={releaseWorking !== null} onChange={(event) => { playbackStatusRequest.current += 1; setReleaseAlbumId(event.target.value); setReleaseStatuses([]); setReleaseActionErrors({}); }}><option value="">选择已上架主剧目</option>{albums.filter((album) => !album.sharedPlayback && album.onlineVersion && ['LISTED', '1'].includes(album.publishStatus ?? '')).map((album) => <option key={album.id} value={album.id}>{album.title}</option>)}</select></label>
-          <fieldset><legend>目标小程序 · {miniAppOrganization(activeApp).label}</legend><div className="multi-release-targets">{miniAppOrganization(activeApp).apps.filter((key) => key !== activeApp).map((key) => <label key={key}><input type="checkbox" disabled={releaseWorking !== null} checked={releaseTargets.includes(key)} onChange={(event) => setReleaseTargets((current) => event.target.checked ? [...current, key] : current.filter((item) => item !== key))} />{miniAppNames[key]}</label>)}</div>{miniAppOrganization(activeApp).apps.length === 1 && <p className="empty-copy">此组织目前只有一个小程序，无可授权的目标。</p>}</fieldset>
+          <fieldset><legend>目标小程序 · {miniAppOrganization(activeApp).label}</legend><div className="multi-release-targets">{miniAppOrganization(activeApp).apps.filter((key) => key !== activeApp).map((key) => <label key={key}><input type="checkbox" disabled={releaseWorking !== null} checked={releaseTargets.includes(key)} onChange={(event) => setReleaseTargets((current) => event.target.checked ? [...current, key] : current.filter((item) => item !== key))} />{miniAppNames[key]}</label>)}</div>{miniAppOrganization(activeApp).apps.filter((key) => key !== activeApp).length === 0 && <p className="empty-copy">此组织目前只有一个小程序，无可授权的目标。</p>}</fieldset>
           <div className="multi-release-actions">
             <button className="save-button" type="button" disabled={!releaseAlbumId || !releaseTargets.length || releaseWorking !== null} onClick={() => void runReleaseAction('AUTHORIZE')}>{releaseWorking === 'AUTHORIZE' ? '核实并授权中...' : '授权播放'}</button>
             <button className="secondary" type="button" disabled={!releaseAlbumId || !releaseTargets.length || releaseWorking !== null} onClick={() => void runReleaseAction('RECONCILE')}>对账</button>
@@ -1411,6 +1416,8 @@ function AdminApp() {
         <details><summary>剧集切换插屏调度</summary><div className="form-grid"><label className="check-row"><input type="checkbox" checked={entryAdPolicy.episodeInterstitialEnabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialEnabled: event.target.checked }))} />启用定时插屏</label><label>首次延迟（秒）<input type="number" min="0" value={entryAdPolicy.episodeInterstitialInitialDelaySeconds} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialInitialDelaySeconds: Number(event.target.value) }))} /></label><label>后续间隔（秒）<input type="number" min="1" value={entryAdPolicy.episodeInterstitialIntervalSeconds} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialIntervalSeconds: Number(event.target.value) }))} /></label><label>最短间隔（秒）<input type="number" min="0" value={entryAdPolicy.episodeInterstitialMinIntervalSeconds} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialMinIntervalSeconds: Number(event.target.value) }))} /></label><label>每会话上限<input type="number" min="0" max="20" value={entryAdPolicy.episodeInterstitialMaxPerSession} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialMaxPerSession: Number(event.target.value) }))} /></label><label>跳过前几次切集<input type="number" min="0" max="100" value={entryAdPolicy.episodeInterstitialInitialSkipTransitions} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialInitialSkipTransitions: Number(event.target.value) }))} /></label><label>之后每几次展示<input type="number" min="1" max="100" value={entryAdPolicy.episodeInterstitialEveryTransitions} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialEveryTransitions: Number(event.target.value) }))} /></label><label>激励广告后冷却（秒）<input type="number" min="0" value={entryAdPolicy.episodeInterstitialRewardedCooldownSeconds} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialRewardedCooldownSeconds: Number(event.target.value) }))} /></label></div></details>
         <p className="form-help">正在编辑：{entryAdPolicy.releaseId} · 策略版本 {entryAdPolicy.version}。退出挽留使用当前小程序服务端配置的激励广告位。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy || entryAdPolicy.releaseId !== entryAdReleaseId}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存广告策略</>}</button></form></Panel>}
       {tab === 'audience' && !audience && !resourceStatus.audience?.error && <p className="load-placeholder">正在加载观众数据...</p>}
+      {tab === 'links' && <MiniEntryLinks api={api} miniAppKey={activeApp} miniAppName={miniAppNames[activeApp]} canEdit={canWriteAds} />}
+      {tab === 'links' && canWriteContent && campaignEntryApps.has(activeApp) && <CampaignEntryLinks api={api} miniAppKey={activeApp} />}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <ViewerAdControls api={api} canEdit miniApps={organizationApps} currentMiniApp={activeApp} />}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <SharedIpControls api={api} canEdit miniApps={Object.entries(miniAppNames).map(([key, name]) => ({ key, name }))} />}
       {tab === 'audience' && audience && <AudiencePage audience={audience} />}

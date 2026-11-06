@@ -5,6 +5,7 @@ import { t } from '../lib/i18n';
 import { useLocale } from '../lib/storage';
 import { componentIsEnabled, useUiComponents } from '../features/cms/ui-components';
 import { appKey, appName } from '../lib/app-brand';
+import { EntryAdGate } from '../components/EntryAdGate';
 
 function NavItem({ to, label, icon: Icon }: { to: string; label: string; icon: typeof Compass }) {
   return <NavLink to={to} className={({ isActive }) => `${styles.navItem} ${isActive ? styles.navActive : ''}`}>{({ isActive }) => <><Icon size={19} strokeWidth={isActive ? 2.4 : 1.8} aria-hidden="true" /><span>{label}</span></>}</NavLink>;
@@ -29,7 +30,7 @@ export function App() {
         <button className={styles.profileButton} onClick={() => navigate('/profile')} aria-label={t(locale, 'profile')}><UserRound size={18} aria-hidden="true" /></button>
       </div>
     </header>}
-    <main className={`${styles.main} ${isWatchPage ? styles.watchMain : ''}`}><Outlet /></main>
+    <main className={`${styles.main} ${isWatchPage ? styles.watchMain : ''}`}><EntryAdGate><Outlet /></EntryAdGate></main>
     {!isWatchPage && componentIsEnabled(ui, 'APP_BOTTOM_NAV') && <nav className={styles.bottomNav} aria-label={t(locale, 'navigation')}>
       <NavItem to="/" label={t(locale, 'home')} icon={Compass} />
       <NavItem to="/profile" label={t(locale, 'library')} icon={Library} />

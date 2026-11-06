@@ -15,9 +15,15 @@ const env: Env = {
   NODE_ENV: 'test',
   PORT: 3000,
   HOST: '127.0.0.1',
-  DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
+  DATABASE_URL: 'postgresql://test:test@localhost:5432/test', API_DATABASE_CONNECTION_LIMIT: 2, WORKER_DATABASE_CONNECTION_LIMIT: 1,
   MINI_APP_KEY: 'main',
   API_CORS_ORIGIN: 'http://localhost:5173',
+  API_DB_CONCURRENCY: 24,
+  API_DB_CONCURRENCY_PER_APP: 24,
+  API_DB_QUEUE_LIMIT: 64,
+  API_DB_QUEUE_LIMIT_PER_APP: 8,
+  API_DB_RESERVED: 8,
+  API_DB_QUEUE_WAIT_MS: 1000,
   TRUSTED_PROXY_CIDRS: '',
   TRUST_GEO_COUNTRY_HEADER: true,
   ENTRY_AD_ATTRIBUTION_GATE_ENABLED: false,
@@ -545,24 +551,24 @@ describe('QuicK ReeLS API', () => {
     const trusted = await createTestApp({ TRUSTED_PROXY_CIDRS: '172.20.0.2/32' });
     apps.push(trusted);
     for (let index = 0; index < 120; index += 1) {
-      const response = await trusted.inject({ method: 'GET', url: '/ready', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '198.51.100.1' } });
+      const response = await trusted.inject({ method: 'GET', url: '/api/v1/albums', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '198.51.100.1' } });
       assert.equal(response.statusCode, 200);
     }
-    const limited = await trusted.inject({ method: 'GET', url: '/ready', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '198.51.100.1' } });
+    const limited = await trusted.inject({ method: 'GET', url: '/api/v1/albums', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '198.51.100.1' } });
     assert.equal(limited.statusCode, 429);
     assert.ok(Number(limited.headers['retry-after']) > 0);
-    const spoofedFirstHop = await trusted.inject({ method: 'GET', url: '/ready', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '203.0.113.99, 198.51.100.1' } });
+    const spoofedFirstHop = await trusted.inject({ method: 'GET', url: '/api/v1/albums', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '203.0.113.99, 198.51.100.1' } });
     assert.equal(spoofedFirstHop.statusCode, 429);
-    const otherClient = await trusted.inject({ method: 'GET', url: '/ready', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '198.51.100.2' } });
+    const otherClient = await trusted.inject({ method: 'GET', url: '/api/v1/albums', remoteAddress: '172.20.0.2', headers: { 'x-forwarded-for': '198.51.100.2' } });
     assert.equal(otherClient.statusCode, 200);
 
     const untrusted = await createTestApp({ TRUSTED_PROXY_CIDRS: '172.20.0.2/32' });
     apps.push(untrusted);
     for (let index = 0; index < 120; index += 1) {
-      const response = await untrusted.inject({ method: 'GET', url: '/ready', remoteAddress: '198.51.100.10', headers: { 'x-forwarded-for': `198.51.100.${index + 20}` } });
+      const response = await untrusted.inject({ method: 'GET', url: '/api/v1/albums', remoteAddress: '198.51.100.10', headers: { 'x-forwarded-for': `198.51.100.${index + 20}` } });
       assert.equal(response.statusCode, 200);
     }
-    const spoofed = await untrusted.inject({ method: 'GET', url: '/ready', remoteAddress: '198.51.100.10', headers: { 'x-forwarded-for': '203.0.113.99' } });
+    const spoofed = await untrusted.inject({ method: 'GET', url: '/api/v1/albums', remoteAddress: '198.51.100.10', headers: { 'x-forwarded-for': '203.0.113.99' } });
     assert.equal(spoofed.statusCode, 429);
   });
 
@@ -570,9 +576,9 @@ describe('QuicK ReeLS API', () => {
     const app = await createTestApp({ TALETV_DATABASE_URL: 'postgresql://test:test@localhost:5432/test?schema=taletv' });
     apps.push(app);
     for (let index = 0; index < 120; index += 1) {
-      assert.equal((await app.inject({ method: 'GET', url: '/ready' })).statusCode, 200);
+      assert.equal((await app.inject({ method: 'GET', url: '/api/v1/albums' })).statusCode, 200);
     }
-    assert.equal((await app.inject({ method: 'GET', url: '/ready' })).statusCode, 429);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/albums' })).statusCode, 429);
     assert.equal((await app.inject({ method: 'GET', url: '/api/taletv/v1/albums' })).statusCode, 200);
     const authorization = `Bearer ${await token(app, 'admin')}`;
     assert.equal((await app.inject({ method: 'GET', url: '/api/v1/admin/me', headers: { authorization } })).statusCode, 200);
@@ -594,8 +600,8 @@ describe('QuicK ReeLS API', () => {
   it('isolates anonymous bootstrap from unrelated public API traffic at a shared IP', async () => {
     const app = await createTestApp();
     apps.push(app);
-    for (let index = 0; index < 120; index += 1) assert.equal((await app.inject({ method: 'GET', url: '/ready' })).statusCode, 200);
-    assert.equal((await app.inject({ method: 'GET', url: '/ready' })).statusCode, 429);
+    for (let index = 0; index < 120; index += 1) assert.equal((await app.inject({ method: 'GET', url: '/api/v1/albums' })).statusCode, 200);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/albums' })).statusCode, 429);
     const session = await app.inject({ method: 'POST', url: '/api/v1/auth/anonymous/session',
       payload: { visitorKey: 'c'.repeat(64), clientSessionId: 'shared-ip-test-0001' } });
     assert.equal(session.statusCode, 200, session.body);
@@ -772,6 +778,32 @@ describe('QuicK ReeLS API', () => {
     assert.equal(ready.json().database, 'ok');
   });
 
+  it('keeps health probes available during admission overload and releases errored handlers', async () => {
+    const app = await createTestApp({ API_DB_CONCURRENCY: 1, API_DB_CONCURRENCY_PER_APP: 1, API_DB_QUEUE_LIMIT: 0 });
+    apps.push(app);
+    const model = (app.prisma as any).album;
+    const original = model.findMany;
+    let unblock!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    model.findMany = async () => { entered(); await new Promise<void>((resolve) => { unblock = resolve; }); throw new Error('test failure'); };
+    const busy = app.inject({ url: '/api/v1/albums' });
+    void busy.then(() => undefined);
+    await started;
+    const rejected = await app.inject({ url: '/api/v1/albums' });
+    assert.equal(rejected.statusCode, 503);
+    assert.equal(rejected.headers['retry-after'], '2');
+    const live = await app.inject({ url: '/live' });
+    assert.equal(live.statusCode, 200);
+    assert.equal(live.json().admission.apps.find((item: { key: string }) => item.key === 'main').rejectionReasons.global_queue_full, 1);
+    assert.equal(live.json().responseMetrics.apps.find((item: { key: string }) => item.key === 'main').serverError, 1);
+    assert.equal((await app.inject({ url: '/ready' })).statusCode, 200);
+    unblock();
+    assert.equal((await busy).statusCode, 500);
+    model.findMany = original;
+    assert.equal((await app.inject({ url: '/api/v1/albums' })).statusCode, 200);
+  });
+
   it('allows configured TikTok Mini origins without allowing arbitrary origins', async () => {
     const app = await createTestApp({
       API_CORS_ORIGIN: 'https://admin.evergreenprosper.com,https://tiktok.com,https://*.tiktok.com,https://*.tiktok-minis.us'
@@ -848,16 +880,89 @@ describe('QuicK ReeLS API', () => {
     assert.equal(catalogQueries, 1);
     assert.equal(repeatedPublic.json().blocks.some((block: { type: string }) => block.type === 'CONTINUE_WATCHING'), false);
     const authorization = `Bearer ${await token(app, 'user')}`;
-    const personalized = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { authorization } });
+    const personalized = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { authorization, 'x-geo-country': 'US' } });
     assert.equal(personalized.statusCode, 200);
     assert.equal(personalized.json().blocks[0].type, 'CONTINUE_WATCHING');
-    const repeatedPersonalized = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { authorization } });
+    const repeatedPersonalized = await app.inject({ method: 'GET', url: '/api/v1/home', headers: { authorization, 'x-geo-country': 'US' } });
     assert.equal(repeatedPersonalized.statusCode, 200);
     assert.equal(repeatedPersonalized.json().blocks[0].type, 'CONTINUE_WATCHING');
     assert.equal(progressQueries, 1);
+    assert.equal(catalogQueries, 1);
+    const separateProgress = await app.inject({ method: 'GET', url: '/api/v1/home/progress?locale=en', headers: { authorization, 'x-geo-country': 'US' } });
+    assert.equal(separateProgress.statusCode, 200);
+    assert.deepEqual(separateProgress.json().items, personalized.json().blocks[0].items);
+    assert.equal(separateProgress.headers['cache-control'], 'private, no-store');
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/home/progress' })).statusCode, 401);
+    const otherAuthorization = `Bearer ${app.jwt.sign({ sub: 'user-2', kind: 'user', appKey: 'main' })}`;
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/home/progress', headers: { authorization: otherAuthorization } })).statusCode, 200);
+    assert.equal(progressQueries, 2);
 
     const search = await app.inject({ method: 'GET', url: '/api/v1/search?q=test' });
     assert.equal(search.statusCode, 200);
+  });
+
+  it('serves a settled public home cache hit while database admission is full', async () => {
+    const app = await createTestApp({ NODE_ENV: 'production', API_DB_CONCURRENCY: 1, API_DB_CONCURRENCY_PER_APP: 1, API_DB_QUEUE_LIMIT: 0 });
+    apps.push(app);
+    const homeUrl = '/api/v1/home?locale=en';
+    const first = await app.inject({ url: homeUrl, headers: { 'x-geo-country': 'US' } });
+    assert.equal(first.statusCode, 200);
+    const model = (app.prisma as any).album;
+    const original = model.findMany;
+    let unblock!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    model.findMany = async () => { entered(); await new Promise<void>((resolve) => { unblock = resolve; }); return []; };
+    const busy = app.inject({ url: '/api/v1/albums' });
+    void busy.then(() => undefined);
+    await started;
+    try {
+      const cached = await app.inject({ url: homeUrl, headers: { 'x-geo-country': 'US' } });
+      assert.equal(cached.statusCode, 200);
+      assert.deepEqual(cached.json(), first.json());
+      const otherRegion = await app.inject({ url: homeUrl, headers: { 'x-geo-country': 'CA' } });
+      assert.equal(otherRegion.statusCode, 503);
+      const personalized = await app.inject({ url: homeUrl, headers: { authorization: `Bearer ${await token(app, 'user')}`, 'x-geo-country': 'US' } });
+      assert.equal(personalized.statusCode, 503);
+    } finally {
+      unblock();
+      await busy;
+      model.findMany = original;
+    }
+  });
+
+  it('shares a pending public home fill without filling the admission queue', async () => {
+    const app = await createTestApp({ NODE_ENV: 'production', API_DB_CONCURRENCY: 1, API_DB_CONCURRENCY_PER_APP: 1, API_DB_QUEUE_LIMIT: 0 });
+    apps.push(app);
+    const model = (app.prisma as any).album;
+    const original = model.findMany;
+    let unblock!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    model.findMany = async (...args: unknown[]) => {
+      entered();
+      await new Promise<void>((resolve) => { unblock = resolve; });
+      return original(...args);
+    };
+    const url = '/api/v1/home?locale=en';
+    const first = app.inject({ url, headers: { 'x-geo-country': 'US' } });
+    void first.then(() => undefined);
+    await started;
+    const second = app.inject({ url, headers: { 'x-geo-country': 'US' } });
+    void second.then(() => undefined);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const live = (await app.inject({ url: '/live' })).json();
+      assert.equal(live.admission.admitted, 1);
+      assert.equal(live.admission.queued, 0);
+    } finally {
+      unblock();
+      model.findMany = original;
+    }
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    assert.equal(firstResponse.statusCode, 200);
+    assert.equal(secondResponse.statusCode, 200);
+    assert.deepEqual(secondResponse.json(), firstResponse.json());
   });
 
   it('coalesces concurrent retries of the same anonymous session request', async () => {

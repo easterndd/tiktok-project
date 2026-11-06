@@ -309,6 +309,13 @@ model UiComponent {
   @@index([page, enabled])
 }
 
+model CampaignEntryBase {
+  id         String   @id @default("default")
+  url        String
+  verifiedAt DateTime
+  updatedAt  DateTime @updatedAt
+}
+
 model UiConfigVersion {
   version       Int            @id @default(autoincrement())
   status        UiConfigStatus @default(DRAFT)
@@ -723,6 +730,20 @@ model MiniAppCodeRelease {
 
   @@id([miniAppKey, releaseId])
   @@index([miniAppKey, portalStatus])
+}
+
+model MiniAppEntryLink {
+  miniAppKey  String
+  environment String
+  baseUrl     String
+  source      String   @default("MANUAL_LINK")
+  registeredAt DateTime @default(now())
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@id([miniAppKey, environment])
+  @@index([miniAppKey, registeredAt])
 }
 
 model AppEntryAdSession {

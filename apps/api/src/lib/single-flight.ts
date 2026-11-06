@@ -20,3 +20,19 @@ export function singleFlight<T>(scope: object, key: string, operation: () => Pro
   void promise.then(release, release);
   return promise;
 }
+
+const serialByScope = new WeakMap<object, Map<string, Promise<unknown>>>();
+
+/** Serialize one session, including different event IDs, without holding a DB connection. */
+export async function serialByKey<T>(scope: object, key: string, operation: () => Promise<T>): Promise<T> {
+  let jobs = serialByScope.get(scope);
+  if (!jobs) { jobs = new Map(); serialByScope.set(scope, jobs); }
+  const previous = jobs.get(key);
+  if (!previous && jobs.size >= maxInFlightKeysPerScope) {
+    throw Object.assign(new Error('Session queue is busy.'), { statusCode: 503 });
+  }
+  const job = (previous ?? Promise.resolve()).catch(() => undefined).then(operation);
+  jobs.set(key, job);
+  try { return await job; }
+  finally { if (jobs.get(key) === job) jobs.delete(key); }
+}

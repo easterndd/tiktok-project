@@ -9,7 +9,8 @@ if (!/^[a-z][a-z0-9-]*$/.test(appKey)) throw new Error('Invalid mini app directo
 
 const builtAt = new Date();
 const stamp = builtAt.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-const releaseId = `${appKey}-${stamp}-${randomBytes(3).toString('hex')}`;
+const v005Apps = new Set(['bloomreel', 'quillshort', 'amberplay', 'nimbusclip', 'runereel']);
+const releaseId = `${appKey}-${v005Apps.has(appKey) ? 'v005-' : ''}${stamp}-${randomBytes(3).toString('hex')}`;
 const env = { ...process.env, VITE_MINI_RELEASE_ID: releaseId };
 
 function run(command, args) {

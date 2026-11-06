@@ -1,0 +1,26 @@
+{
+  "appId": "7703413468036139028",
+  "dev": {
+    "name": "QuartzPlay",
+    "host": "localhost",
+    "port": 5211,
+    "iconUrl": "",
+    "desc": "QuartzPlay is a TikTok Minis short-drama app for discovering series and watching episodes. Content availability varies by region.",
+    "ppLink": "https://evergreenprosper.com/privacy",
+    "tosLink": "https://evergreenprosper.com/terms"
+  },
+  "navbar": {
+    "bgColorLight": "#0f172a",
+    "bgColorDark": "#0f172a"
+  },
+  "domain": {
+    "trustedDomains": [
+      "https://api.evergreenprosper.com",
+      "https://evergreenprosper.com"
+    ]
+  },
+  "build": {
+    "htmlEntry": "index.html",
+    "outputDir": "dist"
+  }
+}

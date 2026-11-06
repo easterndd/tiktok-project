@@ -8,7 +8,7 @@ const hooks = registerHooks({
     return next(specifier, context);
   }
 });
-const { getMiniLaunchContext, getMiniLaunchAdId, rememberSdkLaunchPayload } = await import('../src/lib/launch-context.ts');
+const { getMiniLaunchContext, getMiniLaunchAdId, getCampaignEntryTarget, hasCampaignEntryIntent, rememberSdkLaunchPayload, campaignLaunchOptionsEvent } = await import('../src/lib/launch-context.ts');
 const previousWindow = globalThis.window;
 after(() => { hooks.deregister(); globalThis.window = previousWindow; });
 
@@ -22,8 +22,48 @@ it('keeps the raw WebView URL while filtering sensitive parameters from the summ
     launchScene: undefined,
     launchPath: '/watch/album-1/episode-2',
     launchQuery: { campaign: 'spring' },
+    webviewBase: 'https://example.test/watch/album-1/episode-2',
     rawUrl: 'https://example.test/watch/album-1/episode-2?campaign=spring&access_token=secret&uid=user-1&redirect_url=https%3A%2F%2Fexample.test'
   });
+});
+
+it('reads TikTok campaign episode IDs from the SDK cold-start options', () => {
+  globalThis.window = {
+    location: { href: 'https://example.test/', pathname: '/', search: '' },
+    TTMinis: { game: { getEnterOptionsSync: () => ({ query: { album_id: '7704191617301661704', episode_id: '7704198523106805767' } }) } }
+  };
+  assert.deepEqual(getCampaignEntryTarget(), { albumId: '7704191617301661704', episodeId: '7704198523106805767' });
+});
+
+it('recognizes partial campaign links so they cannot fall through to entry ads', () => {
+  rememberSdkLaunchPayload({ query: {} });
+  globalThis.window = {
+    location: { href: 'https://example.test/?album_id=7704191617301661704', pathname: '/', search: '?album_id=7704191617301661704' },
+    TTMinis: {}
+  };
+  assert.equal(hasCampaignEntryIntent(), true);
+  assert.equal(getCampaignEntryTarget(), null);
+});
+
+it('notifies launch gates when asynchronous TikTok show options arrive', () => {
+  let eventCount = 0;
+  globalThis.window = {
+    location: { href: 'https://example.test/', pathname: '/', search: '' },
+    TTMinis: {},
+    dispatchEvent(event) { if (event.type === campaignLaunchOptionsEvent) eventCount += 1; }
+  };
+  rememberSdkLaunchPayload({ query: { album_id: '7704191617301661704', episode_id: '7704198523106805767' } });
+  assert.equal(eventCount, 1);
+  assert.deepEqual(getCampaignEntryTarget(), { albumId: '7704191617301661704', episodeId: '7704198523106805767' });
+});
+
+it('rejects incomplete or malformed TikTok campaign parameters', () => {
+  rememberSdkLaunchPayload({ query: {} });
+  globalThis.window = {
+    location: { href: 'https://example.test/?album_id=123&episode_id=bad', pathname: '/', search: '?album_id=123&episode_id=bad' },
+    TTMinis: {}
+  };
+  assert.equal(getCampaignEntryTarget(), null);
 });
 
 it('uses the official Mini Drama onShow payload for the launch summary', () => {
@@ -37,6 +77,7 @@ it('uses the official Mini Drama onShow payload for the launch summary', () => {
     launchScene: 'ads',
     launchPath: '/',
     launchQuery: { source: 'campaign', episode_id: 'ep-2', ttoclid: 'click-1' },
+    webviewBase: 'https://example.test/',
     rawUrl: 'https://example.test/watch/album-1/episode-2?campaign=spring&access_token=secret&uid=user-1&redirect_url=https%3A%2F%2Fexample.test'
   });
 });

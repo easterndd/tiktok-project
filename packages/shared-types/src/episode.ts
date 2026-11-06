@@ -16,6 +16,7 @@ export type PlayInfo = {
   playbackMode?: 'BYTEPLUS' | 'LOCAL';
   albumId: string;
   localEpisodeId: string;
+  episodeNo?: number;
   episodeId: string;
   vid: string;
   playAuthToken: string | null;

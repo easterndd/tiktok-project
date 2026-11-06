@@ -1,0 +1,20 @@
+{
+  "appId": "7697825438806181908",
+  "dev": {
+    "name": "YalaReels",
+    "host": "localhost",
+    "port": 5220,
+    "iconUrl": "",
+    "desc": "YalaReels is a TikTok Minis short-drama app where viewers can discover series, watch episodes, resume viewing, and unlock selected episodes through rewarded ads where available. Content availability varies by region.",
+    "ppLink": "https://xuyins.com/static/wowolezi/privacy-policy.html",
+    "tosLink": "https://xuyins.com/static/wowolezi/terms-of-service.html"
+  },
+  "navbar": {
+    "bgColorLight": "#0f172a",
+    "bgColorDark": "#0f172a"
+  },
+  "build": {
+    "htmlEntry": "index.html",
+    "outputDir": "dist"
+  }
+}

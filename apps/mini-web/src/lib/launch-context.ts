@@ -2,10 +2,28 @@ const sensitiveParameter = /(?:token|auth|secret|password|email|phone|openid|ope
 const maxQueryEntries = 32;
 let initialWebviewUrl = typeof window === 'undefined' ? '' : window.location.href;
 let sdkLaunchPayload: TikTokMiniDramaShowPayload | undefined;
+export const campaignLaunchOptionsEvent = 'quickreels:campaign-launch-options';
+
+function readInitialSdkLaunchPayload() {
+  const minis = window.TTMinis;
+  const sources = [minis?.game, minis];
+  for (const source of sources) {
+    for (const method of ['getEnterOptionsSync', 'getLaunchOptionsSync'] as const) {
+      try {
+        const payload = source?.[method]?.();
+        if (payload && typeof payload === 'object') return payload;
+      } catch {
+        // Older TikTok clients may not support synchronous launch options.
+      }
+    }
+  }
+  return undefined;
+}
 
 export function rememberSdkLaunchPayload(payload: unknown) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
   sdkLaunchPayload = payload as TikTokMiniDramaShowPayload;
+  if (typeof window !== 'undefined') window.dispatchEvent?.(new Event(campaignLaunchOptionsEvent));
 }
 
 export function stringifySdkPayload(payload: unknown) {
@@ -32,9 +50,14 @@ function safeQuery(value: unknown) {
 
 export function getMiniLaunchContext() {
   initialWebviewUrl ||= window.location.href;
-  const scene = typeof sdkLaunchPayload?.launch_from === 'string' ? sdkLaunchPayload.launch_from.trim().slice(0, 64) : '';
+  if (!sdkLaunchPayload) rememberSdkLaunchPayload(readInitialSdkLaunchPayload());
+  const rawScene = sdkLaunchPayload?.scene ?? sdkLaunchPayload?.launch_from;
+  const scene = typeof rawScene === 'string' ? rawScene.trim().slice(0, 64) : '';
   const query = safeQuery(sdkLaunchPayload?.query);
+  let webviewBase: string | undefined;
   try {
+    const currentUrl = new URL(window.location.href);
+    webviewBase = `${currentUrl.origin}${currentUrl.pathname}`.slice(0, 512);
     for (const [key, value] of new URLSearchParams(window.location.search)) {
       if (!(key in query)) Object.assign(query, safeQuery({ [key]: value }));
     }
@@ -45,8 +68,26 @@ export function getMiniLaunchContext() {
     launchScene: scene || undefined,
     launchPath: window.location.pathname.slice(0, 256) || '/',
     launchQuery: query,
+    webviewBase,
     rawUrl: initialWebviewUrl || undefined
   };
+}
+
+export function getCampaignEntryTarget() {
+  const query = getMiniLaunchContext().launchQuery;
+  const normalized = new Map(Object.entries(query).map(([key, value]) => [key.toLowerCase().replace(/[_-]/g, ''), value]));
+  const albumId = normalized.get('albumid');
+  const episodeId = normalized.get('episodeid');
+  if (!albumId || !episodeId || !/^\d{1,32}$/.test(albumId) || !/^\d{1,32}$/.test(episodeId)) return null;
+  return { albumId, episodeId };
+}
+
+export function hasCampaignEntryIntent() {
+  const query = getMiniLaunchContext().launchQuery;
+  return Object.keys(query).some((key) => {
+    const normalized = key.toLowerCase().replace(/[_-]/g, '');
+    return normalized === 'albumid' || normalized === 'episodeid';
+  });
 }
 
 export function getMiniLaunchAdId() {

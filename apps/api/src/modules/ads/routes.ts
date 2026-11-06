@@ -26,7 +26,7 @@ const adEventInput = z.object({
 
 const playbackQualityEventInput = z.object({
   episodeId: z.string().min(1),
-  eventType: z.enum(['FIRST_FRAME', 'WAITING', 'DEFINITION_CHANGE', 'ERROR', 'ENDED']),
+  eventType: z.enum(['FIRST_FRAME', 'WAITING', 'DEFINITION_CHANGE', 'SEEK_RESUME', 'ERROR', 'ENDED']),
   sessionId: z.string().min(8).max(128),
   startupMs: z.number().int().nonnegative().optional(),
   currentTimeMs: z.number().int().nonnegative().optional(),

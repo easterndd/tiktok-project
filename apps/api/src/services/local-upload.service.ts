@@ -11,6 +11,7 @@ type Db = PrismaClient;
 const leaseMs = 2 * 60_000;
 const recoveryDelayMs = 60_000;
 const recoveryWindowMs = 10 * 60_000;
+const playbackWaitMs = 30 * 60_000;
 
 function conflict(message: string) { return Object.assign(new Error(message), { statusCode: 409 }); }
 
@@ -169,6 +170,34 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
       }
       if (lostLease) return;
       await assertMediaScope(sharedPrisma, env, media);
+      const waitForPlayback = async (reason: string) => {
+        if (now().getTime() - (job.startedAt ?? now()).getTime() >= playbackWaitMs) {
+          await fail(`BytePlus 视频在 30 分钟内仍不可播放：${reason}`, true);
+          return;
+        }
+        await prisma.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: {
+          leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(now().getTime() + recoveryDelayMs),
+          errorMessage: `已取得 BytePlus VID，等待视频可播放：${reason}`
+        } });
+      };
+      if (media.publishStatus === 'Unpublished') {
+        if (!job.uploadScope || !matchesUploadTags(media.tags, job.uploadScope, job.id)) {
+          throw conflict('无法确认 BytePlus 视频属于当前上传任务，已停止自动发布。');
+        }
+        await service.publishMedia(media.vid);
+        const [published] = await service.getMediaInfos({ vids: [media.vid] });
+        if (!published || published.vid !== media.vid || published.spaceName !== env.BYTEPLUS_SPACE_NAME ||
+            !matchesUploadTags(published.tags, job.uploadScope, job.id)) throw conflict('发布后无法确认 BytePlus 媒资归属。');
+        media = published;
+      }
+      if (media.publishStatus !== 'Published') {
+        await waitForPlayback(`发布状态为 ${media.publishStatus ?? '未知'}`);
+        return;
+      }
+      if (!await service.hasPlayableUrl(media.vid)) {
+        await waitForPlayback('播放地址尚未生成');
+        return;
+      }
       await getOrCreateSharedMediaAsset(sharedPrisma as any, { byteplusVid: media.vid, byteplusAccountId: env.BYTEPLUS_ACCOUNT_ID,
         byteplusSpaceName: env.BYTEPLUS_SPACE_NAME, byteplusRegion: env.BYTEPLUS_REGION, miniAppKey: env.MINI_APP_KEY,
         title: media.title, coverUrl: media.coverUrl, durationMs: media.durationMs, firstUploadJobId: job.id, sourceFileName: job.sourceName ?? undefined });

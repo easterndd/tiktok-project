@@ -7,6 +7,19 @@ let transitionCount = 0;
 let shownCount = 0;
 let lastShownAt = 0;
 let enteredAt = Date.now();
+let timedRemainingMs = 30_000;
+let failedTimedAttempts = 0;
+let continuousMode = false;
+let timedDisabled = false;
+let retryNotBefore = 0;
+
+function recordTimedFailure(error: unknown) {
+  if (!continuousMode) return;
+  const message = adErrorMessage(error);
+  if (/50008|env check failed|unavailable for iaa/i.test(message)) timedDisabled = true;
+  if (/11004|11005|11006/i.test(message)) retryNotBefore = Date.now() + Math.max(60, activePolicy.minIntervalSeconds) * 1000;
+  failedTimedAttempts = Math.min(3, failedTimedAttempts + 1);
+}
 let activePolicy = {
   initialDelaySeconds: 30,
   intervalSeconds: 60,
@@ -17,12 +30,17 @@ let activePolicy = {
   rewardedCooldownSeconds: 60
 };
 
-export function configureEpisodeInterstitial(input: typeof activePolicy) {
+export function configureEpisodeInterstitial(input: typeof activePolicy, continuous = false) {
+  continuousMode = continuous;
   activePolicy = { ...activePolicy, ...input };
   enteredAt = Date.now();
   transitionCount = 0;
   shownCount = 0;
   lastShownAt = 0;
+  timedRemainingMs = activePolicy.initialDelaySeconds * 1000;
+  failedTimedAttempts = 0;
+  timedDisabled = false;
+  retryNotBefore = 0;
 }
 
 function frequencyAllows(now = Date.now()) {
@@ -44,26 +62,49 @@ export async function showEpisodeTimedInterstitial(placementId: string | null | 
 }
 
 export function startEpisodeInterstitialSchedule(placementId: string, isActive: () => boolean) {
+  if (!continuousMode) {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = (delayMs: number) => {
+      timer = setTimeout(() => {
+        if (stopped) return;
+        if (!isActive()) { schedule(5_000); return; }
+        void showEpisodeTimedInterstitial(placementId).catch(() => undefined).finally(() => {
+          if (!stopped) schedule(activePolicy.intervalSeconds * 1000);
+        });
+      }, Math.max(0, delayMs));
+    };
+    schedule(activePolicy.initialDelaySeconds * 1000);
+    return () => { stopped = true; if (timer !== undefined) clearTimeout(timer); };
+  }
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let dueAt = 0;
   const schedule = (delayMs: number) => {
+    if (timedDisabled || shownCount >= activePolicy.maxPerSession) return;
+    dueAt = Date.now() + Math.max(0, delayMs);
     timer = setTimeout(() => {
       if (stopped) return;
       if (!isActive()) {
-        schedule(5_000);
+        schedule(1_000);
         return;
       }
-      void showEpisodeTimedInterstitial(placementId)
+      const eligible = Date.now() >= retryNotBefore && frequencyAllows();
+      void (eligible ? showEpisodeTimedInterstitial(placementId) : Promise.resolve(undefined))
         .catch(() => undefined)
         .finally(() => {
-          if (!stopped) schedule(activePolicy.intervalSeconds * 1000);
+          if (!stopped) schedule(!eligible ? Math.max(5_000, retryNotBefore - Date.now()) : failedTimedAttempts > 0 && failedTimedAttempts < 3
+            ? Math.min(30_000, 2 ** failedTimedAttempts * 1_000) + Math.random() * 500 : activePolicy.intervalSeconds * 1000);
         });
     }, Math.max(0, delayMs));
   };
-  schedule(activePolicy.initialDelaySeconds * 1000);
+  schedule(timedRemainingMs);
   return () => {
     stopped = true;
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timedRemainingMs = Math.max(0, dueAt - Date.now());
+    }
   };
 }
 
@@ -83,6 +124,7 @@ async function showInterstitial(placementId: string): Promise<number | undefined
   let supported = false;
   try { supported = Boolean(window.TTMinis?.canIUse('createInterstitialAd')); } catch { /* Unsupported runtime. */ }
   if (!supported) {
+    if (continuousMode) timedDisabled = true;
     reportDiagnostic({ kind: 'AD', phase: 'EPISODE_INTERSTITIAL_UNSUPPORTED', message: 'Interstitial ads are not available in this runtime' });
     return;
   }
@@ -93,6 +135,7 @@ async function showInterstitial(placementId: string): Promise<number | undefined
     ad = getInterstitialAd(placementId);
     await waitForAdReady(ad);
   } catch (error) {
+    recordTimedFailure(error);
     if (ad) releaseInterstitialAd(placementId, ad);
     releaseActivity();
     reportDiagnostic({ kind: 'AD', phase: 'EPISODE_INTERSTITIAL_CREATE', message: adErrorMessage(error) });
@@ -113,7 +156,8 @@ async function showInterstitial(placementId: string): Promise<number | undefined
       releaseInterstitialAd(placementId, ad!);
       releaseActivity();
       if (error) reportDiagnostic({ kind: 'AD', phase: 'EPISODE_INTERSTITIAL_SHOW', message: adErrorMessage(error) });
-      else prewarmInterstitialAd(placementId, 1);
+      if (error) recordTimedFailure(error);
+      else { failedTimedAttempts = 0; if (continuousMode) lastShownAt = Date.now(); prewarmInterstitialAd(placementId, 1); }
       resolve(closedAt);
     };
     const onClose = () => { closed = true; closedAt = performance.timeOrigin + performance.now(); if (shown) finish(); };
@@ -128,7 +172,7 @@ async function showInterstitial(placementId: string): Promise<number | undefined
         shown = true;
         reportPerformance('EPISODE_INTERSTITIAL_SHOW_ACCEPTED', '/native-ads/interstitial', performance.now() - showStartedAt);
         shownCount += 1;
-        lastShownAt = Date.now();
+        if (!continuousMode) lastShownAt = Date.now();
         if (closed) finish();
       }, onError);
     } catch (error) { onError(error); }

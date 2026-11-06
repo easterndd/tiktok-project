@@ -2,20 +2,22 @@ import type { EpisodeSummary } from '@quickreels/shared-types';
 import { ChevronRight, LockKeyhole, Play } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatDuration } from '../lib/format';
+import { episodeDisplayTitle } from '../lib/episode-title';
 import { t } from '../lib/i18n';
 import { useLocale } from '../lib/storage';
 import styles from './EpisodeList.module.css';
 
-export function EpisodeList({ albumId, episodes, activeEpisodeId, onLocked, onEpisodeSelected }: { albumId: string; episodes: EpisodeSummary[]; activeEpisodeId?: string; onLocked?: (episode: EpisodeSummary) => void; onEpisodeSelected?: () => void }) {
+export function EpisodeList({ albumId, episodes, activeEpisodeId, onLocked, onEpisodeSelected, englishNumbers = false }: { albumId: string; episodes: EpisodeSummary[]; activeEpisodeId?: string; onLocked?: (episode: EpisodeSummary) => void; onEpisodeSelected?: () => void; englishNumbers?: boolean }) {
   const locale = useLocale();
   return <ol className={styles.list}>{episodes.map((episode) => {
     const locked = episode.access !== 'PLAYABLE';
+    const title = englishNumbers ? episodeDisplayTitle(episode.title, episode.episodeNo) : episode.title;
     const row = <span className={styles.rowInner}>
         <span className={styles.number}>{episode.episodeNo}</span>
-        <span className={styles.title}>{episode.title}<small>{formatDuration(episode.durationMs)}</small></span>
+        <span className={styles.title}>{title}<small>{formatDuration(episode.durationMs)}</small></span>
         <span className={styles.status}>{locked ? <LockKeyhole size={17} aria-label={t(locale, 'rewardedAdRequired')} /> : <Play size={17} aria-label={t(locale, 'playable')} />}<ChevronRight size={16} aria-hidden="true" /></span>
       </span>;
     const rowClass = `${styles.row} ${episode.id === activeEpisodeId ? styles.active : ''}`;
-    return <li key={episode.id}>{locked ? <button className={`${styles.buttonRow} ${episode.id === activeEpisodeId ? styles.active : ''}`} onClick={() => onLocked?.(episode)} aria-label={`${t(locale, 'unlockEpisode')}: ${episode.title}`}>{row}</button> : <Link className={rowClass} to={`/watch/${albumId}/${episode.id}`} onClick={onEpisodeSelected} aria-label={`${t(locale, 'watchEpisode')}: ${episode.title}`}>{row}</Link>}</li>;
+    return <li key={episode.id}>{locked ? <button className={`${styles.buttonRow} ${episode.id === activeEpisodeId ? styles.active : ''}`} onClick={() => onLocked?.(episode)} aria-label={`${t(locale, 'unlockEpisode')}: ${title}`}>{row}</button> : <Link className={rowClass} to={`/watch/${albumId}/${episode.id}`} onClick={onEpisodeSelected} aria-label={`${t(locale, 'watchEpisode')}: ${title}`}>{row}</Link>}</li>;
   })}</ol>;
 }

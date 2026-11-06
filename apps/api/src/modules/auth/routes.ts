@@ -7,7 +7,7 @@ import { requireUser } from '../../plugins/auth';
 import { addDatabaseDuration } from '../../lib/request-performance';
 import { singleFlight } from '../../lib/single-flight';
 import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
-import { readAppEntryAdPolicy } from '../app-entry-ads/routes';
+import { observeAppEntryAdRelease } from '../app-entry-ads/routes';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 
 const launchContextInput = z.object({
@@ -16,7 +16,9 @@ const launchContextInput = z.object({
   sdkPayloadRaw: z.string().max(32768).optional(),
   launchScene: z.string().trim().max(64).optional(),
   launchPath: z.string().trim().max(256).optional(),
-  launchQuery: z.record(z.string(), z.string().max(128)).optional()
+  launchQuery: z.record(z.string(), z.string().max(128)).optional(),
+  webviewBase: z.string().trim().max(512).optional(),
+  releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).optional()
 });
 const recordedLaunchContextInput = launchContextInput.extend({ entryId: z.string().min(8).max(128) });
 const localEntryReleaseIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/);
@@ -119,6 +121,8 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
         sdkPayloadRaw: context.sdkPayloadRaw ?? metadata.sdkPayloadRaw,
         launchScene: context.launchScene ?? metadata.launchScene,
         launchPath: context.launchPath ?? metadata.launchPath,
+        webviewBase: context.webviewBase ?? metadata.webviewBase,
+        releaseId: context.releaseId ?? metadata.releaseId,
         launchQuery: { ...existingQuery, ...launchQuery }
       } as Prisma.InputJsonValue;
       // Anonymous bootstrap and authenticated launch-context reporting can
@@ -137,6 +141,8 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
         launchScene: context.launchScene,
         launchPath: context.launchPath?.startsWith('/') && !context.launchPath.startsWith('//')
           ? context.launchPath.split(/[?#]/, 1)[0] : undefined,
+        webviewBase: context.webviewBase,
+        releaseId: context.releaseId,
         launchQuery
       } as Prisma.InputJsonValue
     } });
@@ -164,7 +170,7 @@ async function readLocalEntryAdEligibility(app: FastifyInstance, request: Fastif
   }
 
   const databaseStartedAt = performance.now();
-  const policy = await readAppEntryAdPolicy(app, releaseId);
+  const policy = await observeAppEntryAdRelease(app, releaseId);
   addDatabaseDuration(request, performance.now() - databaseStartedAt);
   if (!policy?.enabled) return { showEntryAd: false, reason: 'POLICY_DISABLED' };
   if (policy.mode !== 'REWARDED_GATED') return { showEntryAd: false, reason: 'REWARDED_MODE_REQUIRED' };

@@ -17,6 +17,8 @@ sshkey.txt
 inter_data.txt
 credentials.*
 secrets.*
+v0.0.4.txt
+v0.0.4-newbat
 coverage/
 *.log
 .pnpm-*.out

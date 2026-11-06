@@ -235,7 +235,7 @@ export async function startUploadWorker() {
   const environments = configuredMiniAppKeys(env).map((key) => miniAppEnvironment(env, key)).filter((item): item is typeof env => item !== null);
   const contexts = environments.map((contextEnv) => ({
     env: contextEnv,
-    prisma: new PrismaClient({ datasources: { db: { url: runtimeDatabaseUrl(contextEnv.DATABASE_URL, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT) } } }),
+    prisma: new PrismaClient({ datasources: { db: { url: runtimeDatabaseUrl(contextEnv.DATABASE_URL, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT, env.WORKER_DATABASE_CONNECTION_LIMIT) } } }),
     service: contextEnv.BYTEPLUS_ACCESS_KEY && contextEnv.BYTEPLUS_SECRET_KEY
       ? new BytePlusVodService(contextEnv)
       : new UnconfiguredTikTokShortDramaService(),
@@ -244,7 +244,7 @@ export async function startUploadWorker() {
   const sharedDatabaseUrl = env.SHARED_PLATFORM_DATABASE_URL ?? env.DATABASE_URL;
   const sharedPrisma = sharedDatabaseUrl === env.DATABASE_URL
     ? contexts.find((context) => context.env.MINI_APP_KEY === 'main')?.prisma
-    : new PrismaClient({ datasources: { db: { url: runtimeDatabaseUrl(sharedDatabaseUrl, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT) } } });
+    : new PrismaClient({ datasources: { db: { url: runtimeDatabaseUrl(sharedDatabaseUrl, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT, env.WORKER_DATABASE_CONNECTION_LIMIT) } } });
   if (!sharedPrisma) throw new Error('Main Prisma context is required for shared platform operations.');
 
   const run = async () => {
@@ -259,9 +259,11 @@ export async function startUploadWorker() {
           log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
         }, context.env);
         if (context.platformApi.isConfigured()) {
+          if (!(context.service instanceof BytePlusVodService)) throw new Error('BytePlus credentials are required to verify platform media playback.');
           await enqueueDueReviewReconciliations(context.prisma as any, new Date(), (albumId, error) => console.error(context.env.MINI_APP_KEY, 'Could not queue review reconciliation.', albumId, error));
           await processPlatformSyncJobs(context.prisma as any, context.platformApi, {
             maxRetries: context.env.UPLOAD_MAX_RETRIES,
+            playability: { service: context.service, spaceName: context.env.BYTEPLUS_SPACE_NAME },
             log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
           });
         }

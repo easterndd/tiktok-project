@@ -35,9 +35,9 @@ async function api<T>(path: string, options: RequestInit = {}) {
   if (!response.ok) {
     const failure = (await response.json().catch(() => null))?.error;
     const message = `${failure?.message ?? '请求失败'}${failure?.requestId ? `（请求 ID：${failure.requestId}）` : ''}`;
-    // The login endpoint deliberately returns 401 for incorrect credentials. Every
-    // other 401 means the active administrator session can no longer be used.
-    if (response.status === 401 && path !== '/admin/auth/login') {
+    // The API also returns 403 from /admin/me when a password change invalidates
+    // an otherwise valid token. Other 403 responses may be permission errors.
+    if (path !== '/admin/auth/login' && (response.status === 401 || (response.status === 403 && path === '/admin/me'))) {
       sessionStorage.removeItem(adminTokenStorageKey);
       sessionStorage.removeItem(platformSubmissionStorageKey);
       if (!adminSessionRecoveryStarted) {

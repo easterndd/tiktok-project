@@ -11,10 +11,12 @@ import { readExitRetentionConfig } from '../app-entry-ads/routes';
 import { isEpisodeFree, readMiniAppAccessConfig } from '../../lib/content-access';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
+import { campaignEntryApps } from '../../lib/campaign-entry';
 
 const params = z.object({ episodeId: z.string().min(1).max(128) });
 const sessionParams = params.extend({ sessionId: z.string().min(1).max(128) });
 const localeQuery = z.object({ locale: publicLocaleSchema.default(defaultLocale) });
+const campaignQuery = z.object({ album_id: z.string().trim().min(1).max(128), episode_id: z.string().trim().min(1).max(128) });
 const unlockInput = z.object({
   clientEventId: z.string().trim().min(1).max(128),
   isEnded: z.literal(true)
@@ -178,6 +180,30 @@ async function completeRewardSession(app: FastifyInstance, userId: string, episo
 }
 
 export async function registerEpisodeRoutes(app: FastifyInstance) {
+  app.get('/campaign-entry/resolve', async (request) => {
+    if (!campaignEntryApps.has(app.config.MINI_APP_KEY)) return { status: 'INVALID' as const };
+    const parsed = campaignQuery.safeParse(request.query);
+    if (!parsed.success) return { status: 'INVALID' as const };
+    const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
+    const episode = await app.prisma.episode.findFirst({
+      where: {
+        tiktokEpisodeId: parsed.data.episode_id,
+        byteplusVid: { not: null },
+        status: 'ONLINE',
+        album: { tiktokAlbumId: parsed.data.album_id, ...publicAlbumWhere(app.config) }
+      },
+      select: { id: true, albumId: true, episodeNo: true, isFree: true, album: { select: { accessConfig: true, regions: true } } }
+    });
+    if (!episode || !isEpisodeFree(episode, episode.album.accessConfig)
+      || !isAlbumVisibleInCountry(episode.album.regions, country)) return { status: 'INVALID' as const };
+    const authorization = await app.sharedPrisma.miniAppAlbumAuthorization.findFirst({
+      where: { miniAppKey: app.config.MINI_APP_KEY, targetLocalAlbumId: episode.albumId },
+      select: { status: true }
+    });
+    if (authorization && authorization.status !== 'AUTHORIZED') return { status: 'INVALID' as const };
+    return { status: 'PLAYABLE' as const, albumId: episode.albumId, episodeId: episode.id };
+  });
+
   app.post('/episodes/:episodeId/reward-session', {
     preHandler: requireUser,
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
@@ -252,19 +278,20 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
     if (!localPlaybackUrl && (!episode.album.tiktokAlbumId || !episode.tiktokEpisodeId || !episode.byteplusVid)) {
       return reply.code(409).send({ error: { code: 'CONFLICT', message: 'This episode is not ready for platform playback.', requestId: request.id } }) as never;
     }
-    const progress = user ? await app.prisma.watchProgress.findUnique({ where: { userId_episodeId: { userId: user.sub, episodeId } } }) : null;
-    let playAuthToken: string | null = null;
-    if (!localPlaybackUrl && app.config.BYTEPLUS_ACCESS_KEY && app.config.BYTEPLUS_SECRET_KEY) {
-      try {
-        playAuthToken = await new BytePlusVodService(app.config).getPlayAuthToken({ vid: episode.byteplusVid! });
-      } catch (error) {
-        request.log.warn({ error, episodeId }, 'BytePlus play auth token could not be generated.');
-      }
-    }
+    const [progress, playAuthToken] = await Promise.all([
+      user ? app.prisma.watchProgress.findUnique({ where: { userId_episodeId: { userId: user.sub, episodeId } } }) : Promise.resolve(null),
+      !localPlaybackUrl && app.config.BYTEPLUS_ACCESS_KEY && app.config.BYTEPLUS_SECRET_KEY
+        ? new BytePlusVodService(app.config).getPlayAuthToken({ vid: episode.byteplusVid! }).catch((error) => {
+          request.log.warn({ error, episodeId }, 'BytePlus play auth token could not be generated.');
+          return null;
+        })
+        : Promise.resolve(null)
+    ]);
     return {
       playbackMode: localPlaybackUrl ? 'LOCAL' : 'BYTEPLUS',
       albumId: episode.album.tiktokAlbumId ?? `local-${episode.albumId}`,
       localEpisodeId: episode.id,
+      episodeNo: episode.episodeNo,
       episodeId: episode.tiktokEpisodeId ?? `local-${episode.id}`,
       vid: episode.byteplusVid ?? `local-${episode.id}`,
       playAuthToken,

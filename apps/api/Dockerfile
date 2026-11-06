@@ -12,6 +12,8 @@ RUN pnpm --filter @quickreels/shared-types build && pnpm --filter api db:generat
 FROM node:24-alpine
 WORKDIR /app
 ENV NODE_ENV=production
+# Set before loading the native Prisma engine; API concurrency is controlled separately.
+ENV TOKIO_WORKER_THREADS=2
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/api ./apps/api
 COPY --from=build /app/packages/shared-types ./packages/shared-types

@@ -1,6 +1,7 @@
 declare global {
   type TikTokMiniDramaShowPayload = {
     query?: unknown;
+    scene?: unknown;
     launch_from?: unknown;
     [key: string]: unknown;
   };
@@ -10,6 +11,12 @@ declare global {
       init(options: { clientKey: string }): void;
       login(options?: { success?: (result: { code?: string; authResponse?: { code?: string } }) => void; fail?: (error: unknown) => void; complete?: () => void }): Promise<{ code?: string; authResponse?: { code?: string } }> | void;
       canIUse(apiName: string): boolean;
+      getLaunchOptionsSync?(): TikTokMiniDramaShowPayload;
+      getEnterOptionsSync?(): TikTokMiniDramaShowPayload;
+      game?: {
+        getLaunchOptionsSync?(): TikTokMiniDramaShowPayload;
+        getEnterOptionsSync?(): TikTokMiniDramaShowPayload;
+      };
       onShow?(callback: (params?: TikTokMiniDramaShowPayload) => void): string | void;
       on?(event: 'minis.show', callback: (params?: TikTokMiniDramaShowPayload) => void): string | void;
       getPlayer?(channel?: 'byteplus'): Promise<VePlayerConstructor>;
@@ -29,6 +36,13 @@ declare global {
       ENDED: string;
       TIME_UPDATE: string;
       PRELOAD_INFO: string;
+      PLAYING?: string;
+      SEEKING?: string;
+      SEEKED?: string;
+      WAITING?: string;
+      STALLED?: string;
+      LOADED_DATA?: string;
+      CANPLAY?: string;
     };
     prefetchMediaInfo(sources: VePlayerSource[]): Promise<Array<{ status: 'fulfilled' | 'rejected'; data?: unknown; error?: unknown; fromCache?: boolean }>>;
     prepare(options: { strategies: { preload: boolean | { preloadScene?: 0 | 1; prevCount?: number; nextCount?: number; preloadTime?: number; preloadMaxCacheCount?: number } } }): Promise<void>;

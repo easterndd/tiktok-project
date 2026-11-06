@@ -1,6 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, type ReactNode } from 'react';
-import { EntryAdGate } from '../components/EntryAdGate';
 import { getLocalEntryAdPlacementIds } from '../features/ads/entry-ad-placements';
 import { ensureAnonymousSession, recordMiniLaunch } from '../features/auth/anonymous-session';
 import { ApiError } from '../lib/api-client';
@@ -41,5 +40,5 @@ function AnonymousSessionBootstrap() {
 }
 
 export function AppProviders({ children }: { children: ReactNode }) {
-  return <QueryClientProvider client={queryClient}><AnonymousSessionBootstrap /><EntryAdGate>{children}</EntryAdGate></QueryClientProvider>;
+  return <QueryClientProvider client={queryClient}><AnonymousSessionBootstrap />{children}</QueryClientProvider>;
 }

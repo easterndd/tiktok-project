@@ -548,6 +548,33 @@ export class BytePlusVodService implements TikTokShortDramaService {
     });
   }
 
+  async publishMedia(vid: string) {
+    let response: Awaited<ReturnType<vodOpenapi.VodService['UpdateMediaPublishStatus']>>;
+    try {
+      response = await this.createSdkService().UpdateMediaPublishStatus({ Vid: vid, Status: 'Published' });
+    } catch (error) {
+      const provider = sdkProviderError(error);
+      throw new BytePlusVodError(provider?.message ?? 'BytePlus 视频发布请求失败。', provider?.retryable ?? true);
+    }
+    if (response.ResponseMetadata?.Error) {
+      throw new BytePlusVodError(`BytePlus 视频发布失败：${response.ResponseMetadata.Error.Code ?? 'Unknown'}`, true);
+    }
+  }
+
+  async hasPlayableUrl(vid: string) {
+    let response: Awaited<ReturnType<vodOpenapi.VodService['GetPlayInfo']>>;
+    try {
+      response = await this.createSdkService().GetPlayInfo({ Vid: vid, Ssl: '1' });
+    } catch (error) {
+      const provider = sdkProviderError(error);
+      throw new BytePlusVodError(provider?.message ?? 'BytePlus 播放地址查询失败。', provider?.retryable ?? true);
+    }
+    if (response.ResponseMetadata?.Error) {
+      throw new BytePlusVodError(`BytePlus 播放地址查询失败：${response.ResponseMetadata.Error.Code ?? 'Unknown'}`, true);
+    }
+    return (response.Result?.PlayInfoList ?? []).some((item) => Boolean(item.MainPlayUrl));
+  }
+
   async listMedia(input: { offset?: number; pageSize?: number; status?: string; tags?: string }) {
     const response = await this.createSdkService().GetMediaList({
       SpaceName: this.env.BYTEPLUS_SPACE_NAME,

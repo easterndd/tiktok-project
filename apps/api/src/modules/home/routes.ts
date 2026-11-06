@@ -1,6 +1,7 @@
 import type { HomeResponse, Locale } from '@quickreels/shared-types';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { requireUser } from '../../plugins/auth';
 import { optionalUser } from '../../plugins/optional-auth';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { defaultUiComponents } from '../ui/routes';
@@ -68,7 +69,7 @@ async function loadHomeCatalog(app: FastifyInstance, request: FastifyRequest, no
 }
 
 type HomeCatalog = Awaited<ReturnType<typeof loadHomeCatalog>>;
-const homeCatalogCache = new Map<string, { expiresAt: number; value: Promise<HomeCatalog> }>();
+const homeCatalogCache = new WeakMap<FastifyInstance, { expiresAt: number; value: Promise<HomeCatalog> }>();
 
 type PublicHomeResponseCache = Map<string, { expiresAt: number; value: Promise<HomeResponse> }>;
 
@@ -98,16 +99,15 @@ function getCachedPublicHomeResponse(cache: PublicHomeResponseCache, key: string
 
 function getHomeCatalog(app: FastifyInstance, request: FastifyRequest, now: Date) {
   if (app.config.NODE_ENV !== 'production') return loadHomeCatalog(app, request, now);
-  const key = app.config.MINI_APP_KEY;
-  const cached = homeCatalogCache.get(key);
+  const cached = homeCatalogCache.get(app);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   const value = loadHomeCatalog(app, request, now);
   const entry = { expiresAt: Number.POSITIVE_INFINITY, value };
-  homeCatalogCache.set(key, entry);
+  homeCatalogCache.set(app, entry);
   void value.then(() => {
-    if (homeCatalogCache.get(key) === entry) entry.expiresAt = Date.now() + homeCatalogCacheTtlMs;
+    if (homeCatalogCache.get(app) === entry) entry.expiresAt = Date.now() + homeCatalogCacheTtlMs;
   }, () => {
-    if (homeCatalogCache.get(key)?.value === value) homeCatalogCache.delete(key);
+    if (homeCatalogCache.get(app)?.value === value) homeCatalogCache.delete(app);
   });
   return value;
 }
@@ -141,8 +141,37 @@ async function loadHomeProgress(app: FastifyInstance, request: FastifyRequest, u
 
 type HomeProgress = Awaited<ReturnType<typeof loadHomeProgress>>;
 
+function continueWatchingBlock(progress: HomeProgress, country: string | null, locale: string): Extract<HomeResponse['blocks'][number], { type: 'CONTINUE_WATCHING' }> {
+  return {
+    type: 'CONTINUE_WATCHING',
+    title: 'Continue watching',
+    items: progress.filter((item) => isAlbumVisibleInCountry(item.episode.album.regions, country)).map((item) => ({
+      albumId: item.episode.albumId,
+      episodeId: item.episodeId,
+      episodeNo: item.episode.episodeNo,
+      title: translatedText(item.episode.album.translations, locale, 'title') ?? item.episode.album.title,
+      coverUrl: coverThumbnailUrl(translatedText(item.episode.album.translations, locale, 'coverUrl') ?? item.episode.album.coverUrl),
+      progress: item.durationMs ? Math.min(item.positionMs / item.durationMs, 1) : 0,
+      resumePositionMs: item.positionMs,
+      durationMs: item.durationMs
+    }))
+  };
+}
+
 export async function registerHomeRoutes(app: FastifyInstance) {
   const publicHomeResponseCache: PublicHomeResponseCache = new Map();
+  const admittedPublicHomeResponse = new WeakMap<FastifyRequest, Promise<HomeResponse>>();
+  const hasReadyPublicHomeResponse = (request: FastifyRequest) => {
+    if (app.config.NODE_ENV === 'development' || request.headers.authorization) return false;
+    const parsed = querySchema.safeParse(request.query);
+    if (!parsed.success) return false;
+    const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
+    const entry = publicHomeResponseCache.get(`${parsed.data.locale}:${country ?? ''}`);
+    // The pending fill is already admitted and all callers share its promise.
+    if (!entry || entry.expiresAt <= Date.now()) return false;
+    admittedPublicHomeResponse.set(request, entry.value);
+    return true;
+  };
   const progressCache = new Map<string, { expiresAt: number; value: Promise<HomeProgress> }>();
   const getHomeProgress = (request: FastifyRequest, userId: string) => {
     const cached = progressCache.get(userId);
@@ -168,16 +197,16 @@ export async function registerHomeRoutes(app: FastifyInstance) {
     return value;
   };
 
-  app.get('/home', async (request): Promise<HomeResponse> => {
+  app.get('/home', { config: { hasReadyPublicHomeResponse } }, async (request): Promise<HomeResponse> => {
+    const readyPublicResponse = admittedPublicHomeResponse.get(request);
+    if (readyPublicResponse) return readyPublicResponse;
     const { locale } = querySchema.parse(request.query);
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
     const user = await optionalUser(request);
-    const cacheKey = !user && app.config.NODE_ENV !== 'development' ? `${locale}:${country ?? ''}` : null;
+    const cacheKey = app.config.NODE_ENV !== 'development' ? `${locale}:${country ?? ''}` : null;
     const response = async (): Promise<HomeResponse> => {
     const now = new Date();
-    const catalogPromise = getHomeCatalog(app, request, now);
-    const progressPromise: Promise<HomeProgress> = user ? getHomeProgress(request, user.sub) : Promise.resolve([]);
-    const [catalog, progress] = await Promise.all([catalogPromise, progressPromise]);
+    const catalog = await getHomeCatalog(app, request, now);
     const { components, albums, genres, configuredBlocks, catalogVersion } = catalog;
     const visibleAlbums = albums.filter((album) => isAlbumVisibleInCountry(album.regions, country));
     const summaries = visibleAlbums.map((album) => ({
@@ -243,22 +272,6 @@ export async function registerHomeRoutes(app: FastifyInstance) {
       { type: 'TRENDING', title: 'Trending now', items: summaries.slice(0, 8) },
       { type: 'NEW_RELEASES', title: 'Fresh episodes', items: summaries.slice(0, 8) }
     ];
-    if (user) {
-      blocks.unshift({
-        type: 'CONTINUE_WATCHING',
-        title: 'Continue watching',
-        items: progress.filter((item) => isAlbumVisibleInCountry(item.episode.album.regions, country)).map((item) => ({
-          albumId: item.episode.albumId,
-          episodeId: item.episodeId,
-          episodeNo: item.episode.episodeNo,
-          title: translatedText(item.episode.album.translations, locale, 'title') ?? item.episode.album.title,
-          coverUrl: coverThumbnailUrl(translatedText(item.episode.album.translations, locale, 'coverUrl') ?? item.episode.album.coverUrl),
-          progress: item.durationMs ? Math.min(item.positionMs / item.durationMs, 1) : 0,
-          resumePositionMs: item.positionMs,
-          durationMs: item.durationMs
-        }))
-      });
-    }
     return {
       locale: locale as Locale,
       cacheVersion: `home_${catalogVersion}`,
@@ -267,6 +280,17 @@ export async function registerHomeRoutes(app: FastifyInstance) {
       feed: { items: summaries, nextCursor: null }
     };
     };
-    return cacheKey ? getCachedPublicHomeResponse(publicHomeResponseCache, cacheKey, response) : response();
+    const publicHome = cacheKey ? getCachedPublicHomeResponse(publicHomeResponseCache, cacheKey, response) : response();
+    if (!user) return publicHome;
+    const [base, progress] = await Promise.all([publicHome, getHomeProgress(request, user.sub)]);
+    return { ...base, blocks: [continueWatchingBlock(progress, country, locale), ...base.blocks] };
+  });
+
+  app.get('/home/progress', { preHandler: requireUser }, async (request, reply) => {
+    const { locale } = querySchema.parse(request.query);
+    const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
+    const progress = await getHomeProgress(request, request.user.sub);
+    reply.header('Cache-Control', 'private, no-store');
+    return { items: continueWatchingBlock(progress, country, locale).items };
   });
 }

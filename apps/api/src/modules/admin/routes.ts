@@ -10,7 +10,8 @@ import { Prisma, type AnalyticsDailySummary, type PrismaClient } from '@prisma/c
 import { z } from 'zod';
 import { requireAdmin, requirePermission } from '../../plugins/auth';
 import { hashPassword, verifyPassword } from '../../services/password';
-import { accessConfigSchema, readMiniAppAccessConfig } from '../../lib/content-access';
+import { accessConfigSchema, readAccessConfig, readMiniAppAccessConfig } from '../../lib/content-access';
+import { publicAlbumWhere } from '../../lib/content-visibility';
 import { publicLocaleSchema } from '../../lib/locales';
 import { singleFlight } from '../../lib/single-flight';
 import { BytePlusVodService } from '../../services/byteplus-vod.service';
@@ -35,6 +36,7 @@ import { assertSameMiniAppOrganization, miniAppAdConfig, miniAppKeys, sameMiniAp
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { assertDisplayMetadataOwner, carryBaseTextChanges, displayMetadataInput, findDisplayMetadataAlbum, readDisplayMetadata, retryDisplayMetadata, saveLocalDisplayMetadata, saveSharedDisplayMetadata } from '../../services/display-metadata.service';
 import { listEntryAdIpExemptions, listSharedIpVisits, listSharedIps, listViewerIdsForIp, normalizeIp, recentViewerIps, removeEntryAdIpExemption, setEntryAdIpExemption, setEntryAdIpExemptions } from '../../services/shared-ip.service';
+import { campaignEntryApps, normalizeCampaignEntryBase } from '../../lib/campaign-entry';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 
@@ -805,6 +807,43 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     await audit(app, request.user.sub, 'UPDATE', 'MiniAppCodeRelease', `${app.config.MINI_APP_KEY}:${releaseId}`, input);
     return release;
   });
+  app.get('/admin/mini-entry-links', { preHandler: requirePermission('ads.read') }, async () => {
+    const [links, launches] = await Promise.all([
+      app.sharedPrisma.miniAppEntryLink.findMany({ where: { miniAppKey: app.config.MINI_APP_KEY }, orderBy: { environment: 'asc' } }),
+      app.prisma.audienceActivityEvent.findMany({
+        where: { eventType: 'APP_LAUNCH_CONTEXT' }, orderBy: { createdAt: 'desc' }, take: 100,
+        select: { metadata: true, createdAt: true }
+      })
+    ]);
+    const observed = new Map<string, { releaseId: string; webviewBase?: string; lastSeenAt: Date }>();
+    for (const launch of launches) {
+      const metadata = launch.metadata && typeof launch.metadata === 'object' && !Array.isArray(launch.metadata)
+        ? launch.metadata as Record<string, unknown> : {};
+      const releaseId = typeof metadata.releaseId === 'string' ? metadata.releaseId : 'default';
+      if (observed.has(releaseId)) continue;
+      observed.set(releaseId, {
+        releaseId,
+        webviewBase: typeof metadata.webviewBase === 'string' ? metadata.webviewBase : undefined,
+        lastSeenAt: launch.createdAt
+      });
+      if (observed.size >= 20) break;
+    }
+    return { links, observedBuilds: [...observed.values()] };
+  });
+  app.put('/admin/mini-entry-links/:environment', { preHandler: requirePermission('ads.write') }, async (request, reply) => {
+    const { environment } = z.object({ environment: z.enum(['PREVIEW', 'PRODUCTION']) }).parse(request.params);
+    const input = z.object({ baseUrl: z.string().trim().min(1).max(2048), source: z.enum(['PORTAL_LINK', 'PORTAL_QR']) }).parse(request.body);
+    let baseUrl: string;
+    try { baseUrl = normalizeCampaignEntryBase(input.baseUrl); }
+    catch { return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Enter a verified https://www.tiktok.com/minis/... link for this app.', requestId: request.id } }); }
+    const link = await app.sharedPrisma.miniAppEntryLink.upsert({
+      where: { miniAppKey_environment: { miniAppKey: app.config.MINI_APP_KEY, environment } },
+      create: { miniAppKey: app.config.MINI_APP_KEY, environment, baseUrl, source: input.source, registeredAt: new Date(), updatedBy: request.user.sub },
+      update: { baseUrl, source: input.source, registeredAt: new Date(), updatedBy: request.user.sub }
+    });
+    await audit(app, request.user.sub, 'UPDATE', 'MiniAppEntryLink', `${app.config.MINI_APP_KEY}:${environment}`, { baseUrl, source: input.source });
+    return link;
+  });
   app.put('/admin/app-entry-ad-policy', { preHandler: requireAdmin }, async (request) => {
     const input = appEntryAdPolicyInput.parse(request.body);
     const current = await readAppEntryAdPolicy(app, input.releaseId);
@@ -836,9 +875,58 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/admin/episodes', { preHandler: requireAdmin }, async () => {
     const episodes = await app.prisma.episode.findMany({
       orderBy: [{ album: { title: 'asc' } }, { sortOrder: 'asc' }],
-      select: { id: true, albumId: true, episodeNo: true, title: true, sortOrder: true, status: true, byteplusVid: true, byteplusCoverUrl: true, coverUrl: true, durationMs: true, tiktokEpisodeId: true, album: { select: { title: true, status: true, tiktokAlbumId: true } } }
+      select: { id: true, albumId: true, episodeNo: true, title: true, sortOrder: true, status: true, isFree: true, byteplusVid: true, byteplusCoverUrl: true, coverUrl: true, durationMs: true, tiktokEpisodeId: true, album: { select: { title: true, status: true, tiktokAlbumId: true } } }
     });
     return { items: episodes };
+  });
+
+  app.get('/admin/campaign-entry/base', { preHandler: requireAdmin }, async () => {
+    if (!campaignEntryApps.has(app.config.MINI_APP_KEY)) return { url: null, verifiedAt: null };
+    const base = await app.prisma.campaignEntryBase.findUnique({ where: { id: 'default' } });
+    return { url: base?.url ?? null, verifiedAt: base?.verifiedAt ?? null };
+  });
+  app.get('/admin/campaign-entry/albums', { preHandler: requireAdmin }, async (request) => {
+    if (!campaignEntryApps.has(app.config.MINI_APP_KEY)) return { items: [] };
+    const { q } = z.object({ q: z.string().trim().max(100).default('') }).parse(request.query);
+    const albums = await app.prisma.album.findMany({
+      where: { ...publicAlbumWhere(app.config), tiktokAlbumId: { not: null }, ...(q ? { title: { contains: q, mode: 'insensitive' as const } } : {}) },
+      select: { id: true, title: true, tiktokAlbumId: true }, orderBy: { title: 'asc' }, take: 50
+    });
+    const authorizations = await app.sharedPrisma.miniAppAlbumAuthorization.findMany({
+      where: { miniAppKey: app.config.MINI_APP_KEY, targetLocalAlbumId: { in: albums.map((album) => album.id) } },
+      select: { targetLocalAlbumId: true, status: true }
+    });
+    const blocked = new Set(authorizations.filter((item) => item.status !== 'AUTHORIZED').map((item) => item.targetLocalAlbumId));
+    return { items: albums.filter((album) => !blocked.has(album.id)) };
+  });
+  app.get('/admin/campaign-entry/episodes', { preHandler: requireAdmin }, async (request) => {
+    if (!campaignEntryApps.has(app.config.MINI_APP_KEY)) return { items: [] };
+    const { albumId } = albumParams.parse(request.query);
+    const album = await app.prisma.album.findFirst({ where: { id: albumId, ...publicAlbumWhere(app.config) }, select: { accessConfig: true } });
+    if (!album) return { items: [] };
+    const freeEpisodeCount = readAccessConfig(album.accessConfig).freeEpisodeCount;
+    const authorization = await app.sharedPrisma.miniAppAlbumAuthorization.findFirst({
+      where: { miniAppKey: app.config.MINI_APP_KEY, targetLocalAlbumId: albumId }, select: { status: true }
+    });
+    if (authorization && authorization.status !== 'AUTHORIZED') return { items: [] };
+    const episodes = await app.prisma.episode.findMany({
+      where: { albumId, status: 'ONLINE', tiktokEpisodeId: { not: null }, byteplusVid: { not: null }, OR: [{ isFree: true }, { episodeNo: { lte: freeEpisodeCount } }] },
+      select: { id: true, episodeNo: true, title: true, tiktokEpisodeId: true, isFree: true },
+      orderBy: { episodeNo: 'asc' }, take: 1000
+    });
+    return { items: episodes };
+  });
+  app.put('/admin/campaign-entry/base', { preHandler: requirePermission('content.write') }, async (request, reply) => {
+    if (!campaignEntryApps.has(app.config.MINI_APP_KEY)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Campaign links are unavailable for this app.', requestId: request.id } });
+    const input = z.object({ url: z.string().trim().max(2048), verified: z.literal(true) }).parse(request.body);
+    let url: string;
+    try { url = normalizeCampaignEntryBase(input.url); }
+    catch { return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'Enter a verified https://www.tiktok.com/minis/... link for this app.', requestId: request.id } }); }
+    const base = await app.prisma.campaignEntryBase.upsert({
+      where: { id: 'default' }, create: { id: 'default', url, verifiedAt: new Date() }, update: { url, verifiedAt: new Date() }
+    });
+    await audit(app, request.user.sub, 'UPDATE', 'CampaignEntryBase', 'default', { url });
+    return { url: base.url, verifiedAt: base.verifiedAt };
   });
 
   app.get('/admin/albums/:albumId', { preHandler: requireAdmin }, async (request, reply) => {

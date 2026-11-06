@@ -3,7 +3,7 @@ import multipart from '@fastify/multipart';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import type { PrismaClient } from '@prisma/client';
-import Fastify, { LogController, type FastifyInstance } from 'fastify';
+import Fastify, { LogController, type FastifyInstance, type FastifyRequest } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
@@ -27,6 +27,7 @@ import { registerUiRoutes } from './modules/ui/routes';
 import { registerErrorHandler } from './plugins/error-handler';
 import { registerPrisma } from './plugins/prisma';
 import { getDatabaseDuration, sampleResponseLog, type ResponseLogSampleCache } from './lib/request-performance';
+import { RequestConcurrencyGate } from './lib/request-concurrency';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -71,7 +72,7 @@ function isAllowedCorsOrigin(origin: string | undefined, configuredOrigins: stri
 }
 
 const miniBootstrapPath = new RegExp(`^/api/(?:(?:${miniAppKeys.filter((key) => key !== 'main').join('|')})/)?v1/(?:auth/anonymous/session|app-entry-ad-sessions)$`);
-const miniPerformancePath = /\/(?:auth\/anonymous\/session|app-entry-ad-sessions(?:\/[^/]+\/(?:complete|shown))?|home|ad-events|episode-interstitial\/config|episodes\/[^/]+\/reward-session(?:\/[^/]+\/complete)?)$/;
+const miniPerformancePath = /\/(?:auth\/anonymous\/session|app-entry-ad-sessions(?:\/[^/]+\/(?:complete|shown))?|home(?:\/progress)?|ad-events|episode-interstitial\/config|episodes\/[^/]+\/reward-session(?:\/[^/]+\/complete)?)$/;
 const requestStartedAt = new WeakMap<object, number>();
 const responseLogSamples: ResponseLogSampleCache = new Map();
 const responseLogSampleIntervalMs = 10_000;
@@ -89,6 +90,18 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     logController: new LogController({ disableRequestLogging: env.NODE_ENV === 'production' }),
     trustProxy: trustedProxies.length ? trustedProxies : false
   });
+  const requestGate = new RequestConcurrencyGate(env.API_DB_CONCURRENCY, env.API_DB_QUEUE_LIMIT, {
+    perKeyLimit: env.API_DB_CONCURRENCY_PER_APP, perKeyQueueLimit: env.API_DB_QUEUE_LIMIT_PER_APP,
+    reserved: env.API_DB_RESERVED, perKeyReserved: 1, waitMs: env.API_DB_QUEUE_WAIT_MS
+  });
+  const responseMetricsStartedAt = new Date().toISOString();
+  const responsesByApp = new Map<string, { success: number; redirect: number; clientError: number; serverError: number }>();
+  const serverErrorsByRoute = new Map<string, { appKey: string; route: string; statusCode: number; count: number }>();
+  const requestReleases = new WeakMap<object, () => void>();
+  const releaseRequest = (request: object) => {
+    requestReleases.get(request)?.();
+    requestReleases.delete(request);
+  };
   registerErrorHandler(app);
   const configuredCorsOrigins = env.API_CORS_ORIGIN.split(',');
   app.addHook('onRequest', (request, _reply, done) => {
@@ -107,6 +120,30 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     if (miniPerformancePath.test(request.url.split('?', 1)[0])) requestStartedAt.set(request, performance.now());
     done();
   });
+  app.addHook('preHandler', async (request, reply) => {
+    const path = request.url.split('?', 1)[0];
+    if (request.method === 'OPTIONS' || path === '/live' || path === '/ready' || path === '/health' || path.startsWith('/api/v1/assets/covers/')) return;
+    const routeConfig = request.routeOptions.config as { hasReadyPublicHomeResponse?: (request: FastifyRequest) => boolean } | undefined;
+    if (request.method === 'GET' && routeConfig?.hasReadyPublicHomeResponse?.(request)) return;
+    const body = request.body as { eventType?: string } | undefined;
+    if (path.endsWith('/ad-events') && (body?.eventType === 'REQUESTED' || body?.eventType === 'CLOSED_INCOMPLETE'
+      || (body?.eventType === 'FAILED' && env.PERSIST_CLIENT_AD_DIAGNOSTICS !== true))) return;
+    const parts = path.split('/');
+    const candidateKey = parts[2] === 'v1' ? 'main' : parts[2];
+    const key = miniAppKeys.includes(candidateKey as MiniAppKey) ? candidateKey : 'system';
+    const critical = /\/(?:auth\/(?:anonymous\/session|login)|app-entry-ad-sessions(?:\/[^/]+\/(?:complete|shown))?|ad-events|episodes\/[^/]+\/reward-session(?:\/[^/]+\/complete)?)$/.test(path);
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    reply.raw.once('close', abort);
+    const release = await requestGate.acquire({ key, label: request.routeOptions.url ?? 'unmatched', critical, signal: controller.signal });
+    reply.raw.removeListener('close', abort);
+    if (!release) {
+      reply.header('Retry-After', '2');
+      return reply.code(503).send({ error: { code: 'SERVER_BUSY', message: 'The service is busy. Please retry shortly.', requestId: request.id } });
+    }
+    requestReleases.set(request, release);
+
+  });
   await app.register(cors, {
     origin: (origin, callback) => callback(null, isAllowedCorsOrigin(origin, configuredCorsOrigins)),
     credentials: true,
@@ -114,7 +151,9 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     exposedHeaders: ['Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Server-Timing'],
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
   });
+  app.addHook('onError', async (request) => { releaseRequest(request); });
   app.addHook('onSend', async (request, reply) => {
+    releaseRequest(request);
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('X-Frame-Options', 'DENY');
     reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -126,6 +165,26 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     }
   });
   app.addHook('onResponse', (request, reply, done) => {
+    releaseRequest(request);
+    const pathParts = request.url.split('?', 1)[0].split('/');
+    if (pathParts[1] === 'api') {
+      const candidateKey = pathParts[2] === 'v1' ? 'main' : pathParts[2];
+      if (miniAppKeys.includes(candidateKey as MiniAppKey)) {
+        const counts = responsesByApp.get(candidateKey) ?? { success: 0, redirect: 0, clientError: 0, serverError: 0 };
+        if (reply.statusCode >= 500) counts.serverError++;
+        else if (reply.statusCode >= 400) counts.clientError++;
+        else if (reply.statusCode >= 300) counts.redirect++;
+        else counts.success++;
+        responsesByApp.set(candidateKey, counts);
+        if (reply.statusCode >= 500) {
+          const route = request.routeOptions.url ?? request.url.split('?', 1)[0];
+          const metricKey = `${candidateKey}:${route}:${reply.statusCode}`;
+          const existing = serverErrorsByRoute.get(metricKey);
+          if (existing) existing.count++;
+          else if (serverErrorsByRoute.size < 512) serverErrorsByRoute.set(metricKey, { appKey: candidateKey, route, statusCode: reply.statusCode, count: 1 });
+        }
+      }
+    }
     const startedAt = requestStartedAt.get(request);
     if (startedAt !== undefined) {
       const durationMs = Number((performance.now() - startedAt).toFixed(1));
@@ -185,12 +244,12 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
       return ipKey;
     }
   });
-  await registerPrisma(app, options.prisma, runtimeDatabaseUrl(mainEnv.DATABASE_URL, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT));
+  await registerPrisma(app, options.prisma, runtimeDatabaseUrl(mainEnv.DATABASE_URL, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT, env.API_DATABASE_CONNECTION_LIMIT));
   const sharedDatabaseUrl = env.SHARED_PLATFORM_DATABASE_URL ?? mainEnv.DATABASE_URL;
   const sharedPrisma = options.sharedPrisma
     ?? (sharedDatabaseUrl === mainEnv.DATABASE_URL
       ? app.prisma
-      : new DatabaseClient({ datasources: { db: { url: runtimeDatabaseUrl(sharedDatabaseUrl, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT) } } }));
+      : new DatabaseClient({ datasources: { db: { url: runtimeDatabaseUrl(sharedDatabaseUrl, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT, env.API_DATABASE_CONNECTION_LIMIT) } } }));
   app.decorate('sharedPrisma', sharedPrisma);
   if (!options.sharedPrisma && sharedDatabaseUrl !== mainEnv.DATABASE_URL) {
     app.addHook('onClose', async () => sharedPrisma.$disconnect());
@@ -215,22 +274,40 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     return reply.send(createReadStream(targetPath));
   });
 
-  app.get('/live', async () => ({
+  app.get('/live', { config: { rateLimit: false } }, async () => ({
     status: 'ok',
+    admission: requestGate.stats,
+    responseMetrics: {
+      since: responseMetricsStartedAt,
+      apps: [...responsesByApp].map(([key, counts]) => ({ key, ...counts })),
+      topServerErrors: [...serverErrorsByRoute.values()].sort((a, b) => b.count - a.count).slice(0, 20)
+    },
     timestamp: new Date().toISOString()
   }));
 
+  const probeUrl = new URL(runtimeDatabaseUrl(mainEnv.DATABASE_URL, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT, env.API_DATABASE_CONNECTION_LIMIT));
+  probeUrl.searchParams.set('connection_limit', '1');
+  probeUrl.searchParams.set('pool_timeout', '1');
+  probeUrl.searchParams.set('connect_timeout', '2');
+  const probePrisma = options.prisma ?? new DatabaseClient({ datasources: { db: { url: probeUrl.toString() } } });
+  if (!options.prisma) app.addHook('onClose', async () => probePrisma.$disconnect());
+  let pendingProbe: Promise<unknown> | undefined;
   const readiness = async (_request: unknown, reply: { code: (statusCode: number) => unknown }) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await app.prisma.$queryRaw`SELECT 1`;
+      if (!pendingProbe) {
+        const probe = probePrisma.$queryRaw`SELECT 1`;
+        pendingProbe = Promise.resolve(probe).finally(() => { pendingProbe = undefined; });
+      }
+      await Promise.race([pendingProbe, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Probe timeout')), 1500); })]);
       return { status: 'ok', database: 'ok', timestamp: new Date().toISOString() };
     } catch {
       reply.code(503);
       return { status: 'unavailable', database: 'unavailable', timestamp: new Date().toISOString() };
-    }
+    } finally { clearTimeout(timer); }
   };
-  app.get('/ready', readiness);
-  app.get('/health', readiness);
+  app.get('/ready', { config: { rateLimit: false } }, readiness);
+  app.get('/health', { config: { rateLimit: false } }, readiness);
 
   const registerContext = async (context: FastifyInstance, contextEnv: Env, prisma: PrismaClient, miniAppPrisma: Record<string, PrismaClient>) => {
     context.decorate('config', contextEnv);
@@ -260,7 +337,7 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     const contextEnv = miniAppEnvironment(mainEnv, key);
     if (!contextEnv) continue;
     const providedPrisma = options.miniPrisma?.[key] ?? (key === 'taletv' ? options.taletvPrisma : undefined);
-    const prisma = providedPrisma ?? new DatabaseClient({ datasources: { db: { url: runtimeDatabaseUrl(contextEnv.DATABASE_URL, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT) } } });
+    const prisma = providedPrisma ?? new DatabaseClient({ datasources: { db: { url: runtimeDatabaseUrl(contextEnv.DATABASE_URL, env.DATABASE_POOLER_HOST, env.DATABASE_POOLER_PORT, env.API_DATABASE_CONNECTION_LIMIT) } } });
     miniAppPrisma[key] = prisma;
     await app.register((context) => registerContext(context, contextEnv, prisma, miniAppPrisma), { prefix: `/api/${miniAppPath(key)}/v1` });
     if (!providedPrisma) app.addHook('onClose', async () => prisma.$disconnect());

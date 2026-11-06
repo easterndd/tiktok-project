@@ -1,4 +1,4 @@
-export function runtimeDatabaseUrl(databaseUrl: string, poolerHost?: string, poolerPort = 6432) {
+export function runtimeDatabaseUrl(databaseUrl: string, poolerHost?: string, poolerPort = 6432, connectionLimit = 2) {
   if (!poolerHost) return databaseUrl;
   const url = new URL(databaseUrl);
   url.hostname = poolerHost;
@@ -6,7 +6,8 @@ export function runtimeDatabaseUrl(databaseUrl: string, poolerHost?: string, poo
   const schema = url.searchParams.get('schema') || 'public';
   if (!/^[A-Za-z0-9_]+$/.test(schema)) throw new Error('Invalid database schema for pooled connection.');
   url.pathname = `${url.pathname}__${schema}`;
-  url.searchParams.set('connection_limit', '3');
+  if (!Number.isInteger(connectionLimit) || connectionLimit < 1 || connectionLimit > 64) throw new Error('Invalid runtime database connection limit.');
+  url.searchParams.set('connection_limit', String(connectionLimit));
   url.searchParams.set('pool_timeout', '20');
   return url.toString();
 }

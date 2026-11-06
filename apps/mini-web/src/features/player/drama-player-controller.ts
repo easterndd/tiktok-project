@@ -17,8 +17,10 @@ async function preparePreload(VePlayer: VePlayerConstructor, episodes: PlayInfo[
   const sources = uniqueSources(episodes);
   if (!sources.length) return;
 
-  void VePlayer.prefetchMediaInfo(sources).catch(() => undefined);
-  if (!supportsMp4Mse()) return;
+  if (!supportsMp4Mse()) {
+    void VePlayer.prefetchMediaInfo(sources).catch(() => undefined);
+    return;
+  }
 
   const existingPreparation = preloadPreparation.get(VePlayer);
   const prepared = existingPreparation ?? VePlayer.prepare({ strategies: { preload: { preloadScene: 1, prevCount: 1, nextCount: 2, preloadTime: 5, preloadMaxCacheCount: 15 } } })
@@ -33,6 +35,7 @@ async function preparePreload(VePlayer: VePlayerConstructor, episodes: PlayInfo[
   try {
     await prepared;
     await VePlayer.setMediaInfoCacheConfig?.({ enable: true, cacheType: 'memory', expireTime: 30 * 60 * 1000, maxEntries: 100 });
+    void VePlayer.prefetchMediaInfo(sources).catch(() => undefined);
     await VePlayer.setPreloadScene(1, { prevCount: 1, nextCount: 2 });
     await VePlayer.setPreloadList(sources);
   } catch {

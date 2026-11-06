@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildAlbumSnapshot, enqueueAlbumAction, enqueueAlbumVersionSync, enqueueDueReviewReconciliations, enqueuePlatformSyncJob, processPlatformSyncJobs } from './platform-sync.service';
+import { BytePlusVodError } from './byteplus-vod.service';
 import { TikTokShortDramaApiError } from './tiktok-short-drama-api.service';
 
 test('reports every episode missing TikTok registration before version sync', async () => {
@@ -448,6 +449,76 @@ test('reviewing a new version keeps the published old version online', async () 
   await processPlatformSyncJobs(prisma as any, api as any);
   assert.equal(updates[0].data.status, 'ONLINE');
   assert.equal(updates[0].data.reviewStatus, 'REVIEWING');
+});
+
+test('blocks version sync before any TikTok call when a snapshot episode is unpublished', async () => {
+  const job: any = { id: 'version-1', kind: 'ALBUM_VERSION', status: 'PENDING', attemptCount: 0,
+    albumId: 'album-1', snapshotJson: { albumInfo: { title: 'Drama' }, episodes: [{ seq: 1, byteplus_vid: 'vid-1' }] } };
+  const prisma: any = { platformSyncJob: {
+    findMany: async () => [job], updateMany: async () => ({ count: 1 }),
+    update: async ({ data }: any) => { Object.assign(job, data); return job; }
+  } };
+  const api = { createAlbum: async () => assert.fail('unplayable media must not reach TikTok'),
+    updateAlbumVersion: async () => assert.fail('unplayable media must not reach TikTok') };
+  await processPlatformSyncJobs(prisma, api as any, { playability: {
+    spaceName: 'space', service: {
+      getMediaInfos: async () => [{ vid: 'vid-1', title: 'Episode 1', spaceName: 'space', publishStatus: 'Unpublished' }],
+      hasPlayableUrl: async () => assert.fail('unpublished media must not be queried for playback')
+    }
+  } });
+  assert.equal(job.status, 'FAILED');
+  assert.match(job.errorMessage, /尚未发布：1/);
+});
+
+test('review checks the submitted version snapshot rather than current episode VIDs', async () => {
+  const job: any = { id: 'review-2', kind: 'REVIEW', status: 'PENDING', attemptCount: 0, albumId: 'album-1',
+    snapshotJson: { platformAlbumId: 'platform-1', version: 2 } };
+  let checkedVid: string[] = [];
+  const prisma: any = {
+    platformSyncJob: {
+      findMany: async () => [job], updateMany: async () => ({ count: 1 }),
+      update: async ({ data }: any) => { Object.assign(job, data); return job; },
+      findFirst: async ({ where }: any) => {
+        assert.equal(where.providerResponse.equals, 2);
+        return { snapshotJson: { episodes: [{ seq: 1, byteplus_vid: 'version-vid' }] } };
+      }
+    },
+    album: { findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2 }) },
+    episode: { findMany: async () => assert.fail('current episodes must not replace the version snapshot') }
+  };
+  await processPlatformSyncJobs(prisma, { submitReview: async () => assert.fail('unplayable version must not be submitted') } as any,
+    { playability: { spaceName: 'space', service: {
+      getMediaInfos: async ({ vids }: { vids: string[] }) => {
+        checkedVid = vids;
+        return [{ vid: 'version-vid', title: 'Episode 1', spaceName: 'space', publishStatus: 'Published' }];
+      },
+      hasPlayableUrl: async () => false
+    } } });
+  assert.deepEqual(checkedVid, ['version-vid']);
+  assert.equal(job.status, 'FAILED');
+  assert.match(job.errorMessage, /没有播放地址：1/);
+});
+
+test('retries a BytePlus review preflight timeout without submitting or marking the result uncertain', async () => {
+  const job: any = { id: 'review-2', kind: 'REVIEW', status: 'PENDING', attemptCount: 0, albumId: 'album-1',
+    snapshotJson: { platformAlbumId: 'platform-1', version: 2 } };
+  const prisma: any = {
+    platformSyncJob: {
+      findMany: async () => [job], updateMany: async () => ({ count: 1 }),
+      update: async ({ data }: any) => { Object.assign(job, data); return job; },
+      findFirst: async () => ({ snapshotJson: { episodes: [{ seq: 1, byteplus_vid: 'vid-1' }] } })
+    },
+    album: { findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2 }) }
+  };
+  await processPlatformSyncJobs(prisma, { submitReview: async () => assert.fail('preflight failed before submission') } as any,
+    { now: () => new Date('2026-11-04T00:00:00Z'), playability: { spaceName: 'space', service: {
+      getMediaInfos: async () => { throw new BytePlusVodError('BytePlus timeout', true); },
+      hasPlayableUrl: async () => assert.fail('media lookup failed first')
+    } } });
+  assert.equal(job.status, 'PENDING');
+  assert.equal(job.attemptCount, 1);
+  assert.equal(job.nextAttemptAt.toISOString(), '2026-11-04T00:00:30.000Z');
+  assert.doesNotMatch(job.errorMessage, /平台操作结果未知/);
 });
 
 test('reconciliation keeps old episodes online while the new version is under review', async () => {

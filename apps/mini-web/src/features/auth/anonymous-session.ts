@@ -18,8 +18,8 @@ export type MiniLaunchRecordResult = {
 };
 
 function localEntryLaunchFields() {
-  if (getLocalEntryAdPlacementIds().length !== 2) return {};
-  return { localEntryAd: true, releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default' };
+  const releaseId = import.meta.env.VITE_MINI_RELEASE_ID || 'default';
+  return getLocalEntryAdPlacementIds().length === 2 ? { localEntryAd: true, releaseId } : { releaseId };
 }
 
 export function installTikTokLaunchListener() {
@@ -67,7 +67,7 @@ export async function ensureAnonymousSession(options: { force?: boolean } = {}) 
       platform: window.TTMinis ? 'TIKTOK_MINIS' : 'WEB',
       clientVersion: import.meta.env.VITE_APP_VERSION || undefined,
       source: launchContext.launchScene || 'APP_LAUNCH',
-      launchContext: { ...launchContext, entryId }
+      launchContext: { ...launchContext, entryId, releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default' }
     })
       .then((session) => setSessionToken(session.accessToken))
       .finally(() => { pendingSession = null; });
