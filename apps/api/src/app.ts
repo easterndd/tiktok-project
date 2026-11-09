@@ -21,6 +21,7 @@ import { registerInteractionRoutes } from './modules/interactions/routes';
 import { registerProfileRoutes } from './modules/profile/routes';
 import { registerAdRoutes } from './modules/ads/routes';
 import { registerDiagnosticRoutes } from './modules/diagnostics/routes';
+import { registerAnalyticsRoutes } from './modules/analytics/routes';
 import { registerAppEntryAdRoutes } from './modules/app-entry-ads/routes';
 import { registerAdminRoutes } from './modules/admin/routes';
 import { registerUiRoutes } from './modules/ui/routes';
@@ -148,12 +149,13 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     origin: (origin, callback) => callback(null, isAllowedCorsOrigin(origin, configuredCorsOrigins)),
     credentials: true,
     maxAge: 600,
-    exposedHeaders: ['Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Server-Timing'],
+    exposedHeaders: ['Retry-After', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Server-Timing', 'X-Request-ID', 'Content-Length'],
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
   });
   app.addHook('onError', async (request) => { releaseRequest(request); });
   app.addHook('onSend', async (request, reply) => {
     releaseRequest(request);
+    if (request.url.startsWith('/api/')) reply.header('X-Request-ID', request.id);
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('X-Frame-Options', 'DENY');
     reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -327,6 +329,7 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
       await registerProfileRoutes(api);
       await registerAdRoutes(api);
       await registerDiagnosticRoutes(api);
+      await registerAnalyticsRoutes(api);
       await registerUiRoutes(api);
       await registerAdminRoutes(api);
     });

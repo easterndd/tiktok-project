@@ -219,6 +219,7 @@ model User {
   playbackSessions PlaybackSession[]
   completionEvents EpisodeCompletionEvent[]
   activityEvents   AudienceActivityEvent[]
+  clientAnalyticsEvents ClientAnalyticsEvent[]
   preference       UserPreference?
   mergedInto       User?                    @relation("UserMerge", fields: [mergedIntoUserId], references: [id], onDelete: SetNull)
   mergedUsers      User[]                   @relation("UserMerge")
@@ -638,6 +639,10 @@ model RewardedUnlockSession {
   purpose        RewardedUnlockPurpose      @default(EPISODE_UNLOCK)
   releaseId      String                      @default("default")
   placementId    String
+  allowedPlacementIds String[]                @default([])
+  placementPolicyVersion Int                  @default(1)
+  adLoadMode    String                       @default("EXPLICIT_LOAD")
+  strategyVariant String                     @default("CONTROL")
   requiredCount  Int
   completedCount Int                         @default(0)
   status         RewardedUnlockSessionStatus @default(ACTIVE)
@@ -753,6 +758,10 @@ model AppEntryAdSession {
   launchId       String
   policyVersion  Int
   placementId    String
+  allowedPlacementIds String[]               @default([])
+  placementPolicyVersion Int                 @default(1)
+  adLoadMode    String                       @default("EXPLICIT_LOAD")
+  strategyVariant String                     @default("CONTROL")
   mode           AppEntryAdMode
   requiredCount  Int
   countMode      AppEntryAdCountMode     @default(COMPLETED)
@@ -940,6 +949,11 @@ model PlaybackQualityEvent {
   networkType   String?
   definition    String?
   clientVersion String?
+  platform      String?
+  tiktokClientVersion String?
+  stage         String?
+  playerOperationId String?
+  preloadHit    Boolean?
   errorCode     String?
   createdAt     DateTime @default(now())
   user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -1064,6 +1078,71 @@ model MiniAppRuntimeError {
 
   @@index([createdAt])
   @@index([kind, createdAt])
+}
+
+model ClientAnalyticsEvent {
+  id                String   @id @default(cuid())
+  eventId           String
+  miniAppKey        String
+  releaseId         String
+  userId            String?
+  launchId          String?
+  clientSessionId   String?
+  eventKey          String
+  eventTs           DateTime
+  receivedAt        DateTime @default(now())
+  platform          String?
+  appVersion        String?
+  tiktokClientVersion String?
+  sdkVersion        String?
+  placementId       String?
+  adType             String?
+  adSeq             Int?
+  operationId       String?
+  attemptNo         Int?
+  adPhase           String?
+  errorOrigin       String?
+  strategyVariant   String?
+  placementRole     String?
+  result            String?
+  isEnded           Boolean?
+  durationMs        Int?
+  shouldShow        Int?
+  errorCode         String?
+  errorMsg          String?
+  subErrorCode      String?
+  errorExtra        Json?
+  path              String?
+  requestId         String?
+  metadata          Json?
+  user              User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([miniAppKey, eventId])
+  @@index([miniAppKey, eventKey, receivedAt])
+  @@index([miniAppKey, releaseId, receivedAt])
+  @@index([userId, eventTs])
+  @@index([placementId, eventKey, receivedAt])
+  @@index([miniAppKey, operationId])
+  @@index([miniAppKey, releaseId, platform, eventKey, receivedAt])
+}
+
+model AdPlacementPair {
+  id                    String   @id @default(cuid())
+  releaseId             String   @default("*")
+  adType                AdType
+  primaryPlacementId    String
+  backupPlacementId     String?
+  enabled               Boolean  @default(false)
+  iosLoadMode           String   @default("DIRECT_SHOW")
+  androidLoadMode       String   @default("EXPLICIT_LOAD")
+  iosExperimentPercent  Int      @default(0)
+  version               Int      @default(1)
+  updatedBy             String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([releaseId, adType, primaryPlacementId])
+  @@index([adType, primaryPlacementId, enabled])
 }
 
 model AuditLog {

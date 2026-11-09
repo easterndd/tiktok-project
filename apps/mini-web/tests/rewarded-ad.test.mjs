@@ -4,26 +4,33 @@ import { after, it } from 'node:test';
 
 let post;
 const performanceReports = [];
+const analyticsEvents = [];
 globalThis.__rewardedAdTestPost = (...args) => post(...args);
 globalThis.__rewardedAdTestPerformance = (...args) => performanceReports.push(args);
+globalThis.__rewardedAdTestAnalytics = analyticsEvents;
 const mocks = {
-  '../../lib/api-client': 'export class ApiError extends Error {} export const apiClient = { post: (...args) => globalThis.__rewardedAdTestPost(...args) };',
+  '../../lib/api-client': 'export class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } } globalThis.__rewardedAdApiError = ApiError; export const apiClient = { post: (...args) => globalThis.__rewardedAdTestPost(...args) };',
   '../../lib/storage': 'export const isDemoMode = () => false;',
   '../../lib/diagnostics': 'export const reportDiagnostic = () => {}; export const reportPerformance = (...args) => globalThis.__rewardedAdTestPerformance(...args);',
-  './ad-timeout': 'export const adTimeout = (onError) => ({ shown: () => {}, clear: () => {} }); export const adErrorMessage = (error) => String(error);'
+  '../../lib/analytics': 'export const captureSdkCallback = (name, payload = null) => ({ name, payload, capturedAt: new Date().toISOString() }); export const nextAdSequence = () => 1; export const newAdOperationId = (kind, seq) => kind + "-" + seq + "-test"; export const recordAdClose = (input) => globalThis.__rewardedAdTestAnalytics.push({ kind: "close", input }); export const recordAdLoad = (input) => globalThis.__rewardedAdTestAnalytics.push({ kind: "load", input }); export const recordAdLoadResult = (input) => globalThis.__rewardedAdTestAnalytics.push({ kind: "load", input }); export const recordAdShow = (input) => globalThis.__rewardedAdTestAnalytics.push({ kind: "show", input });',
+  './ad-timeout': 'export const adTimeout = (onError) => ({ shown: () => {}, clear: () => {} }); export const adErrorMessage = (error) => String(error);',
+  './ad-platform': 'export const getAdPlatform = () => "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const getMiniReleaseId = () => "default"; export const isV006Release = () => false; export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;',
+  './ad-placement-manifest': 'export const restrictToPublicManifest = (_type, ids) => [...ids];',
+  './ad-error-policy': 'export const classifyAdFailure = () => "STOP"; export const normalizeErrorOrigin = () => "UNKNOWN"; export const taggedAdFailure = (message, origin) => Object.assign(new Error(message), { adErrorOrigin: origin });',
+  './ad-activity': 'export const claimNativeAd = () => () => {}; export const markRewardedAdClosed = () => {};'
 };
 const hooks = registerHooks({
   resolve(specifier, context, next) {
-    if (context.parentURL?.endsWith('/features/ads/rewarded-ad.ts')) {
+    if (context.parentURL?.includes('/features/ads/')) {
       if (mocks[specifier]) return { url: `data:text/javascript,${encodeURIComponent(mocks[specifier])}`, shortCircuit: true };
-      if (specifier.startsWith('./')) return next(`${specifier}.ts`, context);
+      if (specifier.startsWith('./') && !/\.(?:ts|tsx|js)$/.test(specifier)) return next(`${specifier}.ts`, context);
     }
     return next(specifier, context);
   }
 });
 const { prepareRewardedUnlockSession, unlockEpisodeByRewardedAd } = await import('../src/features/ads/rewarded-ad.ts');
 const previousWindow = globalThis.window;
-after(() => { hooks.deregister(); globalThis.window = previousWindow; delete globalThis.__rewardedAdTestPost; delete globalThis.__rewardedAdTestPerformance; });
+after(() => { hooks.deregister(); globalThis.window = previousWindow; delete globalThis.__rewardedAdTestPost; delete globalThis.__rewardedAdTestPerformance; delete globalThis.__rewardedAdTestAnalytics; delete globalThis.__rewardedAdApiError; });
 
 it('shows the episode ad without sending REQUESTED and confirms SHOWN before unlocking', async () => {
   performanceReports.length = 0;
@@ -121,4 +128,40 @@ it('measures rewarded close through SDK acceptance of the next ad', async () => 
   await unlock;
   assert.equal(requests.filter(({ path }) => path.endsWith('/complete')).length, 2);
   assert.ok(performanceReports.some(([phase]) => phase === 'REWARDED_CLOSE_TO_NEXT_AD_SHOW_ACCEPTED'));
+});
+
+it('records a rejected SDK show Promise as SDK_PROMISE', async () => {
+  analyticsEvents.length = 0;
+  const requests = [];
+  globalThis.window = { TTMinis: { canIUse: () => true, createRewardedVideoAd: () => ({
+    show: () => Promise.reject(new Error('NO_FILL')),
+    onClose: () => {}, offClose: () => {}, onError: () => {}, offError: () => {}, destroy: () => {}
+  }) } };
+  post = async (path, body) => {
+    requests.push({ path, body });
+    if (path.endsWith('/reward-session')) return { access: 'REWARDED_AD_REQUIRED', sessionId: 'session-sdk-reject', placementId: 'placement-sdk-reject' };
+    return { accepted: true };
+  };
+  await assert.rejects(unlockEpisodeByRewardedAd('episode-sdk-reject'), /NO_FILL/);
+  const failedShow = analyticsEvents.find(({ kind, input }) => kind === 'show' && input.result === 'fail');
+  assert.equal(failedShow?.input.errorOrigin, 'SDK_PROMISE');
+  assert.equal(failedShow?.input.callback.name, 'show.reject');
+  assert.equal(requests.some(({ body }) => body.eventType === 'SHOWN'), false);
+});
+
+it('does not turn a rejected SHOWN acknowledgement into an SDK show failure', async () => {
+  analyticsEvents.length = 0;
+  let shows = 0;
+  globalThis.window = { TTMinis: { canIUse: () => true, createRewardedVideoAd: () => ({
+    show: async () => { shows += 1; },
+    onClose: () => {}, offClose: () => {}, onError: () => {}, offError: () => {}, destroy: () => {}
+  }) } };
+  post = async (path, body) => {
+    if (path.endsWith('/reward-session')) return { access: 'REWARDED_AD_REQUIRED', sessionId: 'session-ack-reject', placementId: 'placement-ack-reject' };
+    if (body.eventType === 'SHOWN') throw new globalThis.__rewardedAdApiError('ACK_REJECTED', 400);
+    return { accepted: true };
+  };
+  await assert.rejects(unlockEpisodeByRewardedAd('episode-ack-reject'), /ACK_REJECTED/);
+  assert.equal(shows, 1);
+  assert.deepEqual(analyticsEvents.filter(({ kind }) => kind === 'show').map(({ input }) => input.result), ['success']);
 });

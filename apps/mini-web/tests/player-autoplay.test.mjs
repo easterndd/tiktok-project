@@ -10,6 +10,10 @@ const hooks = registerHooks({
 });
 const { createPlayerAutoplay } = await import('../src/features/player/player-autoplay.ts');
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const waitUntil = async (predicate, timeoutMs = 250) => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) await wait(5);
+};
 
 it('retries when play resolves but the player remains paused, then detects playback', async () => {
   let attempts = 0;
@@ -26,7 +30,7 @@ it('retries when play resolves but the player remains paused, then detects playb
   const autoplay = createPlayerAutoplay(() => player, () => { started = true; }, () => { fallback = true; }, { maxAttempts: 3, retryDelayMs: 1 });
   try {
     autoplay.attempt();
-    await wait(10);
+    await waitUntil(() => started);
     assert.equal(attempts, 2);
     assert.equal(started, true);
     assert.equal(fallback, false);
@@ -43,7 +47,7 @@ it('offers a manual fallback after bounded autoplay attempts', async () => {
   const autoplay = createPlayerAutoplay(() => player, () => assert.fail('playback should remain paused'), () => { fallback = true; }, { maxAttempts: 2, retryDelayMs: 1 });
   try {
     autoplay.attempt();
-    await wait(10);
+    await waitUntil(() => fallback);
     assert.equal(attempts, 2);
     assert.equal(fallback, true);
   } finally {

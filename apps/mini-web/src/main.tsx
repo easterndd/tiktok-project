@@ -6,9 +6,11 @@ import { router } from './app/router';
 import { initializeTikTokMinis } from './lib/ttminis';
 import { installTikTokLaunchListener } from './features/auth/anonymous-session';
 import { installDiagnostics, reportDiagnostic } from './lib/diagnostics';
+import { recordAppOpen } from './lib/analytics';
 import './styles/global.css';
 
 installDiagnostics();
+recordAppOpen({ entry: 'initial_mount' });
 try { initializeTikTokMinis(); } catch (error) {
   reportDiagnostic({ kind: 'STARTUP', phase: 'SDK_INIT', message: error instanceof Error ? error.message : String(error) });
   throw error;

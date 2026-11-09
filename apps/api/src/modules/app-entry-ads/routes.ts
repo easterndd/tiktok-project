@@ -8,14 +8,15 @@ import { serialByKey, singleFlight } from '../../lib/single-flight';
 import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { requestCountry } from '../../lib/content-visibility';
+import { isV006Release, resolveAdPlacementPolicy, sessionAllowedPlacementIds, type AdClientPlatform } from '../ads/ad-placement-policy';
 
 const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
 const policyCacheTtlMs = 5_000;
 const releaseIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default');
-const startInput = z.object({ launchId: z.string().uuid(), releaseId: releaseIdSchema, adId: z.string().trim().max(128).nullable().optional() });
+const startInput = z.object({ launchId: z.string().uuid(), releaseId: releaseIdSchema, adId: z.string().trim().max(128).nullable().optional(), platform: z.enum(['ios', 'android', 'unknown']).optional() });
 const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.boolean() });
-const shownInput = z.object({ clientEventId: z.string().uuid(), adIndex: z.number().int().positive() });
+const shownInput = z.object({ clientEventId: z.string().uuid(), adIndex: z.number().int().positive(), placementId: z.string().trim().min(1).max(128).optional() });
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
 
 type PolicyRecord = Awaited<ReturnType<FastifyInstance['prisma']['appEntryAdPolicy']['findUnique']>>;
@@ -47,7 +48,7 @@ function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
     enabled: false,
     exitRetentionEnabled: false,
     exitRetentionAdCount: 1,
-    episodeInterstitialEnabled: true,
+    episodeInterstitialEnabled: !isV006Release(releaseId),
     episodeInterstitialInitialDelaySeconds: 30,
     episodeInterstitialIntervalSeconds: v005 ? 40 : 60,
     episodeInterstitialMinIntervalSeconds: v005 ? 40 : 180,
@@ -66,13 +67,17 @@ function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
 
 export type AppEntryAdPolicyInput = ReturnType<typeof disabledPolicy>;
 
-function sessionResponse(session: { id: string; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; requiredCount: number; countMode: 'COMPLETED' | 'SHOWN'; completedCount: number; status: string }, fallback: 'ALLOW' | 'BLOCK') {
+function sessionResponse(session: { id: string; releaseId?: string; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; allowedPlacementIds?: string[]; placementPolicyVersion?: number; adLoadMode?: string; strategyVariant?: string; requiredCount: number; countMode: 'COMPLETED' | 'SHOWN'; completedCount: number; status: string }, fallback: 'ALLOW' | 'BLOCK') {
   if (session.status === 'COMPLETED' || session.completedCount >= session.requiredCount) return { required: false as const };
   return {
     required: true as const,
     sessionId: session.id,
     mode: session.mode,
     placementId: session.placementId,
+    placementIds: sessionAllowedPlacementIds(session),
+    placementPolicyVersion: session.placementPolicyVersion ?? 1,
+    adLoadMode: session.adLoadMode ?? 'EXPLICIT_LOAD',
+    strategyVariant: session.strategyVariant ?? 'CONTROL',
     requiredCount: session.requiredCount,
     countMode: session.countMode,
     completedCount: session.completedCount,
@@ -134,7 +139,7 @@ export async function observeAppEntryAdRelease(app: FastifyInstance, releaseId: 
   return policy;
 }
 
-export async function readExitRetentionConfig(app: FastifyInstance, releaseId: string, userId: string, ip: string) {
+export async function readExitRetentionConfig(app: FastifyInstance, releaseId: string, userId: string, ip: string, platform: AdClientPlatform = 'unknown') {
   const policy = await readAppEntryAdPolicy(app, releaseId);
   const placementId = miniAppAdConfig(app.config).rewardedPlacementId;
   if (!policy.exitRetentionEnabled || !placementId) return { enabled: false as const };
@@ -147,21 +152,35 @@ export async function readExitRetentionConfig(app: FastifyInstance, releaseId: s
     const canonical = await app.prisma.user.findUnique({ where: { id: viewer.mergedIntoUserId }, select: { appEntryAdExempt: true } });
     if (canonical?.appEntryAdExempt) return { enabled: false as const };
   }
-  return { enabled: true as const, placementId, requiredCount: policy.exitRetentionAdCount };
+  const placementPolicy = await resolveAdPlacementPolicy(app, { releaseId, adType: 'REWARDED', primaryPlacementId: placementId, platform });
+  return {
+    enabled: true as const,
+    placementId,
+    placementIds: placementPolicy.placementIds,
+    placementPolicyVersion: placementPolicy.version,
+    adLoadMode: placementPolicy.adLoadMode,
+    strategyVariant: placementPolicy.strategyVariant,
+    requiredCount: policy.exitRetentionAdCount
+  };
 }
 
 export async function registerAppEntryAdRoutes(app: FastifyInstance) {
   app.get('/exit-retention/config', { preHandler: requireUser }, async (request) => {
-    const { releaseId } = z.object({ releaseId: releaseIdSchema }).parse(request.query);
-    return measureDatabase(request, () => readExitRetentionConfig(app, releaseId, request.user.sub, request.ip));
+    const { releaseId, platform } = z.object({ releaseId: releaseIdSchema, platform: z.enum(['ios', 'android', 'unknown']).default('unknown') }).parse(request.query);
+    return measureDatabase(request, () => readExitRetentionConfig(app, releaseId, request.user.sub, request.ip, platform));
   });
   app.get('/episode-interstitial/config', { preHandler: requireUser }, async (request) => {
-    const { releaseId } = z.object({ releaseId: releaseIdSchema }).parse(request.query);
+    const { releaseId, platform } = z.object({ releaseId: releaseIdSchema, platform: z.enum(['ios', 'android', 'unknown']).default('unknown') }).parse(request.query);
     const policy = await measureDatabase(request, () => readAppEntryAdPolicy(app, releaseId));
     const placementId = miniAppAdConfig(app.config).episodeInterstitialPlacementId;
+    const placementPolicy = await resolveAdPlacementPolicy(app, { releaseId, adType: 'INTERSTITIAL', primaryPlacementId: placementId, platform });
     return {
       enabled: policy.episodeInterstitialEnabled && Boolean(placementId),
       placementId: placementId || null,
+      placementIds: placementPolicy.placementIds,
+      placementPolicyVersion: placementPolicy.version,
+      adLoadMode: placementPolicy.adLoadMode,
+      strategyVariant: placementPolicy.strategyVariant,
       initialDelaySeconds: policy.episodeInterstitialInitialDelaySeconds,
       intervalSeconds: policy.episodeInterstitialIntervalSeconds,
       minIntervalSeconds: policy.episodeInterstitialMinIntervalSeconds,
@@ -175,7 +194,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     preHandler: requireUser,
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
-    const { launchId, releaseId, adId } = startInput.parse(request.body);
+    const { launchId, releaseId, adId, platform = 'unknown' } = startInput.parse(request.body);
     queueSharedIpVisit(app.sharedPrisma, {
       ipAddress: request.ip, miniAppKey: app.config.MINI_APP_KEY, userId: request.user.sub, clientSessionId: launchId,
       countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
@@ -196,7 +215,13 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       if (attribution.status !== 'ATTRIBUTED') return { required: false as const };
     }
     const policy = await measureDatabase(request, () => observeAppEntryAdRelease(app, releaseId));
-    if (!policy.enabled) return { required: false as const };
+    if (!policy.enabled || !policy.placementId) return { required: false as const };
+    const placementPolicy = await resolveAdPlacementPolicy(app, {
+      releaseId,
+      adType: policy.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED',
+      primaryPlacementId: policy.placementId,
+      platform
+    });
     const [ipExempt, viewer] = await Promise.all([
       measureDatabase(request, () => isEntryAdIpExempt(app.sharedPrisma, request.ip)).catch((error) => {
         request.log.warn({ err: error }, 'Shared IP exemption lookup failed; applying entry-ad policy');
@@ -238,6 +263,10 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
           launchId,
           policyVersion: policy.version,
           placementId: policy.placementId,
+          allowedPlacementIds: placementPolicy.placementIds,
+          placementPolicyVersion: placementPolicy.version,
+          adLoadMode: placementPolicy.adLoadMode,
+          strategyVariant: placementPolicy.strategyVariant,
           mode: policy.mode,
           requiredCount: policy.requiredCount,
           countMode: policy.countMode,
@@ -273,14 +302,15 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       if (session.status !== 'ACTIVE' || session.expiresAt <= new Date()) return null;
       if (!isEnded && session.countMode === 'COMPLETED') {
         const closed = await tx.adEvent.findFirst({
-          where: { userId: request.user.sub, clientEventId, scope: 'APP_ENTRY', eventType: 'CLOSED_INCOMPLETE', appEntrySessionId: sessionId, adType: 'REWARDED', placementId: session.placementId },
+          where: { userId: request.user.sub, clientEventId, scope: 'APP_ENTRY', eventType: 'CLOSED_INCOMPLETE', appEntrySessionId: sessionId, adType: 'REWARDED' },
           select: { id: true }
         });
         if (closed) return { completedCount: session.completedCount, requiredCount: session.requiredCount, shouldContinue: true, retryCurrent: true };
       }
       const shown = await tx.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } });
       if (!shown || shown.eventType !== 'SHOWN' || shown.scope !== 'APP_ENTRY' || shown.appEntrySessionId !== sessionId
-        || shown.adType !== (session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED') || shown.placementId !== session.placementId) {
+        || shown.adType !== (session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED')
+        || !sessionAllowedPlacementIds(session).includes(shown.placementId)) {
         return { retryShownAcknowledgement: true as const };
       }
       const adIndex = shown.adIndex;
@@ -315,7 +345,8 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
         if (current.status !== 'ACTIVE' || current.expiresAt <= new Date()) return null;
         const event = await app.prisma.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } });
         const matches = event && event.scope === 'APP_ENTRY' && event.appEntrySessionId === sessionId
-          && event.adType === (current.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED') && event.placementId === current.placementId;
+          && event.adType === (current.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED')
+          && sessionAllowedPlacementIds(current).includes(event.placementId);
         if (matches && event.eventType === 'CLOSED_INCOMPLETE' && !isEnded && current.countMode === 'COMPLETED') {
           return { completedCount: current.completedCount, requiredCount: current.requiredCount, shouldContinue: true, retryCurrent: true };
         }
@@ -363,12 +394,26 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 60, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request, reply) => {
     const { sessionId } = sessionParams.parse(request.params);
-    const { adIndex } = shownInput.parse(request.body);
+    const { clientEventId, adIndex, placementId } = shownInput.parse(request.body);
     // The ordered session counter is the durable idempotency record for SHOWN
     // mode, so avoid a second completion row for every impression.
     const session = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } }));
     if (!session || session.userId !== request.user.sub) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Entry ad session is unavailable.', requestId: request.id } });
     if (session.countMode !== 'SHOWN') return reply.code(409).send({ error: { code: 'COUNT_MODE_MISMATCH', message: 'This entry-ad session does not count impressions.', requestId: request.id } });
+    const allowedPlacementIds = sessionAllowedPlacementIds(session);
+    if (placementId && !allowedPlacementIds.includes(placementId)) {
+      return reply.code(409).send({ error: { code: 'PLACEMENT_NOT_ALLOWED', message: 'This placement is not allowed for the entry-ad session.', requestId: request.id } });
+    }
+    if (isV006Release(session.releaseId) && session.allowedPlacementIds.length > 0) {
+      if (!placementId) return reply.code(400).send({ error: { code: 'PLACEMENT_REQUIRED', message: 'A placement ID is required for this release.', requestId: request.id } });
+      const event = await measureDatabase(request, () => app.prisma.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } }));
+      if (!event || event.eventType !== 'SHOWN' || event.scope !== 'APP_ENTRY' || event.appEntrySessionId !== sessionId
+        || event.sessionId !== sessionId || event.adIndex !== adIndex
+        || event.adType !== (session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED')
+        || event.placementId !== placementId || !allowedPlacementIds.includes(event.placementId)) {
+        return reply.code(409).send({ error: { code: 'AD_NOT_ACKNOWLEDGED', message: 'The matching ad impression has not been recorded.', requestId: request.id } });
+      }
+    }
     const now = new Date();
     const canAdvance = session.status === 'ACTIVE' && session.expiresAt > now && adIndex <= session.requiredCount;
     const isNextIndex = adIndex === session.completedCount + 1;

@@ -1,10 +1,13 @@
 import type { AppEntryAdSession } from './app-entry-ad';
 
-type Playback = { clientEventId: string; isEnded: boolean };
+type Playback = { clientEventId: string; isEnded: boolean; placementId?: string; adType?: 'REWARDED' | 'INTERSTITIAL' };
 type Progress = { shouldContinue: boolean; completedCount: number };
 type ShowInput = {
   mode: 'INTERSTITIAL' | 'REWARDED_GATED';
   placementId: string;
+  placementIds?: string[];
+  adLoadMode?: 'DIRECT_SHOW' | 'EXPLICIT_LOAD';
+  strategyVariant?: string;
   sessionId: string;
   adIndex: number;
   requiredCount?: number;
@@ -30,14 +33,14 @@ function showRetryDelayMs(cause: unknown, failures: number) {
 }
 
 async function acknowledgeShown(actions: {
-  complete: (sessionId: string, clientEventId: string, isEnded: boolean, adIndex?: number) => Promise<Progress>;
+  complete: (sessionId: string, clientEventId: string, isEnded: boolean, adIndex?: number, placementId?: string, adType?: 'REWARDED' | 'INTERSTITIAL') => Promise<Progress>;
   wait: (ms: number) => Promise<void>;
   isActive: () => boolean;
-}, sessionId: string, clientEventId: string, adIndex: number) {
+}, sessionId: string, clientEventId: string, adIndex: number, placementId?: string, adType?: 'REWARDED' | 'INTERSTITIAL') {
   let failures = 0;
   while (actions.isActive()) {
     try {
-      return await actions.complete(sessionId, clientEventId, true, adIndex);
+      return await actions.complete(sessionId, clientEventId, true, adIndex, placementId, adType);
     } catch (cause) {
       const status = httpStatus(cause);
       if (status !== undefined && status >= 400 && status < 500 && status !== 429) throw cause;
@@ -50,7 +53,7 @@ async function acknowledgeShown(actions: {
 
 type EntryAdFlowActions = {
   show: (input: ShowInput) => Promise<Playback>;
-  complete: (sessionId: string, clientEventId: string, isEnded: boolean, adIndex?: number) => Promise<Progress>;
+  complete: (sessionId: string, clientEventId: string, isEnded: boolean, adIndex?: number, placementId?: string, adType?: 'REWARDED' | 'INTERSTITIAL') => Promise<Progress>;
   refreshSession: () => Promise<AppEntryAdSession>;
   wait: (ms: number) => Promise<void>;
   isActive: () => boolean;
@@ -63,6 +66,9 @@ const activeEntryAdFlows = new Map<string, Promise<void>>();
 async function runEntryAdFlowInternal(session: AppEntryAdSession, actions: EntryAdFlowActions) {
   if (!session.sessionId || !session.mode || !session.placementId || !session.requiredCount) throw new Error('ENTRY_AD_SESSION_UNAVAILABLE');
   let { sessionId, mode, placementId, requiredCount } = session;
+  let placementIds = session.placementIds ?? [placementId];
+  let adLoadMode = session.adLoadMode;
+  let strategyVariant = session.strategyVariant;
   let completed = session.completedCount ?? 0;
   let failures = 0;
   let sessionRecoveries = 0;
@@ -77,6 +83,9 @@ async function runEntryAdFlowInternal(session: AppEntryAdSession, actions: Entry
       playback = await actions.show({
         mode,
         placementId,
+        placementIds,
+        adLoadMode,
+        strategyVariant,
         sessionId,
         adIndex,
         requiredCount,
@@ -85,7 +94,7 @@ async function runEntryAdFlowInternal(session: AppEntryAdSession, actions: Entry
           actions.onAdShown?.();
           if (session.countMode !== 'SHOWN') return;
           const previous = shownCompletionQueue ?? Promise.resolve({ shouldContinue: true, completedCount: completed });
-          queuedShownCompletion = shownCompletionQueue = previous.then(() => acknowledgeShown(actions, sessionId, shownPlayback.clientEventId, adIndex));
+          queuedShownCompletion = shownCompletionQueue = previous.then(() => acknowledgeShown(actions, sessionId, shownPlayback.clientEventId, adIndex, shownPlayback.placementId, shownPlayback.adType));
           void queuedShownCompletion.catch(() => undefined);
         }
       });
@@ -140,6 +149,9 @@ async function runEntryAdFlowInternal(session: AppEntryAdSession, actions: Entry
           sessionId = refreshed.sessionId;
           mode = refreshed.mode;
           placementId = refreshed.placementId;
+          placementIds = refreshed.placementIds ?? [refreshed.placementId];
+          adLoadMode = refreshed.adLoadMode;
+          strategyVariant = refreshed.strategyVariant;
           requiredCount = refreshed.requiredCount;
           completed = refreshed.completedCount ?? 0;
           failures = 0;

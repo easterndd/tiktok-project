@@ -132,7 +132,7 @@ it('registers QuartzPlay independently within the evergreenprosper organization'
   }
 });
 
-it('keeps episode interstitial placements independent and disabled when missing', async () => {
+  it('keeps episode interstitial placements independent and preserves the legacy default without a release policy', async () => {
   const app = await buildApp({ ...env, EPISODE_INTERSTITIAL_PLACEMENT_ID: 'main-interstitial' }, {
     prisma: databaseFor('main-album'), taletvPrisma: databaseFor('taletv-album')
   });
@@ -142,8 +142,8 @@ it('keeps episode interstitial placements independent and disabled when missing'
     const taletvToken = await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'taletv' });
     const main = await app.inject({ url: '/api/v1/episode-interstitial/config', headers: { authorization: `Bearer ${mainToken}` } });
     const taletv = await app.inject({ url: '/api/taletv/v1/episode-interstitial/config', headers: { authorization: `Bearer ${taletvToken}` } });
-    assert.deepEqual(main.json(), { enabled: true, placementId: 'main-interstitial', initialDelaySeconds: 30, intervalSeconds: 60, minIntervalSeconds: 180, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60 });
-    assert.deepEqual(taletv.json(), { enabled: false, placementId: null, initialDelaySeconds: 30, intervalSeconds: 60, minIntervalSeconds: 180, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60 });
+    assert.deepEqual(main.json(), { enabled: true, placementId: 'main-interstitial', placementIds: ['main-interstitial'], placementPolicyVersion: 1, adLoadMode: 'EXPLICIT_LOAD', strategyVariant: 'CONTROL', initialDelaySeconds: 30, intervalSeconds: 60, minIntervalSeconds: 180, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60 });
+    assert.deepEqual(taletv.json(), { enabled: false, placementId: null, placementIds: [], placementPolicyVersion: 1, adLoadMode: 'EXPLICIT_LOAD', strategyVariant: 'CONTROL', initialDelaySeconds: 30, intervalSeconds: 60, minIntervalSeconds: 180, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60 });
     assert.equal((await app.inject({ url: '/api/taletv/v1/episode-interstitial/config', headers: { authorization: `Bearer ${mainToken}` } })).statusCode, 401);
   } finally { await app.close(); }
 });

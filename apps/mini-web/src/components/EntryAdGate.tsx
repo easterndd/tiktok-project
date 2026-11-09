@@ -140,8 +140,8 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
           if (controller.signal.aborted) return;
           if (session.required) {
             step = 'ENTRY_AD_PLAYBACK';
-            await runEntryAdFlow(session, { show: showAppEntryAd, complete: (sessionId, clientEventId, isEnded, adIndex) => session.countMode === 'SHOWN'
-              ? acknowledgeAppEntryAdShown(sessionId, clientEventId, adIndex!)
+            await runEntryAdFlow(session, { show: showAppEntryAd, complete: (sessionId, clientEventId, isEnded, adIndex, placementId, adType) => session.countMode === 'SHOWN'
+              ? acknowledgeAppEntryAdShown(sessionId, clientEventId, adIndex!, placementId, adType)
               : completeAppEntryAd(sessionId, clientEventId, isEnded), refreshSession: startAppEntryAdSession, wait, isActive: () => !controller.signal.aborted, onError: (cause) => {
               reportDiagnostic({ kind: 'AD', phase: 'ENTRY_AD_PLAYBACK', message: cause instanceof Error ? cause.message : String(cause) });
               console.warn('[EntryAdGate] entry ad unavailable; retrying', cause);
@@ -177,6 +177,6 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
   }, [attempt, localEntryMode, navigate]);
   return <EntryAdReadyContext.Provider value={state === 'READY'}>
     {children}
-    {state === 'ERROR' && <aside className={styles.notice} role="alert"><p>{errorMessage}</p><button onClick={() => { setState('LOADING'); setAttempt((value) => value + 1); }}>Try again</button></aside>}
+    {state === 'ERROR' && <aside className={`${styles.notice} ${import.meta.env.VITE_DEBUG_PANEL === 'true' ? styles.debugNotice : ''}`} role="alert"><p>{errorMessage}</p><button onClick={() => { setState('LOADING'); setAttempt((value) => value + 1); }}>Try again</button></aside>}
   </EntryAdReadyContext.Provider>;
 }

@@ -2,11 +2,17 @@ import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import { registerHooks } from 'node:module';
 
+const analyticsEvents = [];
+globalThis.__interstitialAnalytics = analyticsEvents;
 const hooks = registerHooks({
   resolve(specifier, context, next) {
     if (context.parentURL?.endsWith('/features/ads/episode-interstitial.ts')) {
       if (specifier === '../../lib/diagnostics') return { url: 'data:text/javascript,export const reportDiagnostic = () => {}; export const reportPerformance = () => {};', shortCircuit: true };
-      if (specifier.startsWith('./')) return next(`${specifier}.ts`, context);
+      if (specifier === '../../lib/analytics') return { url: 'data:text/javascript,export const captureSdkCallback = (name, payload = null) => ({ name, payload, capturedAt: new Date().toISOString() }); export const nextAdSequence = () => 1; export const newAdOperationId = (kind, seq) => kind + "-" + seq + "-test"; export const recordAdClose = () => {}; export const recordAdLoad = () => {}; export const recordAdLoadResult = () => {}; export const recordAdShow = (input) => globalThis.__interstitialAnalytics.push(input);', shortCircuit: true };
+    }
+    if (context.parentURL?.includes('/features/ads/')) {
+      if (specifier === './ad-platform') return { url: 'data:text/javascript,export const getAdPlatform = () => "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;', shortCircuit: true };
+      if (specifier.startsWith('./') && !/\.(?:ts|tsx|js)$/.test(specifier)) return next(`${specifier}.ts`, context);
     }
     return next(specifier, context);
   }
@@ -19,7 +25,7 @@ const originalWindow = globalThis.window;
 it('skips missing placement, frequency and competing ads; closes or fails without blocking', async () => {
   let now = 1_000_000;
   Date.now = () => now;
-  configureEpisodeInterstitial({ initialDelaySeconds: 0, intervalSeconds: 1, minIntervalSeconds: 0, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60 });
+  configureEpisodeInterstitial({ initialDelaySeconds: 0, intervalSeconds: 1, minIntervalSeconds: 0, maxPerSession: 2, initialSkipTransitions: 2, everyTransitions: 3, rewardedCooldownSeconds: 60, placementIds: ['episode-placement'] });
   const ads = [];
   let failNext = false;
   globalThis.window = { TTMinis: {
@@ -46,6 +52,7 @@ it('skips missing placement, frequency and competing ads; closes or fails withou
     await showEpisodeTransitionInterstitial('episode-placement');
     assert.equal(ads.length, 0);
     releaseEntry();
+    now += 501;
     await showEpisodeTransitionInterstitial('episode-placement');
     await showEpisodeTransitionInterstitial('episode-placement');
     const first = showEpisodeTransitionInterstitial('episode-placement');
@@ -60,7 +67,9 @@ it('skips missing placement, frequency and competing ads; closes or fails withou
     await showEpisodeTransitionInterstitial('episode-placement');
     await showEpisodeTransitionInterstitial('episode-placement');
     failNext = true;
-    await showEpisodeTransitionInterstitial('episode-placement');
+    await assert.rejects(showEpisodeTransitionInterstitial('episode-placement'), /NO_FILL/);
+    assert.equal(analyticsEvents.find((event) => event.result === 'fail')?.errorOrigin, 'SDK_PROMISE');
+    assert.equal(analyticsEvents.find((event) => event.result === 'fail')?.callback.name, 'show.reject');
     assert.equal(ads[1].destroyed, true);
     now += 181_000;
     await showEpisodeTransitionInterstitial('episode-placement');
@@ -85,5 +94,6 @@ it('skips missing placement, frequency and competing ads; closes or fails withou
     Date.now = originalNow;
     globalThis.window = originalWindow;
     hooks.deregister();
+    delete globalThis.__interstitialAnalytics;
   }
 });

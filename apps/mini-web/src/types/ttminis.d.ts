@@ -11,9 +11,11 @@ declare global {
       init(options: { clientKey: string }): void;
       login(options?: { success?: (result: { code?: string; authResponse?: { code?: string } }) => void; fail?: (error: unknown) => void; complete?: () => void }): Promise<{ code?: string; authResponse?: { code?: string } }> | void;
       canIUse(apiName: string): boolean;
+      getSystemInfoSync?(): Record<string, unknown>;
       getLaunchOptionsSync?(): TikTokMiniDramaShowPayload;
       getEnterOptionsSync?(): TikTokMiniDramaShowPayload;
       game?: {
+        getSystemInfoSync?(): Record<string, unknown>;
         getLaunchOptionsSync?(): TikTokMiniDramaShowPayload;
         getEnterOptionsSync?(): TikTokMiniDramaShowPayload;
       };
@@ -48,6 +50,7 @@ declare global {
     prepare(options: { strategies: { preload: boolean | { preloadScene?: 0 | 1; prevCount?: number; nextCount?: number; preloadTime?: number; preloadMaxCacheCount?: number } } }): Promise<void>;
     setPreloadScene(scene: 0 | 1, options?: { prevCount?: number; nextCount?: number }): Promise<void>;
     setPreloadList(sources: VePlayerSource[]): Promise<void>;
+    addPreloadList?(sources: VePlayerSource[]): Promise<void>;
     setMediaInfoCacheConfig?(options: { enable: boolean; cacheType: 'memory'; expireTime?: number; maxEntries?: number }): Promise<void> | void;
     preloader?: {
       clearPreloadList?(): void;

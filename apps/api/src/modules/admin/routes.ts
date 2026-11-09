@@ -38,6 +38,8 @@ import { assertDisplayMetadataOwner, carryBaseTextChanges, displayMetadataInput,
 import { listEntryAdIpExemptions, listSharedIpVisits, listSharedIps, listViewerIdsForIp, normalizeIp, recentViewerIps, removeEntryAdIpExemption, setEntryAdIpExemption, setEntryAdIpExemptions } from '../../services/shared-ip.service';
 import { campaignEntryApps, normalizeCampaignEntryBase } from '../../lib/campaign-entry';
 import { TikTokShortDramaApiService } from '../../services/tiktok-short-drama-api.service';
+import { assertV006PlacementPair, invalidateAdPlacementPolicyCache, isV006Release } from '../ads/ad-placement-policy';
+import { readV006AdDiagnostics, readV006PlayerDiagnostics } from './v006-diagnostics';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 
@@ -237,6 +239,18 @@ const appEntryAdPolicyInput = z.object({
   countMode: z.enum(['COMPLETED', 'SHOWN']).default('COMPLETED'),
   onUnavailable: z.enum(['ALLOW', 'BLOCK'])
 }).refine((value) => !value.enabled || value.placementId.length > 0, { path: ['placementId'], message: '启用进入广告时必须填写广告位 ID。' });
+const adPlacementPairInput = z.object({
+  releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9.*_-]+$/),
+  adType: z.enum(['REWARDED', 'INTERSTITIAL']),
+  primaryPlacementId: z.string().trim().regex(/^ad\d{8,32}$/),
+  backupPlacementId: z.string().trim().regex(/^ad\d{8,32}$/).nullable(),
+  enabled: z.boolean().default(false),
+  iosLoadMode: z.enum(['DIRECT_SHOW', 'EXPLICIT_LOAD']).default('EXPLICIT_LOAD'),
+  androidLoadMode: z.enum(['DIRECT_SHOW', 'EXPLICIT_LOAD']).default('EXPLICIT_LOAD'),
+  iosExperimentPercent: z.number().int().min(0).max(100).default(0)
+}).refine((value) => value.backupPlacementId !== value.primaryPlacementId, { path: ['backupPlacementId'], message: '主广告位和备用广告位不能相同。' })
+  .refine((value) => value.releaseId === '*' || isV006Release(value.releaseId), { path: ['releaseId'], message: '广告位配对只能用于 v0.0.6 release 或通用备用模板。' })
+  .refine((value) => value.iosExperimentPercent === 0 || value.iosLoadMode === 'DIRECT_SHOW', { path: ['iosExperimentPercent'], message: 'iOS 对照实验需要启用 DIRECT_SHOW 实验组。' });
 const codeReleaseParams = z.object({ releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/) });
 const codeReleaseInput = z.object({
   portalVersion: z.string().trim().max(32).nullable(),
@@ -533,6 +547,8 @@ async function syncUiComponentRows(tx: Prisma.TransactionClient, items: UiCompon
     update: { page: item.page, enabled: item.enabled, config: item.config === null ? Prisma.JsonNull : item.config as Prisma.InputJsonValue | undefined }
   })));
 }
+
+const clientAnalyticsMiniApps = new Set(['dramaflicks', 'heartreel', 'zenclip', 'sweetreel', 'luxereel']);
 
 export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/admin/viewers', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
@@ -857,6 +873,40 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     invalidateAppEntryAdPolicyCache(app, input.releaseId);
     await audit(app, request.user.sub, 'UPDATE', 'AppEntryAdPolicy', policy.id, input);
     return policy;
+  });
+
+  app.get('/admin/ad-placement-pairs', { preHandler: requirePermission('ads.read') }, async (request) => {
+    const { releaseId } = z.object({ releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9.*_-]+$/).optional() }).parse(request.query);
+    const items = await app.prisma.adPlacementPair.findMany({
+      where: releaseId ? { releaseId: { in: [releaseId, '*'] } } : undefined,
+      orderBy: [{ releaseId: 'asc' }, { adType: 'asc' }, { primaryPlacementId: 'asc' }]
+    });
+    return { items };
+  });
+  app.put('/admin/ad-placement-pairs', { preHandler: requirePermission('ads.write') }, async (request) => {
+    const input = adPlacementPairInput.parse(request.body);
+    assertV006PlacementPair(app.config.MINI_APP_KEY, input, app.config.TIKTOK_APP_ID);
+    const current = await app.prisma.adPlacementPair.findUnique({
+      where: { releaseId_adType_primaryPlacementId: { releaseId: input.releaseId, adType: input.adType, primaryPlacementId: input.primaryPlacementId } }
+    });
+    const data = { ...input, version: (current?.version ?? 0) + 1, updatedBy: request.user.sub };
+    const item = await app.prisma.adPlacementPair.upsert({
+      where: { releaseId_adType_primaryPlacementId: { releaseId: input.releaseId, adType: input.adType, primaryPlacementId: input.primaryPlacementId } },
+      create: data,
+      update: data
+    });
+    invalidateAdPlacementPolicyCache(app);
+    await audit(app, request.user.sub, current ? 'UPDATE' : 'CREATE', 'AdPlacementPair', item.id, input);
+    return item;
+  });
+  app.delete('/admin/ad-placement-pairs/:id', { preHandler: requirePermission('ads.write') }, async (request, reply) => {
+    const { id } = z.object({ id: z.string().min(1).max(128) }).parse(request.params);
+    const item = await app.prisma.adPlacementPair.findUnique({ where: { id } });
+    if (!item) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Ad placement pair not found.', requestId: request.id } });
+    await app.prisma.adPlacementPair.delete({ where: { id } });
+    invalidateAdPlacementPolicyCache(app);
+    await audit(app, request.user.sub, 'DELETE', 'AdPlacementPair', item.id, { releaseId: item.releaseId, adType: item.adType, primaryPlacementId: item.primaryPlacementId });
+    return reply.code(204).send();
   });
 
   app.get('/admin/albums', { preHandler: requireAdmin }, async () => {
@@ -1985,6 +2035,47 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       };
     }, 60_000);
   });
+
+  if (clientAnalyticsMiniApps.has(app.config.MINI_APP_KEY)) app.get('/admin/analytics/client-events', { preHandler: requirePermission('analytics.read') }, async (request) => {
+    const query = z.object({
+      eventKey: z.enum(['app_open', 'ad_config', 'ad_load', 'ad_show', 'ad_close']).optional(),
+      releaseId: z.string().max(64).optional(),
+      placementId: z.string().max(128).optional(),
+      errorCode: z.string().max(256).optional(),
+      operationId: z.string().max(128).optional(),
+      platform: z.enum(['ios', 'android', 'unknown']).optional(),
+      strategyVariant: z.string().max(64).optional(),
+      adPhase: z.string().max(64).optional(),
+      userId: z.string().max(128).optional(),
+      from: z.string().datetime().optional(),
+      to: z.string().datetime().optional(),
+      cursor: z.string().max(128).optional()
+    }).parse(request.query);
+    const items = await app.prisma.clientAnalyticsEvent.findMany({
+      where: {
+        miniAppKey: app.config.MINI_APP_KEY,
+        eventKey: query.eventKey,
+        releaseId: query.releaseId,
+        placementId: query.placementId,
+        errorCode: query.errorCode,
+        operationId: query.operationId,
+        platform: query.platform,
+        strategyVariant: query.strategyVariant,
+        adPhase: query.adPhase,
+        userId: query.userId,
+        receivedAt: { gte: query.from ? new Date(query.from) : undefined, lt: query.to ? new Date(query.to) : undefined }
+      },
+      orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
+      take: 200,
+      select: { id: true, userId: true, releaseId: true, launchId: true, clientSessionId: true, eventKey: true, eventTs: true, receivedAt: true, platform: true, appVersion: true, tiktokClientVersion: true, sdkVersion: true, placementId: true, adSeq: true, operationId: true, attemptNo: true, adPhase: true, errorOrigin: true, strategyVariant: true, placementRole: true, result: true, isEnded: true, durationMs: true, shouldShow: true, errorCode: true, errorMsg: true, subErrorCode: true, errorExtra: true, path: true, requestId: true, metadata: true },
+      ...(query.cursor ? { skip: 1, cursor: { id: query.cursor } } : {})
+    });
+    return { items, nextCursor: items.length === 200 ? items.at(-1)?.id ?? null : null };
+  });
+  if (clientAnalyticsMiniApps.has(app.config.MINI_APP_KEY)) {
+    app.get('/admin/analytics/ad-diagnostics', { preHandler: requirePermission('analytics.read') }, (request) => readV006AdDiagnostics(app, request.query));
+    app.get('/admin/analytics/player-diagnostics', { preHandler: requirePermission('analytics.read') }, (request) => readV006PlayerDiagnostics(app, request.query));
+  }
   app.get('/admin/analytics/overview', { preHandler: requireAdmin }, async () => {
     return cachedAnalytics(app, 'overview', async () => {
       const snapshot = await app.prisma.analyticsOverviewSnapshot?.findUnique({ where: { id: 'default' } });

@@ -6,14 +6,22 @@ import { adTimeout, adErrorMessage } from './ad-timeout';
 import { runAdShow } from './ad-show';
 import { reportDiagnostic, reportPerformance } from '../../lib/diagnostics';
 import { createShownAcknowledgement } from './shown-acknowledgement';
-import { getInterstitialAd, getRewardedAd, prewarmInterstitialAd, prewarmRewardedAd, releaseInterstitialAd, releaseRewardedAd, waitForAdReady } from './ad-instance-cache';
+import { adLoadCallback, adLoadDurationMs, adLoadSupported, getInterstitialAd, getRewardedAd, prewarmInterstitialAd, prewarmRewardedAd, releaseInterstitialAd, releaseRewardedAd, waitForAdReady } from './ad-instance-cache';
 import { claimNativeAd, markRewardedAdClosed } from './ad-activity';
+import { captureSdkCallback, newAdOperationId, nextAdSequence, recordAdClose, recordAdConfig, recordAdLoad, recordAdLoadResult, recordAdShow } from '../../lib/analytics';
+import { getAdPlatform, getDefaultAdLoadMode, getMiniReleaseId } from './ad-platform';
+import { classifyAdFailure, normalizeErrorOrigin, taggedAdFailure, type AdErrorOrigin } from './ad-error-policy';
+import { restrictToPublicManifest, type AdPlacementType } from './ad-placement-manifest';
 
 export type AppEntryAdSession = {
   required: boolean;
   sessionId?: string;
   mode?: 'INTERSTITIAL' | 'REWARDED_GATED';
   placementId?: string;
+  placementIds?: string[];
+  placementPolicyVersion?: number;
+  adLoadMode?: 'DIRECT_SHOW' | 'EXPLICIT_LOAD';
+  strategyVariant?: string;
   requiredCount?: number;
   countMode?: 'COMPLETED' | 'SHOWN';
   completedCount?: number;
@@ -23,6 +31,10 @@ export type AppEntryAdSession = {
 export type EpisodeInterstitialPolicy = {
   enabled: boolean;
   placementId: string | null;
+  placementIds?: string[];
+  placementPolicyVersion?: number;
+  adLoadMode?: 'DIRECT_SHOW' | 'EXPLICIT_LOAD';
+  strategyVariant?: string;
   initialDelaySeconds: number;
   intervalSeconds: number;
   minIntervalSeconds: number;
@@ -32,8 +44,16 @@ export type EpisodeInterstitialPolicy = {
   rewardedCooldownSeconds: number;
 };
 
-export async function startEpisodeInterstitialPolicy(releaseId = import.meta.env.VITE_MINI_RELEASE_ID || 'default') {
-  return apiClient.get<EpisodeInterstitialPolicy>(`/episode-interstitial/config?releaseId=${encodeURIComponent(releaseId)}`);
+export async function startEpisodeInterstitialPolicy(releaseId = getMiniReleaseId()) {
+  const params = new URLSearchParams({ releaseId, platform: getAdPlatform() });
+  const policy = await apiClient.get<EpisodeInterstitialPolicy>(`/episode-interstitial/config?${params}`);
+  if (policy.placementId) {
+    policy.placementIds = restrictToPublicManifest('INTERSTITIAL', policy.placementIds?.length ? policy.placementIds : [policy.placementId]);
+    if (!policy.placementIds.includes(policy.placementId)) policy.enabled = false;
+  }
+  policy.adLoadMode ??= getDefaultAdLoadMode();
+  policy.strategyVariant ??= 'CONTROL';
+  return policy;
 }
 
 function eventId() {
@@ -47,7 +67,7 @@ function eventId() {
 }
 
 export function getLaunchId() {
-  const releaseId = import.meta.env.VITE_MINI_RELEASE_ID || 'default';
+  const releaseId = getMiniReleaseId();
   const key = releaseId === 'default' ? `${storagePrefix}_launch_id` : `${storagePrefix}_${releaseId}_launch_id`;
   const existing = sessionStorage.getItem(key);
   if (existing) return existing;
@@ -61,21 +81,36 @@ const activeEntryAdSessions = new Map<string, Promise<AppEntryAdSession>>();
 async function startAppEntryAdSessionInternal(): Promise<AppEntryAdSession> {
   if (isDemoMode()) return { required: false };
   const startedAt = performance.now();
-  const session = await apiClient.post<AppEntryAdSession>('/app-entry-ad-sessions', {
-    launchId: getLaunchId(),
-    releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default',
-    adId: getMiniLaunchAdId()
-  });
-  reportPerformance('ENTRY_AD_POLICY_RESPONSE', '/app-entry-ad-sessions', performance.now() - startedAt, { required: session.required, mode: session.mode ?? 'NONE' });
-  if (session.required && session.placementId) {
-    if (session.mode === 'INTERSTITIAL') prewarmInterstitialAd(session.placementId, 1);
-    else if (session.mode === 'REWARDED_GATED') prewarmRewardedAd(session.placementId, 1);
+  try {
+    const session = await apiClient.post<AppEntryAdSession>('/app-entry-ad-sessions', {
+      launchId: getLaunchId(),
+      releaseId: getMiniReleaseId(),
+      adId: getMiniLaunchAdId(),
+      platform: getAdPlatform()
+    });
+    const durationMs = performance.now() - startedAt;
+    reportPerformance('ENTRY_AD_POLICY_RESPONSE', '/app-entry-ad-sessions', durationMs, { required: session.required, mode: session.mode ?? 'NONE' });
+    recordAdConfig({ result: 'success', durationMs, shouldShow: session.required ? session.requiredCount ?? 1 : 0, path: '/app-entry-ad-sessions' });
+    if (session.required && session.placementId) {
+      const type: AdPlacementType = session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED';
+      session.placementIds = restrictToPublicManifest(type, session.placementIds?.length ? session.placementIds : [session.placementId]);
+      const loadMode = session.adLoadMode ?? getDefaultAdLoadMode();
+      if (session.placementIds.includes(session.placementId)) {
+        if (session.mode === 'INTERSTITIAL') prewarmInterstitialAd(session.placementId, 1, loadMode);
+        else if (session.mode === 'REWARDED_GATED') prewarmRewardedAd(session.placementId, 1, loadMode);
+      }
+    }
+    return session;
+  } catch (error) {
+    const durationMs = performance.now() - startedAt;
+    const message = error instanceof Error ? error.message : String(error);
+    recordAdConfig({ result: /timeout|abort/i.test(message) ? 'timeout' : 'fail', durationMs, shouldShow: null, error, path: '/app-entry-ad-sessions' });
+    throw error;
   }
-  return session;
 }
 
 export function startAppEntryAdSession(): Promise<AppEntryAdSession> {
-  const key = `${import.meta.env.VITE_MINI_RELEASE_ID || 'default'}:${getLaunchId()}`;
+  const key = `${getMiniReleaseId()}:${getLaunchId()}`;
   const existing = activeEntryAdSessions.get(key);
   if (existing) return existing;
   let promise: Promise<AppEntryAdSession>;
@@ -124,10 +159,11 @@ export async function completeAppEntryAd(sessionId: string, clientEventId: strin
   }
 }
 
-export async function acknowledgeAppEntryAdShown(sessionId: string, clientEventId: string, adIndex: number) {
+export async function acknowledgeAppEntryAdShown(sessionId: string, clientEventId: string, adIndex: number, placementId?: string, adType: 'REWARDED' | 'INTERSTITIAL' = 'REWARDED') {
   const path = `/app-entry-ad-sessions/${sessionId}/shown`;
   const startedAt = performance.now();
-  const result = await apiClient.post<EntryAdProgress>(path, { clientEventId, adIndex });
+  if (placementId) await recordAppEntryAdEvent({ eventType: 'SHOWN', clientEventId, placementId, sessionId, adType, adIndex });
+  const result = await apiClient.post<EntryAdProgress>(path, { clientEventId, adIndex, ...(placementId ? { placementId } : {}) });
   reportPerformance('ENTRY_AD_SHOWN_COUNT_RESPONSE', path, performance.now() - startedAt, { adIndex });
   return result;
 }
@@ -144,11 +180,19 @@ export function recordAppEntryAdEvent(input: { eventType: 'SHOWN' | 'CLOSED_INCO
   });
 }
 
-type AppEntryAdShowInput = { mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; sessionId: string; adIndex: number; requiredCount?: number; countMode?: 'COMPLETED' | 'SHOWN'; onShown?: (playback: { clientEventId: string; isEnded: boolean }) => void };
+type AppEntryAdShowInput = { mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; placementIds?: string[]; adLoadMode?: 'DIRECT_SHOW' | 'EXPLICIT_LOAD'; strategyVariant?: string; sessionId: string; adIndex: number; requiredCount?: number; countMode?: 'COMPLETED' | 'SHOWN'; onShown?: (playback: { clientEventId: string; isEnded: boolean; placementId: string; adType: 'REWARDED' | 'INTERSTITIAL' }) => void };
 
-async function showAppEntryAdInternal(input: AppEntryAdShowInput): Promise<{ clientEventId: string; isEnded: boolean }> {
+async function showAppEntryAdInternal(input: AppEntryAdShowInput): Promise<{ clientEventId: string; isEnded: boolean; placementId: string; adType: 'REWARDED' | 'INTERSTITIAL' }> {
   const { mode, placementId, sessionId, adIndex, requiredCount, countMode = 'COMPLETED', onShown } = input;
+  const placementIds = input.placementIds ?? [placementId];
+  if (!placementIds.length || !placementIds.includes(placementId)) throw new Error('AD_PLACEMENT_CONFIGURATION_MISMATCH');
+  const loadMode = input.adLoadMode ?? getDefaultAdLoadMode();
+  const strategyVariant = input.strategyVariant ?? 'CONTROL';
+  const adSeq = nextAdSequence();
   const adType = mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED';
+  const operationId = newAdOperationId('entry', adSeq);
+  const placementRole = placementId === placementIds[0] ? 'PRIMARY' : 'BACKUP';
+  const attemptNo = placementRole === 'BACKUP' ? 2 : 1;
   const previousClosedAt = entryAdClosedAt.get(sessionId);
   const completionEventId = eventId();
   const key = `${sessionId}:${completionEventId}`;
@@ -158,11 +202,16 @@ async function showAppEntryAdInternal(input: AppEntryAdShowInput): Promise<{ cli
   if (!releaseActivity) throw new Error('AD_BUSY');
 
   let ad: InterstitialAd | RewardedVideoAd | undefined;
+  const loadStartedAt = performance.now();
   try {
     const prewarmNext = requiredCount === undefined || adIndex < requiredCount;
-    ad = mode === 'INTERSTITIAL' ? getInterstitialAd(placementId, prewarmNext) : getRewardedAd(placementId, prewarmNext);
+    ad = mode === 'INTERSTITIAL' ? getInterstitialAd(placementId, prewarmNext, loadMode) : getRewardedAd(placementId, prewarmNext, loadMode);
     await waitForAdReady(ad);
+    recordAdLoadResult({ adSeq, adType, placementId, supported: adLoadSupported(ad), loadMode, durationMs: adLoadDurationMs(ad, performance.now() - loadStartedAt), callback: adLoadCallback(ad), operationId, attemptNo, adPhase: 'LOAD', strategyVariant, placementRole });
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const callback = ad ? (adLoadCallback(ad) ?? captureSdkCallback('load.wait.reject', error)) : captureSdkCallback('load.create.reject', error);
+    recordAdLoad({ adSeq, adType, placementId, result: /timeout|abort/i.test(message) ? 'timeout' : 'fail', durationMs: ad ? adLoadDurationMs(ad, performance.now() - loadStartedAt) : performance.now() - loadStartedAt, error, callback, operationId, attemptNo, adPhase: 'LOAD', strategyVariant, placementRole, errorOrigin: normalizeErrorOrigin(error, callback.name === 'onError' ? 'onError' : 'load.reject') });
     if (ad) {
       if (mode === 'INTERSTITIAL') releaseInterstitialAd(placementId, ad as InterstitialAd);
       else releaseRewardedAd(placementId, ad as RewardedVideoAd);
@@ -175,6 +224,7 @@ async function showAppEntryAdInternal(input: AppEntryAdShowInput): Promise<{ cli
     let settled = false;
     let closed: boolean | undefined;
     let shown = false;
+    let shownAt = 0;
     let released = false;
     const release = () => {
       if (released) return;
@@ -193,33 +243,48 @@ async function showAppEntryAdInternal(input: AppEntryAdShowInput): Promise<{ cli
     };
     const onClose = (result?: { isEnded: boolean }) => {
       if (settled || closed !== undefined) return;
+      recordAdClose({ adSeq, adType, placementId, isEnded: mode === 'INTERSTITIAL' ? null : result?.isEnded === true, durationMs: performance.now() - (shownAt || showStartedAt), callback: captureSdkCallback('onClose', result), operationId, attemptNo, adPhase: 'CLOSE', strategyVariant, placementRole });
       entryAdClosedAt.set(sessionId, performance.timeOrigin + performance.now());
       if (mode === 'REWARDED_GATED') markRewardedAdClosed();
       closed = mode === 'INTERSTITIAL' || result?.isEnded === true;
       cleanup();
       release();
       if (requiredCount === undefined || adIndex < requiredCount) {
-        if (mode === 'INTERSTITIAL') prewarmInterstitialAd(placementId, 1);
-        else prewarmRewardedAd(placementId, 1);
+        if (mode === 'INTERSTITIAL') prewarmInterstitialAd(placementId, 1, loadMode);
+        else prewarmRewardedAd(placementId, 1, loadMode);
       }
       finishClose();
     };
-    const onError = (error: unknown) => {
+    const failShow = (error: unknown, origin: AdErrorOrigin) => {
       if (settled) return;
+      const message = adErrorMessage(error);
+      recordAdShow({ adSeq, adType, placementId, result: /timeout|abort/i.test(message) ? 'timeout' : 'fail', durationMs: performance.now() - showStartedAt, error, callback: captureSdkCallback(origin === 'SDK_CALLBACK' ? 'onError' : origin === 'APP_TIMEOUT' ? 'app.timeout' : 'show.reject', error), operationId, attemptNo, adPhase: 'SHOW', strategyVariant, placementRole, errorOrigin: origin });
       settled = true;
       cleanup();
       release();
       shownAcknowledgements.delete(key);
       void recordAppEntryAdEvent({ eventType: 'FAILED', placementId, sessionId, adType, adIndex, errorCode: adErrorMessage(error) }).catch(() => undefined);
-      reject(new Error(adErrorMessage(error)));
+      reject(taggedAdFailure(message, origin));
     };
-    const timeout = adTimeout(onError);
+    const onError = (error: unknown) => failShow(error, 'SDK_CALLBACK');
+    const onReportError = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      release();
+      shownAcknowledgements.delete(key);
+      reportDiagnostic({ kind: 'API', phase: 'ENTRY_AD_SHOWN_ACK', message: adErrorMessage(error), path: '/ad-events' });
+      reject(error);
+    };
+    const timeout = adTimeout((error) => failShow(error, 'APP_TIMEOUT'));
     const showStartedAt = performance.now();
     ad.onClose(onClose);
     ad.onError(onError);
     void runAdShow(() => ad.show(), async () => {
       if (settled) return;
       timeout.shown();
+      shownAt = performance.now();
+      recordAdShow({ adSeq, adType, placementId, result: 'success', durationMs: performance.now() - showStartedAt, callback: captureSdkCallback('show.resolve'), operationId, attemptNo, adPhase: 'SHOW', strategyVariant, placementRole });
       reportPerformance('ENTRY_AD_SHOW_ACCEPTED', '/native-ads/entry', performance.now() - showStartedAt, { adType, adIndex });
       if (countMode === 'COMPLETED') {
         // The completion endpoint still requires a persisted impression and full watch.
@@ -232,24 +297,35 @@ async function showAppEntryAdInternal(input: AppEntryAdShowInput): Promise<{ cli
         reportPerformance('ENTRY_AD_CLOSE_TO_NEXT_AD_SHOW_ACCEPTED', '/native-ads/entry', performance.timeOrigin + performance.now() - previousClosedAt, { adIndex });
         if (entryAdClosedAt.get(sessionId) === previousClosedAt) entryAdClosedAt.delete(sessionId);
       }
-      onShown?.({ clientEventId: completionEventId, isEnded: false });
+      onShown?.({ clientEventId: completionEventId, isEnded: false, placementId, adType });
       finishClose();
-    }, onError, onError);
+    }, (error) => failShow(error, 'SDK_PROMISE'), onReportError);
   });
   if (!isEnded && countMode !== 'SHOWN') {
     void recordAppEntryAdEvent({ eventType: 'CLOSED_INCOMPLETE', placementId, sessionId, adType, adIndex }).catch(() => undefined);
   }
-  return { clientEventId: completionEventId, isEnded };
+  return { clientEventId: completionEventId, isEnded, placementId, adType };
 }
 
-const activeEntryAdShows = new Map<string, Promise<{ clientEventId: string; isEnded: boolean }>>();
+const activeEntryAdShows = new Map<string, Promise<{ clientEventId: string; isEnded: boolean; placementId: string; adType: 'REWARDED' | 'INTERSTITIAL' }>>();
+
+async function showAppEntryAdWithFallback(input: AppEntryAdShowInput) {
+  try {
+    return await showAppEntryAdInternal(input);
+  } catch (error) {
+    const backup = input.placementIds?.find((id) => id !== input.placementId);
+    if (!backup || classifyAdFailure(error, normalizeErrorOrigin(error)) !== 'TRY_BACKUP_ONCE') throw error;
+    await new Promise((resolve) => window.setTimeout(resolve, 650));
+    return showAppEntryAdInternal({ ...input, placementId: backup });
+  }
+}
 
 export function showAppEntryAd(input: AppEntryAdShowInput) {
   const key = `${input.mode}:${input.placementId}:${input.sessionId}:${input.adIndex}`;
   const existing = activeEntryAdShows.get(key);
   if (existing) return existing;
-  let promise: Promise<{ clientEventId: string; isEnded: boolean }>;
-  promise = showAppEntryAdInternal(input).finally(() => {
+  let promise: Promise<{ clientEventId: string; isEnded: boolean; placementId: string; adType: 'REWARDED' | 'INTERSTITIAL' }>;
+  promise = showAppEntryAdWithFallback(input).finally(() => {
     if (activeEntryAdShows.get(key) === promise) activeEntryAdShows.delete(key);
   });
   activeEntryAdShows.set(key, promise);

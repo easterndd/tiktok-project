@@ -1,8 +1,21 @@
 import type { PlayInfo } from '@quickreels/shared-types';
 import { getStoredLocale } from '../../lib/storage';
+import { getAdPlatform, isV006Release } from '../ads/ad-platform';
+import { reportDiagnostic } from '../../lib/diagnostics';
 import { createDramaPlayer, getDramaPlayerConstructor, supportsMp4Mse, toPlayerSource, type DramaPlayer } from './create-player';
 
 const preloadPreparation = new WeakMap<VePlayerConstructor, Promise<void>>();
+type PreloadState = { latest: PlayInfo[] | undefined; requested: PlayInfo[]; version: number; running?: Promise<void> };
+const preloadUpdates = new WeakMap<VePlayerConstructor, PreloadState>();
+const playNextTimeoutMs = 8_000;
+const preloadTimeoutMs = 5_000;
+
+function withTimeout<T>(promise: PromiseLike<T>, timeoutMs: number, code: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(code)), timeoutMs);
+    Promise.resolve(promise).then(resolve, reject).finally(() => clearTimeout(timer));
+  });
+}
 
 function uniqueSources(episodes: PlayInfo[]) {
   const seen = new Set<string>();
@@ -10,37 +23,89 @@ function uniqueSources(episodes: PlayInfo[]) {
     if (seen.has(episode.episodeId)) return false;
     seen.add(episode.episodeId);
     return true;
-  }).map(toPlayerSource);
+  }).slice(0, 2).map(toPlayerSource);
 }
 
-async function preparePreload(VePlayer: VePlayerConstructor, episodes: PlayInfo[]) {
-  const sources = uniqueSources(episodes);
-  if (!sources.length) return;
+function reportPreloadFailure(stage: string, error: unknown) {
+  if (!isV006Release()) return;
+  const message = error instanceof Error && error.message.startsWith('PLAYER_') ? error.message : 'SDK_PRELOAD_FAILED';
+  reportDiagnostic({ kind: 'PLAYBACK', phase: 'PLAYER_PRELOAD_' + stage, message, path: '/player/preload' });
+}
 
-  if (!supportsMp4Mse()) {
-    void VePlayer.prefetchMediaInfo(sources).catch(() => undefined);
+async function applyPreload(VePlayer: VePlayerConstructor, episodes: PlayInfo[], isCurrent: () => boolean) {
+  const sources = uniqueSources(episodes);
+  if (!sources.length) {
+    VePlayer.preloader?.clearPreloadList?.();
+    VePlayer.preloader?.removeAllPreloadTask?.();
     return;
   }
 
-  const existingPreparation = preloadPreparation.get(VePlayer);
-  const prepared = existingPreparation ?? VePlayer.prepare({ strategies: { preload: { preloadScene: 1, prevCount: 1, nextCount: 2, preloadTime: 5, preloadMaxCacheCount: 15 } } })
-      .catch((error) => {
-        preloadPreparation.delete(VePlayer);
-        throw error;
-      });
-  if (!existingPreparation) {
-    preloadPreparation.set(VePlayer, prepared);
+  if (!supportsMp4Mse() || getAdPlatform() === 'ios') {
+    try {
+      await withTimeout(VePlayer.prefetchMediaInfo(sources), preloadTimeoutMs, 'PLAYER_PREFETCH_TIMEOUT');
+    } catch (error) {
+      reportPreloadFailure('PREFETCH_MEDIA_INFO', error);
+    }
+    return;
   }
 
   try {
-    await prepared;
-    await VePlayer.setMediaInfoCacheConfig?.({ enable: true, cacheType: 'memory', expireTime: 30 * 60 * 1000, maxEntries: 100 });
-    void VePlayer.prefetchMediaInfo(sources).catch(() => undefined);
-    await VePlayer.setPreloadScene(1, { prevCount: 1, nextCount: 2 });
-    await VePlayer.setPreloadList(sources);
-  } catch {
-    // MSE/MMS may be unavailable despite browser feature detection. Playback remains usable without preload.
+    let prepared = preloadPreparation.get(VePlayer);
+    if (!prepared) {
+      prepared = Promise.resolve(VePlayer.prepare({ strategies: { preload: { preloadScene: 1, prevCount: 1, nextCount: 2, preloadTime: 5, preloadMaxCacheCount: 15 } } }))
+        .catch((error) => {
+          preloadPreparation.delete(VePlayer);
+          throw error;
+        });
+      preloadPreparation.set(VePlayer, prepared);
+    }
+    await withTimeout(prepared, preloadTimeoutMs, 'PLAYER_PRELOAD_PREPARE_TIMEOUT');
+    if (!isCurrent()) return;
+    await withTimeout(Promise.resolve(VePlayer.setMediaInfoCacheConfig?.({ enable: true, cacheType: 'memory', expireTime: 30 * 60 * 1000, maxEntries: 100 })), preloadTimeoutMs, 'PLAYER_PRELOAD_CACHE_TIMEOUT');
+    if (!isCurrent()) return;
+    await withTimeout(VePlayer.setPreloadScene(1, { prevCount: 1, nextCount: 2 }), preloadTimeoutMs, 'PLAYER_PRELOAD_SCENE_TIMEOUT');
+    if (!isCurrent()) return;
+    const update = Promise.resolve(VePlayer.setPreloadList(sources));
+    void update.then(() => {
+      if (!isCurrent()) {
+        const latest = preloadUpdates.get(VePlayer)?.requested ?? [];
+        void preparePreload(VePlayer, latest);
+      }
+    }, () => undefined);
+    await withTimeout(update, preloadTimeoutMs, 'PLAYER_PRELOAD_LIST_TIMEOUT');
+  } catch (error) {
+    reportPreloadFailure('PRELOAD_LIST', error);
   }
+}
+
+function preparePreload(VePlayer: VePlayerConstructor, episodes: PlayInfo[]) {
+  let state = preloadUpdates.get(VePlayer);
+  if (!state) {
+    state = { latest: undefined, requested: [], version: 0 };
+    preloadUpdates.set(VePlayer, state);
+  }
+  state.latest = episodes;
+  state.requested = episodes;
+  state.version += 1;
+  if (state.running) return state.running;
+
+  state.running = (async () => {
+    while (state?.latest) {
+      const next = state.latest;
+      const version = state.version;
+      state.latest = undefined;
+      try {
+        await applyPreload(VePlayer, next, () => state?.version === version);
+      } catch (error) {
+        reportPreloadFailure('QUEUE', error);
+      }
+    }
+  })().finally(() => {
+    if (!state) return;
+    state.running = undefined;
+    if (state.latest) void preparePreload(VePlayer, state.latest);
+  });
+  return state.running;
 }
 
 export class DramaPlayerController {
@@ -49,8 +114,13 @@ export class DramaPlayerController {
   private current: PlayInfo | undefined;
   private generation = 0;
   private operation: Promise<void> = Promise.resolve();
+  private readonly root: HTMLElement;
+  private readonly operationTimeoutMs: number;
 
-  constructor(private readonly root: HTMLElement) {}
+  constructor(root: HTMLElement, operationTimeoutMs = playNextTimeoutMs) {
+    this.root = root;
+    this.operationTimeoutMs = operationTimeoutMs;
+  }
 
   get instance() {
     return this.player;
@@ -78,14 +148,19 @@ export class DramaPlayerController {
       assertActive();
       this.VePlayer = await getDramaPlayerConstructor();
       assertActive();
-      if (preload) void preparePreload(this.VePlayer, playlist.length ? playlist : [info]);
+      if (preload) void preparePreload(this.VePlayer, [info, ...playlist.filter((item) => item.albumId === info.albumId && item.episodeId !== info.episodeId)]);
       if (reuse && this.player && this.current?.albumId === info.albumId && this.player.playNext) {
         try {
-          await this.player.playNext({ ...toPlayerSource(info), lang: getStoredLocale() });
+          await withTimeout(Promise.resolve(this.player.playNext({ ...toPlayerSource(info), lang: getStoredLocale() })), this.operationTimeoutMs, 'PLAYER_PLAY_NEXT_TIMEOUT');
           assertActive();
           this.current = info;
           return this.player;
         } catch (error) {
+          if (error instanceof Error && error.message === 'PLAYER_PLAY_NEXT_TIMEOUT') {
+            this.player.destroy();
+            this.player = undefined;
+            this.current = undefined;
+          }
           assertActive();
           // Rebuild once when the SDK cannot switch this episode in place.
           void error;
@@ -110,11 +185,16 @@ export class DramaPlayerController {
 
   cancelPending() {
     this.generation += 1;
+    if (this.VePlayer) {
+      void preparePreload(this.VePlayer, []);
+      this.VePlayer.preloader?.clearPreloadList?.();
+      this.VePlayer.preloader?.removeAllPreloadTask?.();
+    }
   }
 
   async updatePreload(playlist: PlayInfo[], enabled = true) {
-    if (!enabled || !this.VePlayer) return;
-    await preparePreload(this.VePlayer, playlist);
+    if (!this.VePlayer) return;
+    await preparePreload(this.VePlayer, enabled ? playlist : []);
   }
 
   destroy() {
@@ -122,7 +202,5 @@ export class DramaPlayerController {
     this.player?.destroy();
     this.player = undefined;
     this.current = undefined;
-    this.VePlayer?.preloader?.clearPreloadList?.();
-    this.VePlayer?.preloader?.removeAllPreloadTask?.();
   }
 }

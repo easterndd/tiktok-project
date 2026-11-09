@@ -371,6 +371,18 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .campaign-output input { background: #f8fafc; }
 @media (max-width: 680px) { .campaign-select-row { grid-template-columns: 1fr; } .campaign-output { grid-template-columns: 1fr; } .campaign-entry-panel > .panel-heading { align-items: flex-start; flex-direction: column; gap: 10px; } }
 .form-success { display: flex; align-items: center; gap: 6px; margin: 0 22px 14px; color: #16834f; font-size: 12px; }
+.diagnostic-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding: 16px 22px; }
+.diagnostic-controls label { display: grid; min-width: 120px; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.diagnostic-controls input, .diagnostic-controls select { min-height: 36px; max-width: 100%; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); }
+.diagnostic-controls input { width: 230px; }
+.diagnostic-controls button { min-height: 36px; }
+.diagnostic-message { margin: 0 22px 12px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.diagnostic-message[role="alert"] { color: #c5344d; }
+.diagnostic-table { min-width: 840px; }
+.diagnostic-table th, .diagnostic-table td { vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
+.diagnostic-table td:first-child { display: table-cell; }
+.diagnostic-table code { white-space: normal; overflow-wrap: anywhere; }
+.diagnostic-table small { color: var(--muted); }
 @media (max-width: 760px) { .entry-link-row { grid-template-columns: 1fr; align-items: stretch; } .entry-link-actions { flex-wrap: wrap; } }
 @media (max-width: 1080px) { .admin-layout { grid-template-columns: 206px minmax(0, 1fr); } .main { padding: 32px 24px 44px; } .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .content-grid, .lower-grid { grid-template-columns: 1fr; } }
 @media (max-width: 1080px) { .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

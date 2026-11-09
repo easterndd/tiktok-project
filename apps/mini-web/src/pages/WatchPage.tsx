@@ -8,6 +8,8 @@ import { PlayerShell } from '../components/PlayerShell';
 import { LoadingState } from '../components/LoadingState';
 import { useEntryAdReady } from '../components/EntryAdGate';
 import { prepareRewardedUnlockSession, unlockEpisodeByRewardedAd } from '../features/ads/rewarded-ad';
+import { startEpisodeInterstitialPolicy } from '../features/ads/app-entry-ad';
+import { getAdPlatform, getMiniReleaseId, isV006Release } from '../features/ads/ad-platform';
 import { configureEpisodeInterstitial, prepareEpisodeInterstitial, showEpisodeTransitionInterstitial, startEpisodeInterstitialSchedule } from '../features/ads/episode-interstitial';
 import { ApiError, apiClient } from '../lib/api-client';
 import { reportDiagnostic, reportPerformance } from '../lib/diagnostics';
@@ -20,7 +22,7 @@ import styles from './WatchPage.module.css';
 
 export function WatchPage() {
   const { albumId = '', episodeId } = useParams();
-  const releaseId = import.meta.env.VITE_MINI_RELEASE_ID || 'default';
+  const releaseId = getMiniReleaseId();
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -30,10 +32,12 @@ export function WatchPage() {
   const [retentionOpen, setRetentionOpen] = useState(false);
   const [retentionError, setRetentionError] = useState('');
   const [playbackActive, setPlaybackActive] = useState(false);
+  const [transitionAdPending, setTransitionAdPending] = useState(false);
   const retentionSeen = useRef(false);
   const playRequest = useRef({ episodeId, startedAt: performance.now() });
   if (playRequest.current.episodeId !== episodeId) playRequest.current = { episodeId, startedAt: performance.now() };
   const v005App = ['bloomreel', 'quillshort', 'amberplay', 'nimbusclip', 'runereel'].includes(appKey);
+  const observePlayback = v005App || isV006Release(releaseId);
   const allowExit = useRef(false);
   const locationState = location.state && typeof location.state === 'object' ? location.state as { transitionTiming?: { kind?: unknown; closedAt?: unknown } } : null;
   const transitionTiming = locationState?.transitionTiming
@@ -57,7 +61,7 @@ export function WatchPage() {
   }, [episodeId]);
   const interstitialConfig = useQuery({
     queryKey: ['episode-interstitial-config', releaseId],
-    queryFn: () => apiClient.get<{ enabled: boolean; placementId: string | null; initialDelaySeconds: number; intervalSeconds: number; minIntervalSeconds: number; maxPerSession: number; initialSkipTransitions: number; everyTransitions: number; rewardedCooldownSeconds: number }>(`/episode-interstitial/config?releaseId=${encodeURIComponent(releaseId)}`),
+    queryFn: () => startEpisodeInterstitialPolicy(releaseId),
     staleTime: 5 * 60_000,
     retry: false,
     enabled: Boolean(sessionToken)
@@ -68,9 +72,9 @@ export function WatchPage() {
   }, [interstitialConfig.data, v005App]);
   useEffect(() => { prepareEpisodeInterstitial(interstitialPlacementId); }, [interstitialPlacementId]);
   useEffect(() => {
-    if (!entryAdReady || (v005App && !playbackActive) || !interstitialPlacementId || !interstitialConfig.data?.enabled) return;
+    if (isV006Release(releaseId) || !entryAdReady || (v005App && !playbackActive) || !interstitialPlacementId || !interstitialConfig.data?.enabled) return;
     return startEpisodeInterstitialSchedule(interstitialPlacementId, () => mounted.current && document.visibilityState !== 'hidden');
-  }, [entryAdReady, playbackActive, v005App, interstitialConfig.data?.enabled, interstitialPlacementId]);
+  }, [entryAdReady, playbackActive, v005App, releaseId, interstitialConfig.data?.enabled, interstitialPlacementId]);
   useEffect(() => {
     if (interstitialConfig.isSuccess && !interstitialConfig.data.enabled) {
       reportDiagnostic({ kind: 'AD', phase: 'EPISODE_INTERSTITIAL_DISABLED', message: 'No episode interstitial placement configured', path: '/episode-interstitial/config' });
@@ -88,8 +92,8 @@ export function WatchPage() {
   const currentIndex = episodeItems.findIndex((episode) => episode.id === episodeId);
   const nextEpisode = currentIndex >= 0 ? episodeItems[currentIndex + 1] : undefined;
   const retentionConfig = useQuery({
-    queryKey: ['exit-retention-config', import.meta.env.VITE_MINI_RELEASE_ID || 'default'],
-    queryFn: () => apiClient.get<{ enabled: boolean; placementId?: string; requiredCount?: number }>(`/exit-retention/config?releaseId=${encodeURIComponent(import.meta.env.VITE_MINI_RELEASE_ID || 'default')}`),
+    queryKey: ['exit-retention-config', releaseId],
+    queryFn: () => apiClient.get<{ enabled: boolean; placementId?: string; placementIds?: string[]; adLoadMode?: 'DIRECT_SHOW' | 'EXPLICIT_LOAD'; strategyVariant?: string; requiredCount?: number }>(`/exit-retention/config?releaseId=${encodeURIComponent(releaseId)}&platform=${encodeURIComponent(getAdPlatform())}`),
     enabled: Boolean(sessionToken && entryAdReady), staleTime: 60_000, retry: false
   });
   const retentionEnabled = v005App || retentionConfig.data?.enabled;
@@ -103,7 +107,7 @@ export function WatchPage() {
   }, [blocker]);
   useEffect(() => {
     if (canOfferRetentionUnlock && nextEpisode && !v005App) {
-      void prepareRewardedUnlockSession(nextEpisode.id, { purpose: 'EXIT_RETENTION', releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default' }).catch(() => undefined);
+      void prepareRewardedUnlockSession(nextEpisode.id, { purpose: 'EXIT_RETENTION', releaseId }).catch(() => undefined);
     }
   }, [canOfferRetentionUnlock, nextEpisode?.id, v005App]);
   useEffect(() => {
@@ -134,7 +138,7 @@ export function WatchPage() {
   });
   const retentionUnlock = useMutation({
     mutationFn: async (episode: EpisodeSummary) => {
-      const closedAt = await unlockEpisodeByRewardedAd(episode.id, v005App ? undefined : { purpose: 'EXIT_RETENTION', releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default' });
+      const closedAt = await unlockEpisodeByRewardedAd(episode.id, v005App ? undefined : { purpose: 'EXIT_RETENTION', releaseId });
       return { episode, closedAt };
     },
     onSuccess: ({ episode, closedAt }) => {
@@ -186,10 +190,16 @@ export function WatchPage() {
       setEpisodePickerOpen(false);
       if (naturalTransition && interstitialPlacementId) {
         transitionPending.current = true;
-        void showEpisodeTransitionInterstitial(interstitialPlacementId).catch(() => undefined).then((closedAt) => {
+        if (isV006Release(releaseId)) setTransitionAdPending(true);
+        void new Promise<void>((resolve) => {
+          if (!isV006Release(releaseId) || document.visibilityState === 'hidden') { resolve(); return; }
+          const fallback = window.setTimeout(resolve, 100);
+          requestAnimationFrame(() => { window.clearTimeout(fallback); resolve(); });
+        }).then(() => showEpisodeTransitionInterstitial(interstitialPlacementId)).catch(() => undefined).then((closedAt) => {
           if (mounted.current) navigate(`/watch/${albumId}/${episode.id}`, { replace: true, state: closedAt === undefined ? null : { transitionTiming: { kind: 'EPISODE_INTERSTITIAL', closedAt } } });
         }).finally(() => {
           transitionPending.current = false;
+          if (mounted.current) setTransitionAdPending(false);
         });
       } else navigate(`/watch/${albumId}/${episode.id}`, { replace: true });
       return;
@@ -221,9 +231,11 @@ export function WatchPage() {
       message={message}
       onRetry={playInfo.isError ? () => { void playInfo.refetch(); } : undefined}
       playInfo={playInfo.data}
-      requestStartedAt={v005App ? playRequest.current.startedAt : undefined}
-      onPlaybackActiveChange={v005App ? setPlaybackActive : undefined}
-      observePlayback={v005App}
+      requestStartedAt={observePlayback ? playRequest.current.startedAt : undefined}
+      onPlaybackActiveChange={observePlayback ? setPlaybackActive : undefined}
+      adTransitionPending={transitionAdPending}
+      rewardedAdPending={isV006Release(releaseId) && (unlock.isPending || retentionUnlock.isPending)}
+      observePlayback={observePlayback}
       playlist={playerPlaylist}
       onEpisodeEnded={() => requestEpisode(nextEpisode, true)}
       transitionTiming={transitionTiming}

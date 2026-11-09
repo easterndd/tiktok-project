@@ -1,4 +1,5 @@
 import { Compass, Film, Library, Search, UserRound } from 'lucide-react';
+import { useRef } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import styles from './App.module.css';
 import { t } from '../lib/i18n';
@@ -16,12 +17,21 @@ export function App() {
   const location = useLocation();
   const locale = useLocale();
   const isWatchPage = location.pathname.startsWith('/watch/');
+  const isDebugPage = location.pathname === '/debug';
+  const brandTaps = useRef({ count: 0, lastAt: 0 });
   const components = useUiComponents();
   const ui = components.data?.items;
 
   return <div className={styles.appShell}>
-    {!isWatchPage && componentIsEnabled(ui, 'APP_TOPBAR') && <header className={styles.topbar}>
-      <button className={styles.brandButton} onClick={() => navigate('/')} aria-label={`${appName} home`}>
+    {!isWatchPage && !isDebugPage && componentIsEnabled(ui, 'APP_TOPBAR') && <header className={`${styles.topbar} ${import.meta.env.VITE_DEBUG_PANEL === 'true' ? styles.debugTopbar : ''}`}>
+      <button className={styles.brandButton} onClick={() => {
+        if (import.meta.env.VITE_DEBUG_PANEL === 'true') {
+          const now = Date.now();
+          brandTaps.current = { count: now - brandTaps.current.lastAt <= 500 ? brandTaps.current.count + 1 : 1, lastAt: now };
+          if (brandTaps.current.count >= 5) { brandTaps.current = { count: 0, lastAt: 0 }; navigate('/debug'); return; }
+        }
+        navigate('/');
+      }} aria-label={`${appName} home`}>
         <span className={styles.brandMark}><Film size={18} aria-hidden="true" /></span>
         <span>{appName}</span>
       </button>
@@ -30,8 +40,8 @@ export function App() {
         <button className={styles.profileButton} onClick={() => navigate('/profile')} aria-label={t(locale, 'profile')}><UserRound size={18} aria-hidden="true" /></button>
       </div>
     </header>}
-    <main className={`${styles.main} ${isWatchPage ? styles.watchMain : ''}`}><EntryAdGate><Outlet /></EntryAdGate></main>
-    {!isWatchPage && componentIsEnabled(ui, 'APP_BOTTOM_NAV') && <nav className={styles.bottomNav} aria-label={t(locale, 'navigation')}>
+    <main className={`${styles.main} ${isWatchPage ? styles.watchMain : ''} ${isDebugPage ? styles.debugMain : ''}`}>{isDebugPage ? <Outlet /> : <EntryAdGate><Outlet /></EntryAdGate>}</main>
+    {!isWatchPage && !isDebugPage && componentIsEnabled(ui, 'APP_BOTTOM_NAV') && <nav className={styles.bottomNav} aria-label={t(locale, 'navigation')}>
       <NavItem to="/" label={t(locale, 'home')} icon={Compass} />
       <NavItem to="/profile" label={t(locale, 'library')} icon={Library} />
     </nav>}

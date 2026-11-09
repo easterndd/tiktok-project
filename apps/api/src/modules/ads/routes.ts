@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { requireUser } from '../../plugins/auth';
 import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
 import { measureDatabase } from '../../lib/request-performance';
+import { sessionAllowedPlacementIds } from './ad-placement-policy';
 
 const appEntrySessionTtlMs = 15 * 60 * 1000;
 const failedAdDuplicateWindowMs = 5_000;
@@ -26,7 +27,7 @@ const adEventInput = z.object({
 
 const playbackQualityEventInput = z.object({
   episodeId: z.string().min(1),
-  eventType: z.enum(['FIRST_FRAME', 'WAITING', 'DEFINITION_CHANGE', 'SEEK_RESUME', 'ERROR', 'ENDED']),
+  eventType: z.enum(['START', 'PLAYER_CONSTRUCTED', 'PLAYER_READY', 'FIRST_FRAME', 'WAITING', 'DEFINITION_CHANGE', 'SEEK_RESUME', 'ERROR', 'ENDED']),
   sessionId: z.string().min(8).max(128),
   startupMs: z.number().int().nonnegative().optional(),
   currentTimeMs: z.number().int().nonnegative().optional(),
@@ -34,6 +35,11 @@ const playbackQualityEventInput = z.object({
   networkType: z.string().max(32).optional(),
   definition: z.string().max(32).optional(),
   clientVersion: z.string().max(64).optional(),
+  platform: z.enum(['ios', 'android', 'web', 'unknown']).optional(),
+  tiktokClientVersion: z.string().max(64).optional(),
+  stage: z.string().max(64).optional(),
+  playerOperationId: z.string().max(128).optional(),
+  preloadHit: z.boolean().optional(),
   errorCode: z.string().max(128).optional()
 });
 
@@ -164,9 +170,9 @@ export async function registerAdRoutes(app: FastifyInstance) {
       }
       const session = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({
         where: { id: body.appEntrySessionId! },
-        select: { id: true, userId: true, status: true, expiresAt: true, placementId: true, mode: true, requiredCount: true, countMode: true }
+        select: { id: true, userId: true, status: true, expiresAt: true, placementId: true, allowedPlacementIds: true, mode: true, requiredCount: true, countMode: true }
       }));
-      if (!session || session.userId !== request.user.sub || session.placementId !== body.placementId || session.mode !== (body.adType === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED_GATED') || body.adIndex > session.requiredCount) {
+      if (!session || session.userId !== request.user.sub || !sessionAllowedPlacementIds(session).includes(body.placementId) || session.mode !== (body.adType === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED_GATED') || body.adIndex > session.requiredCount) {
         throw Object.assign(new Error('App-entry ad session is unavailable.'), { statusCode: 409 });
       }
       // SHOWN mode has already advanced the durable entitlement counter in
@@ -182,7 +188,7 @@ export async function registerAdRoutes(app: FastifyInstance) {
         throw Object.assign(new Error('Invalid episode-unlock ad event.'), { statusCode: 400 });
       }
       const session = await measureDatabase(request, () => app.prisma.rewardedUnlockSession.findUnique({ where: { id: body.rewardSessionId! } }));
-      if (!session || session.userId !== request.user.sub || session.episodeId !== body.episodeId || session.status !== 'ACTIVE' || session.expiresAt <= new Date() || session.placementId !== body.placementId || body.adIndex !== session.completedCount + 1 || (session.purpose ?? 'EPISODE_UNLOCK') !== body.scope) {
+      if (!session || session.userId !== request.user.sub || session.episodeId !== body.episodeId || session.status !== 'ACTIVE' || session.expiresAt <= new Date() || !sessionAllowedPlacementIds(session).includes(body.placementId) || body.adIndex !== session.completedCount + 1 || (session.purpose ?? 'EPISODE_UNLOCK') !== body.scope) {
         throw Object.assign(new Error('Rewarded unlock session is unavailable.'), { statusCode: 409 });
       }
     }

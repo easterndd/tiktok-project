@@ -5,6 +5,7 @@ import { HomePage } from '../pages/HomePage';
 import { LegalPage } from '../pages/LegalPage';
 import { WatchPage } from '../pages/WatchPage';
 import { ProfilePage } from '../pages/ProfilePage';
+import { DebugPage } from '../pages/DebugPage';
 import { App } from './App';
 
 export const router = createBrowserRouter([{ path: '/', element: <App />, children: [
@@ -16,5 +17,6 @@ export const router = createBrowserRouter([{ path: '/', element: <App />, childr
   { path: 'watch/:albumId', element: <WatchPage /> },
   { path: 'watch/:albumId/:episodeId', element: <WatchPage /> },
   { path: 'privacy', element: <LegalPage type="privacy" /> },
-  { path: 'terms', element: <LegalPage type="terms" /> }
+  { path: 'terms', element: <LegalPage type="terms" /> },
+  ...(import.meta.env.VITE_DEBUG_PANEL === 'true' ? [{ path: 'debug', element: <DebugPage /> }] : [])
 ] }]);

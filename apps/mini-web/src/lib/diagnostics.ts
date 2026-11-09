@@ -1,3 +1,5 @@
+import { recordDebugRuntime } from './analytics';
+
 const apiBase = import.meta.env.VITE_API_BASE_URL
   ?? (import.meta.env.VITE_APP_KEY && import.meta.env.VITE_APP_KEY !== 'main' ? `http://localhost:3000/api/${import.meta.env.VITE_APP_KEY}/v1` : 'http://localhost:3000/api/v1');
 type Diagnostic = {
@@ -18,6 +20,7 @@ let windowStart = 0;
 let sent = 0;
 
 export function reportDiagnostic(input: Diagnostic) {
+  recordDebugRuntime({ ...input, releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default' });
   if (import.meta.env.VITE_DEMO_MODE === 'true' || import.meta.env.VITE_USE_MOCK_API === 'true') return;
   const now = Date.now();
   if (now - windowStart >= 60_000) { windowStart = now; sent = 0; }

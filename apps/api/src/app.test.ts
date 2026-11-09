@@ -547,6 +547,33 @@ describe('QuicK ReeLS API', () => {
     }
   });
 
+  it('mounts analytics routes for the five v0.04.1 target Minis', async () => {
+    const targetApps: Exclude<MiniAppKey, 'main'>[] = ['dramaflicks', 'heartreel', 'zenclip', 'sweetreel', 'luxereel'];
+    const envOverrides: Partial<Env> = {};
+    for (const miniAppKey of targetApps) {
+      (envOverrides as Record<string, unknown>)[`${miniAppKey.toUpperCase()}_DATABASE_URL`] = `postgresql://test:test@localhost:5432/${miniAppKey}`;
+    }
+    const prismaStub = await createPrismaStub();
+    const miniPrisma = Object.fromEntries(targetApps.map((miniAppKey) => [miniAppKey, prismaStub])) as Partial<Record<MiniAppKey, PrismaClient>>;
+    const app = await createTestApp(envOverrides, { miniPrisma });
+    apps.push(app);
+
+    for (const miniAppKey of targetApps) {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/${miniAppKey}/v1/analytics/events`,
+        payload: { events: [{ eventId: `route-check-${miniAppKey}`, eventKey: 'app_open', releaseId: 'local-check' }] }
+      });
+      assert.equal(response.statusCode, 401, `${miniAppKey} analytics route should be mounted; got ${response.statusCode}`);
+    }
+    const outsideTarget = await app.inject({
+      method: 'POST',
+      url: '/api/v1/analytics/events',
+      payload: { events: [{ eventId: 'route-check-main', eventKey: 'app_open' }] }
+    });
+    assert.equal(outsideTarget.statusCode, 404, 'analytics route must not be exposed for other Minis');
+  });
+
   it('uses a forwarded client IP only when the immediate proxy is trusted', async () => {
     const trusted = await createTestApp({ TRUSTED_PROXY_CIDRS: '172.20.0.2/32' });
     apps.push(trusted);
@@ -851,6 +878,21 @@ describe('QuicK ReeLS API', () => {
     assert.equal(allowedMiniRuntime.statusCode, 204);
     assert.equal(allowedMiniRuntime.headers['access-control-allow-origin'], 'https://minis-example-preview.tiktok-minis.us');
     assert.equal(denied.headers['access-control-allow-origin'], undefined);
+  });
+
+  it('exposes a matching request ID on successful and failed Mini API responses', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const headers = { origin: 'http://localhost:5173' };
+    const success = await app.inject({ method: 'GET', url: '/api/v1/home', headers });
+    const failure = await app.inject({ method: 'GET', url: '/api/v1/home/progress', headers });
+    assert.equal(success.statusCode, 200);
+    assert.equal(failure.statusCode, 401);
+    for (const response of [success, failure]) {
+      assert.match(String(response.headers['x-request-id'] ?? ''), /\S+/);
+      assert.match(String(response.headers['access-control-expose-headers'] ?? ''), /X-Request-ID/i);
+    }
+    assert.equal(failure.json().error.requestId, failure.headers['x-request-id']);
   });
 
   it('serves public home and search without authentication', async () => {
@@ -1358,7 +1400,7 @@ describe('QuicK ReeLS API', () => {
     assert.equal(policy.statusCode, 200, policy.body);
 
     const config = await app.inject({ method: 'GET', url: '/api/v1/exit-retention/config?releaseId=main-test-v1', headers: userHeaders });
-    assert.deepEqual(config.json(), { enabled: true, placementId: env.REWARDED_PLACEMENT_ID, requiredCount: 2 });
+    assert.deepEqual(config.json(), { enabled: true, placementId: env.REWARDED_PLACEMENT_ID, placementIds: [env.REWARDED_PLACEMENT_ID], placementPolicyVersion: 1, adLoadMode: 'EXPLICIT_LOAD', strategyVariant: 'CONTROL', requiredCount: 2 });
     const normal = await app.inject({ method: 'POST', url: '/api/v1/episodes/episode-1/reward-session', headers: userHeaders, payload: {} });
     const retention = await app.inject({ method: 'POST', url: '/api/v1/episodes/episode-1/reward-session', headers: userHeaders, payload: { purpose: 'EXIT_RETENTION', releaseId: 'main-test-v1' } });
     assert.equal(normal.json().requiredCount, 3);
@@ -1802,9 +1844,16 @@ describe('QuicK ReeLS API', () => {
     assert.equal(list.json().placementDefaults.INTERSTITIAL, env.APP_ENTRY_PLACEMENT_ID);
     const previewPolicy = await app.inject({ url: '/api/v1/admin/app-entry-ad-policy?releaseId=main-review-v7', headers: adminHeaders });
     assert.equal(previewPolicy.json().placementId, env.APP_ENTRY_PLACEMENT_ID);
+    assert.equal(previewPolicy.json().enabled, false);
+    assert.equal(previewPolicy.json().episodeInterstitialEnabled, true);
     const configured = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders,
-      payload: { releaseId: 'main-review-v7', enabled: true, mode: 'INTERSTITIAL', placementId: 'review-placement', requiredCount: 2, onUnavailable: 'ALLOW' } });
+      payload: { releaseId: 'main-review-v7', enabled: true, episodeInterstitialEnabled: true, mode: 'INTERSTITIAL', placementId: 'review-placement', requiredCount: 2, onUnavailable: 'ALLOW' } });
     assert.equal(configured.statusCode, 200);
+    assert.equal(configured.json().episodeInterstitialEnabled, true);
+    const defaulted = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders,
+      payload: { releaseId: 'main-review-defaults', enabled: false, mode: 'INTERSTITIAL', placementId: 'review-placement', requiredCount: 1, onUnavailable: 'ALLOW' } });
+    assert.equal(defaulted.statusCode, 200);
+    assert.equal(defaulted.json().episodeInterstitialEnabled, true);
     const reviewLaunch = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: userHeaders,
       payload: { launchId: '0d6815d9-d7b8-44dd-a95d-e0c79ba951bc', releaseId: 'main-review-v7' } });
     assert.equal(reviewLaunch.json().placementId, 'review-placement');

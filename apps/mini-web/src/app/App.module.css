@@ -1,5 +1,6 @@
 .appShell { min-height: 100dvh; background: linear-gradient(180deg, rgba(26, 28, 62, .2), transparent 18rem), var(--bg); }
 .topbar { position: sticky; z-index: 20; top: 0; display: flex; align-items: center; justify-content: space-between; width: min(100%, 1180px); min-height: 80px; margin: 0 auto; padding: max(14px, env(safe-area-inset-top)) 28px 14px; background: linear-gradient(180deg, rgba(9, 10, 19, .96), rgba(9, 10, 19, .72)); border-bottom: 1px solid rgba(194, 206, 255, .08); backdrop-filter: blur(22px) saturate(150%); }
+.debugTopbar { z-index: 90; }
 .brandButton, .topIcon, .profileButton { border: 0; background: transparent; color: inherit; cursor: pointer; }
 .brandButton { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; padding: 0; color: #f8fafc; font-size: 18px; font-weight: 800; letter-spacing: -.02em; }
 .brandButton span span { color: var(--pink); }
@@ -10,11 +11,13 @@
 .topIcon:hover, .topIcon:focus-visible { color: #f8fafc; border-color: var(--line); background: rgba(255, 255, 255, .07); outline: 0; transform: translateY(-1px); }
 .profileButton:hover, .profileButton:focus-visible { background: var(--pink-soft); outline: 0; transform: translateY(-1px); }
 .main { width: min(100%, 1180px); margin: 0 auto; padding: 32px 28px 64px; }
+.debugMain { width: 100%; max-width: none; padding: 0; }
 .watchMain { width: 100%; max-width: none; min-height: 100dvh; padding: 0; }
 .bottomNav { display: none; }
 @media (max-width: 680px) {
   .topbar { min-height: 68px; padding: max(8px, env(safe-area-inset-top)) 16px 8px; }
   .main { padding: 18px 16px calc(92px + env(safe-area-inset-bottom)); }
+  .debugMain { padding: 0; }
   .watchMain { padding: 0; }
   .bottomNav { position: fixed; z-index: 30; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; display: grid; grid-template-columns: repeat(2, 1fr); min-height: 66px; padding: 6px; border: 1px solid rgba(194, 206, 255, .15); border-radius: 22px; background: rgba(18, 22, 39, .86); box-shadow: 0 18px 48px rgba(0, 0, 0, .42), inset 0 1px rgba(255, 255, 255, .08); backdrop-filter: blur(24px) saturate(145%); }
   .navItem { display: grid; min-height: 52px; place-items: center; gap: 3px; color: #818ca5; border-radius: 16px; font-size: 10px; font-weight: 700; text-decoration: none; transition: color 180ms ease, background-color 180ms ease; }

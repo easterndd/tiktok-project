@@ -11,6 +11,7 @@ import { readExitRetentionConfig } from '../app-entry-ads/routes';
 import { isEpisodeFree, readMiniAppAccessConfig } from '../../lib/content-access';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
+import { isV006Release, resolveAdPlacementPolicy, sessionAllowedPlacementIds, type AdClientPlatform } from '../ads/ad-placement-policy';
 
 const params = z.object({ episodeId: z.string().min(1).max(128) });
 const sessionParams = params.extend({ sessionId: z.string().min(1).max(128) });
@@ -26,13 +27,17 @@ const legacyUnlockInput = unlockInput.extend({
 });
 const sessionTtlMs = 30 * 60 * 1000;
 const rewardPurpose = z.enum(['EPISODE_UNLOCK', 'EXIT_RETENTION']).default('EPISODE_UNLOCK');
-const rewardStartInput = z.object({ purpose: rewardPurpose, releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default') });
+const rewardStartInput = z.object({
+  purpose: rewardPurpose,
+  releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default'),
+  platform: z.enum(['ios', 'android', 'unknown']).optional()
+});
 
 type RewardSessionStart =
   | { missing: true }
   | { adDisabled: true }
   | { access: 'PLAYABLE' }
-  | { access: 'REWARDED_AD_REQUIRED'; sessionId: string; placementId: string; requiredCount: number; completedCount: number };
+  | { access: 'REWARDED_AD_REQUIRED'; sessionId: string; placementId: string; placementIds: string[]; placementPolicyVersion: number; adLoadMode: string; strategyVariant: string; requiredCount: number; completedCount: number };
 
 type RewardSessionComplete =
   | { missing: true }
@@ -43,7 +48,7 @@ type RewardSessionComplete =
   | { access: 'PLAYABLE'; shouldContinue: false; completedCount?: number; requiredCount?: number }
   | { access: 'REWARDED_AD_REQUIRED'; shouldContinue: true; completedCount: number; requiredCount: number };
 
-async function createOrResumeRewardSession(app: FastifyInstance, userId: string, episodeId: string, country: string | null, purpose: 'EPISODE_UNLOCK' | 'EXIT_RETENTION' = 'EPISODE_UNLOCK', releaseId = 'default', ip = ''): Promise<RewardSessionStart> {
+async function createOrResumeRewardSession(app: FastifyInstance, userId: string, episodeId: string, country: string | null, purpose: 'EPISODE_UNLOCK' | 'EXIT_RETENTION' = 'EPISODE_UNLOCK', releaseId = 'default', ip = '', platform: AdClientPlatform = 'unknown'): Promise<RewardSessionStart> {
   const now = new Date();
   const episode = await app.prisma.episode.findFirst({
     where: { id: episodeId, status: 'ONLINE', album: publicAlbumWhere(app.config) },
@@ -55,12 +60,18 @@ async function createOrResumeRewardSession(app: FastifyInstance, userId: string,
   if (unlocked) return { access: 'PLAYABLE' };
 
   const accessConfig = readMiniAppAccessConfig(episode.album.accessConfig, app.config);
-  const retention = purpose === 'EXIT_RETENTION' ? await readExitRetentionConfig(app, releaseId, userId, ip) : null;
+  const retention = purpose === 'EXIT_RETENTION' ? await readExitRetentionConfig(app, releaseId, userId, ip, platform) : null;
   if (retention ? !retention.enabled : !accessConfig.rewardedAdEnabled) return { adDisabled: true };
   const placementId = retention?.enabled ? retention.placementId : accessConfig.rewardedPlacementId;
   const requiredCount = retention?.enabled ? retention.requiredCount : accessConfig.rewardedAdCount;
   // Ordinary episode unlocks remain shared across builds; retention offers are per build.
-  const sessionReleaseId = purpose === 'EXIT_RETENTION' ? releaseId : 'default';
+  const sessionReleaseId = purpose === 'EXIT_RETENTION' || isV006Release(releaseId) ? releaseId : 'default';
+  const placementPolicy = await resolveAdPlacementPolicy(app, {
+    releaseId: sessionReleaseId,
+    adType: 'REWARDED',
+    primaryPlacementId: placementId,
+    platform
+  });
   await app.prisma.rewardedUnlockSession.updateMany({
     where: { userId, episodeId, purpose, releaseId: sessionReleaseId, status: 'ACTIVE', expiresAt: { lte: now } },
     data: { status: 'EXPIRED' }
@@ -78,6 +89,10 @@ async function createOrResumeRewardSession(app: FastifyInstance, userId: string,
           purpose,
           releaseId: sessionReleaseId,
           placementId,
+          allowedPlacementIds: placementPolicy.placementIds,
+          placementPolicyVersion: placementPolicy.version,
+          adLoadMode: placementPolicy.adLoadMode,
+          strategyVariant: placementPolicy.strategyVariant,
           requiredCount,
           expiresAt: new Date(now.getTime() + sessionTtlMs)
         }
@@ -92,7 +107,17 @@ async function createOrResumeRewardSession(app: FastifyInstance, userId: string,
       if (!session) throw error;
     }
   }
-  return { access: 'REWARDED_AD_REQUIRED', sessionId: session.id, placementId: session.placementId, requiredCount: session.requiredCount, completedCount: session.completedCount };
+  return {
+    access: 'REWARDED_AD_REQUIRED',
+    sessionId: session.id,
+    placementId: session.placementId,
+    placementIds: sessionAllowedPlacementIds(session),
+    placementPolicyVersion: session.placementPolicyVersion,
+    adLoadMode: session.adLoadMode,
+    strategyVariant: session.strategyVariant,
+    requiredCount: session.requiredCount,
+    completedCount: session.completedCount
+  };
 }
 
 async function completeRewardSession(app: FastifyInstance, userId: string, episodeId: string, sessionId: string, clientEventId: string, country: string | null): Promise<RewardSessionComplete> {
@@ -127,15 +152,15 @@ async function completeRewardSession(app: FastifyInstance, userId: string, episo
         adType: 'REWARDED',
         scope: session.purpose,
         eventType: 'SHOWN',
-        placementId: session.placementId,
         episodeId,
         sessionId,
         rewardSessionId: sessionId,
         adIndex
       },
-      select: { id: true }
+      select: { id: true, placementId: true }
     });
     if (!shown) return { invalidAdEvidence: true as const };
+    if (!sessionAllowedPlacementIds(session).includes(shown.placementId)) return { invalidPlacement: true as const };
 
     const event = await tx.adEvent.upsert({
       where: { userId_clientEventId: { userId, clientEventId } },
@@ -145,7 +170,7 @@ async function completeRewardSession(app: FastifyInstance, userId: string, episo
         adType: 'REWARDED',
         scope: session.purpose,
         eventType: 'CLOSED_COMPLETED',
-        placementId: session.placementId,
+        placementId: shown.placementId,
         episodeId,
         sessionId,
         rewardSessionId: sessionId,
@@ -155,7 +180,7 @@ async function completeRewardSession(app: FastifyInstance, userId: string, episo
         adType: 'REWARDED',
         scope: session.purpose,
         eventType: 'CLOSED_COMPLETED',
-        placementId: session.placementId,
+        placementId: shown.placementId,
         episodeId,
         sessionId,
         rewardSessionId: sessionId,
@@ -167,7 +192,7 @@ async function completeRewardSession(app: FastifyInstance, userId: string, episo
     if (completedCount >= session.requiredCount) {
       await tx.episodeUnlock.upsert({
         where: { userId_episodeId: { userId, episodeId } },
-        create: { userId, episodeId, unlockType: 'REWARDED_AD', placementId: session.placementId },
+        create: { userId, episodeId, unlockType: 'REWARDED_AD', placementId: shown.placementId },
         update: {}
       });
       await tx.rewardedUnlockSession.update({ where: { id: sessionId }, data: { completedCount, status: 'UNLOCKED' } });
@@ -207,9 +232,9 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request, reply) => {
     const { episodeId } = params.parse(request.params);
-    const { purpose, releaseId } = rewardStartInput.parse(request.body ?? {});
+    const { purpose, releaseId, platform } = rewardStartInput.parse(request.body ?? {});
     const country = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER);
-    const result = await measureDatabase(request, () => createOrResumeRewardSession(app, request.user.sub, episodeId, country, purpose, releaseId, request.ip));
+    const result = await measureDatabase(request, () => createOrResumeRewardSession(app, request.user.sub, episodeId, country, purpose, releaseId, request.ip, platform));
     if ('missing' in result) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Episode not found.', requestId: request.id } }) as never;
     if ('adDisabled' in result) return reply.code(409).send({ error: { code: 'CONFLICT', message: 'Rewarded unlocking is disabled for this drama.', requestId: request.id } }) as never;
     return result;

@@ -3,6 +3,7 @@ import { useEffect, type ReactNode } from 'react';
 import { getLocalEntryAdPlacementIds } from '../features/ads/entry-ad-placements';
 import { ensureAnonymousSession, recordMiniLaunch } from '../features/auth/anonymous-session';
 import { ApiError } from '../lib/api-client';
+import { flushAnalytics } from '../lib/analytics';
 
 function shouldRetryQuery(failureCount: number, error: unknown) {
   if (failureCount >= 1) return false;
@@ -31,6 +32,7 @@ function AnonymousSessionBootstrap() {
   useEffect(() => {
     void ensureAnonymousSession()
       .then(async () => {
+        void flushAnalytics();
         if (getLocalEntryAdPlacementIds().length === 2) return;
         await recordMiniLaunch();
       })

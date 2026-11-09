@@ -13,12 +13,14 @@ import { Metric, Status, Panel } from './dashboard-ui';
 import { createAdminApi } from './admin-api';
 import { HealthPanel, type Health } from './health-panel';
 import { AudiencePage, AudienceCountries, PlaybackPage, type Audience, type Playback } from './analytics-pages';
+import { V006AdDiagnostics, V006PlayerDiagnostics } from './v006-diagnostics';
 import { ViewerAdControls } from './viewer-ad-controls';
 import { SharedIpControls } from './shared-ip-controls';
 import { MiniEntryLinks } from './mini-entry-links';
 import './styles.css';
 
 const miniAppNames = { main: 'CobaltClip', quartzplay: 'QuartzPlay', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks', crownrush: 'CrownRush', sugarreel: 'SugarReel', crimsonshorts: 'CrimsonShorts', sweetreel: 'SweetReel', dramablaze: 'DramaBlaze', heartreel: 'HeartReel', dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama', lucidreel: 'LucidReel', astraclip: 'AstraClip', lumoreel: 'LumoReel', orbitplay: 'OrbitPlay', zenclip: 'ZenClip', auraclip: 'AuraClip', fluxplay: 'FluxPlay', driftreel: 'DriftReel', novaclip: 'NovaClip', lumishort: 'LumiShort', sonicreel: 'SonicReel', harborplay: 'HarborPlay', dazzleshort: 'DazzleShort', fableclip: 'FableClip', emberreel: 'EmberReel', bloomreel: 'BloomReel', quillshort: 'QuillShort', amberplay: 'AmberPlay', nimbusclip: 'NimbusClip', runereel: 'RuneReel', riftsaga: 'RiftSaga', haloflicks: 'HaloFlicks', threadtale: 'ThreadTale', fablevibe: 'FableVibe', wispreel: 'WispReel', yalareels: 'YalaReels' } as const;
+const v006DiagnosticApps = new Set<MiniApp>(['dramaflicks', 'heartreel', 'sweetreel', 'luxereel']);
 type MiniApp = keyof typeof miniAppNames;
 const miniAppOrganizations = [
   { id: 'quickreels', label: 'CobaltClip 组织', apps: ['main', 'quartzplay'] },
@@ -208,6 +210,7 @@ type AppEntryAdPolicy = { releaseId: string; enabled: boolean; exitRetentionEnab
 type PortalStatus = 'UNKNOWN' | 'PREVIEW' | 'IN_REVIEW' | 'READY' | 'RELEASED';
 type AppEntryAdRelease = AppEntryAdPolicy & { portalVersion: string | null; portalStatus: PortalStatus; firstSeenAt?: string | null; lastSeenAt?: string | null };
 type AppEntryAdPolicyList = { items: AppEntryAdRelease[]; placementDefaults: { INTERSTITIAL: string; REWARDED_GATED: string } };
+type AdPlacementPair = { id: string; releaseId: string; adType: 'REWARDED' | 'INTERSTITIAL'; primaryPlacementId: string; backupPlacementId: string | null; enabled: boolean; iosLoadMode: 'DIRECT_SHOW' | 'EXPLICIT_LOAD'; androidLoadMode: 'DIRECT_SHOW' | 'EXPLICIT_LOAD'; iosExperimentPercent: number; version: number };
 const portalStatusLabels: Record<PortalStatus, string> = { UNKNOWN: '未核实', PREVIEW: 'Preview', IN_REVIEW: 'In review', READY: 'Ready for release', RELEASED: 'Released' };
 type AdminRole = 'OWNER' | 'EDITOR' | 'ANALYST' | 'SUPPORT';
 type AdminPermission = 'content.write' | 'content.sync' | 'content.review' | 'content.publish' | 'ads.write';
@@ -319,6 +322,9 @@ function AdminApp() {
   const [savingEntryAdRelease, setSavingEntryAdRelease] = useState(false);
   const [entryAdPlacementDefaults, setEntryAdPlacementDefaults] = useState<AppEntryAdPolicyList['placementDefaults']>({ INTERSTITIAL: '', REWARDED_GATED: '' });
   const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ releaseId: 'default', enabled: false, exitRetentionEnabled: false, exitRetentionAdCount: 1, episodeInterstitialEnabled: true, episodeInterstitialInitialDelaySeconds: 30, episodeInterstitialIntervalSeconds: 60, episodeInterstitialMinIntervalSeconds: 180, episodeInterstitialMaxPerSession: 2, episodeInterstitialInitialSkipTransitions: 2, episodeInterstitialEveryTransitions: 3, episodeInterstitialRewardedCooldownSeconds: 60, mode: 'INTERSTITIAL', placementId: '', requiredCount: 1, countMode: 'COMPLETED', onUnavailable: 'ALLOW', version: 1 });
+  const [adPlacementPairs, setAdPlacementPairs] = useState<AdPlacementPair[]>([]);
+  const [adPlacementPairDraft, setAdPlacementPairDraft] = useState<Omit<AdPlacementPair, 'id' | 'version'>>({ releaseId: entryAdReleaseId, adType: 'REWARDED', primaryPlacementId: '', backupPlacementId: null, enabled: false, iosLoadMode: 'EXPLICIT_LOAD', androidLoadMode: 'EXPLICIT_LOAD', iosExperimentPercent: 0 });
+  const [savingAdPlacementPair, setSavingAdPlacementPair] = useState(false);
   const [analyticsFrom, setAnalyticsFrom] = useState(() => rangeStart(30));
   const [analyticsTo, setAnalyticsTo] = useState(() => inputDate(new Date()));
   const [analyticsTimezone, setAnalyticsTimezone] = useState('Asia/Shanghai');
@@ -402,11 +408,14 @@ function AdminApp() {
   });
   const loadEntryAdSettings = () => loadResource('ads', async (signal) => {
     const options = await api<AppEntryAdPolicyList>('/admin/app-entry-ad-policies', { signal });
+    const pairs = await api<{ items: AdPlacementPair[] }>(`/admin/ad-placement-pairs?releaseId=${encodeURIComponent(entryAdReleaseId)}`, { signal });
     const releaseId = options.items.some((item) => item.releaseId === entryAdReleaseId) ? entryAdReleaseId : options.items[0]?.releaseId ?? 'default';
-    return { options, policy: options.items.find((item) => item.releaseId === releaseId) };
-  }, ({ options, policy }) => {
+    return { options, pairs: pairs.items, policy: options.items.find((item) => item.releaseId === releaseId) };
+  }, ({ options, pairs, policy }) => {
     setEntryAdVersions(options.items);
     setEntryAdPlacementDefaults(options.placementDefaults);
+    setAdPlacementPairs(pairs);
+    setAdPlacementPairDraft((draft) => ({ ...draft, releaseId: entryAdReleaseId }));
     if (policy) {
       setEntryAdPolicy(policy);
       setEntryAdReleaseId(policy.releaseId);
@@ -1060,6 +1069,26 @@ function AdminApp() {
       setSavingEntryAdPolicy(false);
     }
   };
+  const saveAdPlacementPair = async (event: FormEvent) => {
+    event.preventDefault();
+    setSavingAdPlacementPair(true);
+    try {
+      const pair = await api<AdPlacementPair>('/admin/ad-placement-pairs', { method: 'PUT', body: JSON.stringify(adPlacementPairDraft) });
+      setAdPlacementPairs((items) => [...items.filter((item) => item.id !== pair.id), pair]);
+      setMessage(`广告位配对已保存（版本 ${pair.version}）。现有会话维持创建时的快照。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `广告位配对保存失败：${error.message}` : '广告位配对保存失败');
+    } finally { setSavingAdPlacementPair(false); }
+  };
+  const deleteAdPlacementPair = async (id: string) => {
+    try {
+      await api(`/admin/ad-placement-pairs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      setAdPlacementPairs((items) => items.filter((item) => item.id !== id));
+      setMessage('广告位配对已删除；已创建的会话仍按原快照完成。');
+    } catch (error) {
+      setMessage(error instanceof Error ? `广告位配对删除失败：${error.message}` : '广告位配对删除失败');
+    }
+  };
   const saveEntryAdRelease = async () => {
     const release = entryAdVersions.find((item) => item.releaseId === entryAdReleaseId);
     if (!release) return;
@@ -1414,14 +1443,32 @@ function AdminApp() {
         <div className="form-grid"><label>广告模式<select value={entryAdPolicy.mode} onChange={(event) => setEntryAdPolicy((policy) => { const mode = event.target.value as AppEntryAdPolicy['mode']; return { ...policy, mode, placementId: entryAdPlacementDefaults[mode] }; })}><option value="INTERSTITIAL">插屏广告</option><option value="REWARDED_GATED">激励门槛广告</option></select></label><label>广告位 ID<input value={entryAdPolicy.placementId} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, placementId: event.target.value }))} required={entryAdPolicy.enabled} /></label><label>所需广告次数<input type="number" min="1" value={entryAdPolicy.requiredCount} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, requiredCount: Number(event.target.value) }))} required /></label><label>计数规则<select value={entryAdPolicy.countMode} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, countMode: event.target.value as AppEntryAdPolicy['countMode'] }))}><option value="COMPLETED">完成激励后计数</option><option value="SHOWN">成功弹出即计数</option></select></label><label>广告不可用时<select value={entryAdPolicy.onUnavailable} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, onUnavailable: event.target.value as AppEntryAdPolicy['onUnavailable'] }))}><option value="ALLOW">允许进入</option><option value="BLOCK">阻止进入</option></select></label></div>
         <details><summary>剧集切换插屏调度</summary><div className="form-grid"><label className="check-row"><input type="checkbox" checked={entryAdPolicy.episodeInterstitialEnabled} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialEnabled: event.target.checked }))} />启用定时插屏</label><label>首次延迟（秒）<input type="number" min="0" value={entryAdPolicy.episodeInterstitialInitialDelaySeconds} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialInitialDelaySeconds: Number(event.target.value) }))} /></label><label>后续间隔（秒）<input type="number" min="1" value={entryAdPolicy.episodeInterstitialIntervalSeconds} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialIntervalSeconds: Number(event.target.value) }))} /></label><label>最短间隔（秒）<input type="number" min="0" value={entryAdPolicy.episodeInterstitialMinIntervalSeconds} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialMinIntervalSeconds: Number(event.target.value) }))} /></label><label>每会话上限<input type="number" min="0" max="20" value={entryAdPolicy.episodeInterstitialMaxPerSession} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialMaxPerSession: Number(event.target.value) }))} /></label><label>跳过前几次切集<input type="number" min="0" max="100" value={entryAdPolicy.episodeInterstitialInitialSkipTransitions} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialInitialSkipTransitions: Number(event.target.value) }))} /></label><label>之后每几次展示<input type="number" min="1" max="100" value={entryAdPolicy.episodeInterstitialEveryTransitions} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialEveryTransitions: Number(event.target.value) }))} /></label><label>激励广告后冷却（秒）<input type="number" min="0" value={entryAdPolicy.episodeInterstitialRewardedCooldownSeconds} onChange={(event) => setEntryAdPolicy((policy) => ({ ...policy, episodeInterstitialRewardedCooldownSeconds: Number(event.target.value) }))} /></label></div></details>
         <p className="form-help">正在编辑：{entryAdPolicy.releaseId} · 策略版本 {entryAdPolicy.version}。退出挽留使用当前小程序服务端配置的激励广告位。</p><button className="primary" type="submit" disabled={savingEntryAdPolicy || entryAdPolicy.releaseId !== entryAdReleaseId}>{savingEntryAdPolicy ? '保存中...' : <><Save size={17} />保存广告策略</>}</button></form></Panel>}
+      {tab === 'ads' && resourceStatus.ads?.loaded && <Panel title="广告位配对与平台加载策略" description="每个小程序独立保存。未确认 Portal 归属前保持停用；iOS 直展比例默认 0%。">
+        <form className="policy-form" onSubmit={saveAdPlacementPair}>
+          <div className="form-grid">
+            <label>Release ID<input value={adPlacementPairDraft.releaseId} onChange={(event) => setAdPlacementPairDraft((draft) => ({ ...draft, releaseId: event.target.value }))} placeholder="dramaflicks-v006-..." required /></label>
+            <label>广告类型<select value={adPlacementPairDraft.adType} onChange={(event) => setAdPlacementPairDraft((draft) => ({ ...draft, adType: event.target.value as AdPlacementPair['adType'] }))}><option value="REWARDED">激励广告</option><option value="INTERSTITIAL">插屏广告</option></select></label>
+            <label>主广告位 ID<input value={adPlacementPairDraft.primaryPlacementId} onChange={(event) => setAdPlacementPairDraft((draft) => ({ ...draft, primaryPlacementId: event.target.value }))} placeholder="ad..." pattern="ad[0-9]{8,32}" required /></label>
+            <label>备用广告位 ID<input value={adPlacementPairDraft.backupPlacementId ?? ''} onChange={(event) => setAdPlacementPairDraft((draft) => ({ ...draft, backupPlacementId: event.target.value || null }))} placeholder="留空表示禁用备用位" pattern="ad[0-9]{8,32}" /></label>
+            <label>iOS 加载模式<select value={adPlacementPairDraft.iosLoadMode} onChange={(event) => setAdPlacementPairDraft((draft) => ({ ...draft, iosLoadMode: event.target.value as AdPlacementPair['iosLoadMode'] }))}><option value="EXPLICIT_LOAD">显式 load</option><option value="DIRECT_SHOW">直接 show（实验）</option></select></label>
+            <label>Android 加载模式<select value={adPlacementPairDraft.androidLoadMode} onChange={(event) => setAdPlacementPairDraft((draft) => ({ ...draft, androidLoadMode: event.target.value as AdPlacementPair['androidLoadMode'] }))}><option value="EXPLICIT_LOAD">显式 load</option><option value="DIRECT_SHOW">直接 show</option></select></label>
+            <label>iOS 直展实验比例（%）<input type="number" min="0" max="100" value={adPlacementPairDraft.iosExperimentPercent} onChange={(event) => setAdPlacementPairDraft((draft) => ({ ...draft, iosExperimentPercent: Number(event.target.value) }))} disabled={adPlacementPairDraft.iosLoadMode !== 'DIRECT_SHOW'} /></label>
+          </div>
+          <label className="check-row"><input type="checkbox" checked={adPlacementPairDraft.enabled} onChange={(event) => setAdPlacementPairDraft((draft) => ({ ...draft, enabled: event.target.checked }))} />启用此 release 的主备位配对</label>
+          <button className="primary" type="submit" disabled={savingAdPlacementPair || (adPlacementPairDraft.enabled && !adPlacementPairDraft.backupPlacementId)}><Save size={17} />{savingAdPlacementPair ? '保存中...' : '保存广告位策略'}</button>
+        </form>
+        <div className="compact-list">{adPlacementPairs.map((pair) => <div className="compact-row" key={pair.id}><span><strong>{pair.releaseId} · {pair.adType} · {pair.primaryPlacementId}</strong><small>{pair.enabled ? `备用 ${pair.backupPlacementId ?? '未配置'} · iOS ${pair.iosLoadMode} ${pair.iosExperimentPercent}% · Android ${pair.androidLoadMode}` : '已停用'} · v{pair.version}</small></span><button className="secondary" type="button" onClick={() => setAdPlacementPairDraft(({ ...pair, backupPlacementId: pair.backupPlacementId }))}>编辑</button><button className="secondary" type="button" onClick={() => void deleteAdPlacementPair(pair.id)}>删除</button></div>)}{!adPlacementPairs.length && <p className="empty-copy">此 release 尚无广告位配对</p>}</div>
+      </Panel>}
       {tab === 'audience' && !audience && !resourceStatus.audience?.error && <p className="load-placeholder">正在加载观众数据...</p>}
       {tab === 'links' && <MiniEntryLinks api={api} miniAppKey={activeApp} miniAppName={miniAppNames[activeApp]} />}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <ViewerAdControls api={api} canEdit miniApps={organizationApps} currentMiniApp={activeApp} />}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <SharedIpControls api={api} canEdit miniApps={Object.entries(miniAppNames).map(([key, name]) => ({ key, name }))} />}
+      {tab === 'ads' && v006DiagnosticApps.has(activeApp) && <V006AdDiagnostics api={api} releaseId={entryAdReleaseId} />}
       {tab === 'audience' && audience && <AudiencePage audience={audience} />}
       {tab === 'audience' && audience && <AudienceCountries api={api} from={analyticsFrom} to={analyticsTo} timezone={analyticsTimezone} />}
       {tab === 'playback' && !playback && !resourceStatus.playback?.error && <p className="load-placeholder">正在加载播放质量...</p>}
       {tab === 'playback' && playback && <PlaybackPage playback={playback} />}
+      {tab === 'playback' && v006DiagnosticApps.has(activeApp) && <V006PlayerDiagnostics api={api} releaseId={entryAdReleaseId} />}
       {tab === 'security' && <div className="content-grid"><Panel title="当前管理员" description="角色和账号状态由服务端实时校验"><div className="readiness-list"><div><span className="ready-dot done"><CheckCircle2 size={15} /></span><span><strong>{currentAdmin?.email ?? '-'}</strong><small>角色：{currentAdmin?.role ?? '-'} · 状态：{currentAdmin?.status ?? '-'}</small></span></div><div><span className="ready-dot done"><CalendarDays size={15} /></span><span><strong>最近登录</strong><small>{currentAdmin?.lastLoginAt ? new Date(currentAdmin.lastLoginAt).toLocaleString('zh-CN') : '暂无记录'}</small></span></div></div></Panel><Panel title="修改密码" description="更新后当前登录令牌会立即失效"><form className="policy-form" onSubmit={changePassword}><label>当前密码<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label><label>新密码<input type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label><button className="primary" type="submit" disabled={changingPassword}><Save size={17} />{changingPassword ? '更新中...' : '更新密码'}</button></form></Panel></div>}
       <AlbumMetadataDialog album={editingAlbumMetadata} api={api} onClose={() => setEditingAlbumMetadata(null)} onSaved={albumMetadataSaved} />
     </main></div>;
