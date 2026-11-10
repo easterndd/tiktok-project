@@ -22,7 +22,7 @@ const snapshot: V006SchemaSnapshot = {
   indexes: [
     'AdPlacementPair_releaseId_adType_primaryPlacementId_key',
     'ClientAnalyticsEvent_miniAppKey_operationId_idx',
-    'ClientAnalyticsEvent_miniAppKey_releaseId_platform_eventKey_receivedAt_idx',
+    'ClientAnalyticsEvent_release_os_event_idx',
     'PlaybackQualityEvent_playerOperationId_createdAt_idx'
   ]
 };

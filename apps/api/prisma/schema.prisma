@@ -1123,7 +1123,7 @@ model ClientAnalyticsEvent {
   @@index([userId, eventTs])
   @@index([placementId, eventKey, receivedAt])
   @@index([miniAppKey, operationId])
-  @@index([miniAppKey, releaseId, platform, eventKey, receivedAt])
+  @@index([miniAppKey, releaseId, platform, eventKey, receivedAt], map: "ClientAnalyticsEvent_release_os_event_idx")
 }
 
 model AdPlacementPair {

@@ -44,7 +44,7 @@ ALTER TABLE "ClientAnalyticsEvent"
   ADD COLUMN "placementRole" TEXT;
 CREATE INDEX "ClientAnalyticsEvent_miniAppKey_operationId_idx"
   ON "ClientAnalyticsEvent"("miniAppKey", "operationId");
-CREATE INDEX "ClientAnalyticsEvent_miniAppKey_releaseId_platform_eventKey_receivedAt_idx"
+CREATE INDEX "ClientAnalyticsEvent_release_os_event_idx"
   ON "ClientAnalyticsEvent"("miniAppKey", "releaseId", "platform", "eventKey", "receivedAt");
 
 ALTER TABLE "PlaybackQualityEvent"
