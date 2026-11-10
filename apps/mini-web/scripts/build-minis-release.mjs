@@ -12,7 +12,7 @@ const builtAt = new Date();
 const stamp = builtAt.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 const v005Apps = new Set(['bloomreel', 'quillshort', 'amberplay', 'nimbusclip', 'runereel']);
 validateV006Placements();
-const version = appKey in v006Placements ? 'v006-' : v005Apps.has(appKey) ? 'v005-' : '';
+const version = appKey in v006Placements ? 'v006-dual-' : v005Apps.has(appKey) ? 'v005-' : '';
 const releaseId = `${appKey}-${version}${stamp}-${randomBytes(3).toString('hex')}`;
 const env = { ...process.env, VITE_MINI_RELEASE_ID: releaseId };
 

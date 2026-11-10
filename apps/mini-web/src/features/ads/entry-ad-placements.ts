@@ -1,4 +1,5 @@
 import { storagePrefix } from '../../lib/app-brand';
+import { getMiniReleaseId, isV006Release } from './ad-platform';
 
 export type EntryAdPlacementSelection = {
   placementIds: string[];
@@ -17,9 +18,14 @@ export function parseEntryAdPlacementIds(value: unknown) {
   return ids;
 }
 
+export function selectLocalEntryAdPlacementIds(value: unknown, releaseId: string) {
+  if (isV006Release(releaseId)) return [];
+  return parseEntryAdPlacementIds(value);
+}
+
 export function getLocalEntryAdPlacementIds() {
   const env = (import.meta as ImportMeta & { env?: ImportMetaEnv }).env;
-  return parseEntryAdPlacementIds(env?.VITE_ENTRY_REWARDED_AD_UNIT_IDS);
+  return selectLocalEntryAdPlacementIds(env?.VITE_ENTRY_REWARDED_AD_UNIT_IDS, getMiniReleaseId());
 }
 
 function browserStorage(): StringStorage | undefined {

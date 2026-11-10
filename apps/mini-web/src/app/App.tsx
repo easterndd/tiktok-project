@@ -7,6 +7,7 @@ import { useLocale } from '../lib/storage';
 import { componentIsEnabled, useUiComponents } from '../features/cms/ui-components';
 import { appKey, appName } from '../lib/app-brand';
 import { EntryAdGate } from '../components/EntryAdGate';
+import { activateDebugPanel, debugPanelAvailable } from '../lib/debug-panel';
 
 function NavItem({ to, label, icon: Icon }: { to: string; label: string; icon: typeof Compass }) {
   return <NavLink to={to} className={({ isActive }) => `${styles.navItem} ${isActive ? styles.navActive : ''}`}>{({ isActive }) => <><Icon size={19} strokeWidth={isActive ? 2.4 : 1.8} aria-hidden="true" /><span>{label}</span></>}</NavLink>;
@@ -25,10 +26,10 @@ export function App() {
   return <div className={styles.appShell}>
     {!isWatchPage && !isDebugPage && componentIsEnabled(ui, 'APP_TOPBAR') && <header className={`${styles.topbar} ${import.meta.env.VITE_DEBUG_PANEL === 'true' ? styles.debugTopbar : ''}`}>
       <button className={styles.brandButton} onClick={() => {
-        if (import.meta.env.VITE_DEBUG_PANEL === 'true') {
+        if (debugPanelAvailable()) {
           const now = Date.now();
           brandTaps.current = { count: now - brandTaps.current.lastAt <= 500 ? brandTaps.current.count + 1 : 1, lastAt: now };
-          if (brandTaps.current.count >= 5) { brandTaps.current = { count: 0, lastAt: 0 }; navigate('/debug'); return; }
+          if (brandTaps.current.count >= 5) { brandTaps.current = { count: 0, lastAt: 0 }; activateDebugPanel(); navigate('/debug'); return; }
         }
         navigate('/');
       }} aria-label={`${appName} home`}>

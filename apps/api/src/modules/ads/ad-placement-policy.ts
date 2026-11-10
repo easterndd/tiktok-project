@@ -88,6 +88,10 @@ export function isV006Release(releaseId: string) {
   return /(?:^|-)v006(?:-|$)/i.test(releaseId);
 }
 
+function isClientPairedRelease(releaseId: string) {
+  return /(?:^|-)v006-dual(?:-|$)/i.test(releaseId);
+}
+
 export async function resolveAdPlacementPolicy(app: FastifyInstance, input: {
   releaseId: string;
   adType: AdType;
@@ -96,6 +100,22 @@ export async function resolveAdPlacementPolicy(app: FastifyInstance, input: {
 }): Promise<ResolvedAdPlacementPolicy> {
   const base = noBackup(input.primaryPlacementId);
   if (!isV006Release(input.releaseId) || !input.primaryPlacementId) return base;
+
+  if (isClientPairedRelease(input.releaseId)) {
+    const appKey = app.config.MINI_APP_KEY;
+    const expected = v006Placements[appKey]?.[input.adType];
+    if (!expected || app.config.TIKTOK_APP_ID !== v006AppIds[appKey]
+      || !input.releaseId.startsWith(`${appKey}-v006-dual-`)
+      || input.primaryPlacementId !== expected[0]) return base;
+    return {
+      placementIds: [...expected],
+      version: 1,
+      adLoadMode: 'EXPLICIT_LOAD',
+      strategyVariant: input.platform === 'android' ? 'ANDROID_DUAL_CLIENT' : input.platform === 'ios' ? 'IOS_SINGLE_CLIENT' : 'SINGLE_CLIENT',
+      iosLoadMode: 'EXPLICIT_LOAD',
+      androidLoadMode: 'EXPLICIT_LOAD'
+    };
+  }
 
   const pair = await findPlacementPair(app, input);
   if (!pair?.enabled) return base;
@@ -115,7 +135,7 @@ export async function resolveAdPlacementPolicy(app: FastifyInstance, input: {
     ? experimentUsesDirect ? 'DIRECT_SHOW' : 'EXPLICIT_LOAD'
     : input.platform === 'android' ? androidLoadMode : 'EXPLICIT_LOAD';
   const placementIds = [input.primaryPlacementId];
-  if (pair.backupPlacementId && pair.backupPlacementId !== input.primaryPlacementId) placementIds.push(pair.backupPlacementId);
+  if (input.platform === 'android' && pair.backupPlacementId && pair.backupPlacementId !== input.primaryPlacementId) placementIds.push(pair.backupPlacementId);
   return {
     placementIds,
     version: pair.version,

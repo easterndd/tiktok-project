@@ -1,12 +1,13 @@
 import { appKey, storagePrefix } from './app-brand';
 import { getSessionToken } from './storage';
 import { boundedDebugValue, debugHeaders, debugResponseDetails } from './debug-network';
+import { debugPanelActive } from './debug-panel';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
   ?? (import.meta.env.VITE_APP_KEY && import.meta.env.VITE_APP_KEY !== 'main' ? `http://localhost:3000/api/${import.meta.env.VITE_APP_KEY}/v1` : 'http://localhost:3000/api/v1');
 const releaseId = import.meta.env.VITE_MINI_RELEASE_ID || 'default';
 const appVersion = import.meta.env.VITE_APP_VERSION || releaseId;
-const debugEnabled = import.meta.env.VITE_DEBUG_PANEL === 'true';
+const debugEnabled = debugPanelActive;
 const instrumentedApps = new Set(['dramaflicks', 'heartreel', 'zenclip', 'sweetreel', 'luxereel']);
 const maxQueueSize = 50;
 const flushSize = 10;
@@ -233,7 +234,7 @@ export function normalizeSdkError(error: unknown): SdkErrorDetails {
 }
 
 function addDebugRecord(kind: DebugRecord['kind'], data: Record<string, unknown>) {
-  if (!debugEnabled) return;
+  if (!debugEnabled()) return;
   debugRecords.push({ id: ++debugSequence, at: new Date().toISOString(), kind, data: sanitizeValue(data) as Record<string, unknown> });
   while (debugRecords.length > 200) debugRecords.shift();
   debugListeners.forEach((listener) => listener());
@@ -292,7 +293,7 @@ export function recordAnalyticsEvent(input: Omit<AnalyticsEvent, 'eventId' | 're
   const sdkCallback = event.metadata?.sdkCallback;
   if (sdkCallback) {
     addDebugRecord('runtime', { phase: 'SDK_CALLBACK', eventKey: event.eventKey, sdkCallback });
-    if (debugEnabled) console.debug('[TikTok Minis SDK callback]', event.eventKey, sdkCallback);
+    if (debugEnabled()) console.debug('[TikTok Minis SDK callback]', event.eventKey, sdkCallback);
   }
   if (import.meta.env.VITE_DEMO_MODE === 'true' || import.meta.env.VITE_USE_MOCK_API === 'true') return event;
   queue.push({ event, attempts: 0 });
@@ -311,7 +312,7 @@ export async function flushAnalytics() {
   const headers = new Headers({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` });
   const payload = { events: batch.map(({ event }) => event) };
   const startedAt = Date.now();
-  const debugEndpoint = debugEnabled ? new URL(`${apiBaseUrl}/analytics/events`, window.location.origin) : undefined;
+  const debugEndpoint = debugEnabled() ? new URL(`${apiBaseUrl}/analytics/events`, window.location.origin) : undefined;
   const requestSnapshot = debugEndpoint ? {
     startedAt: new Date(startedAt).toISOString(),
     url: debugEndpoint.origin + debugEndpoint.pathname,
@@ -333,7 +334,7 @@ export async function flushAnalytics() {
       body: JSON.stringify(payload), signal: controller.signal
     });
     responseStatus = response.status;
-    if (debugEnabled) {
+    if (debugEnabled()) {
       const rawBody = await response.text().catch(() => '');
       try { responseBody = JSON.parse(rawBody); } catch { responseBody = rawBody; }
     }
@@ -343,12 +344,12 @@ export async function flushAnalytics() {
         if (Number.isFinite(retryAfter) && retryAfter > 0) retryDelayMs = Math.min(60_000, retryAfter * 1_000);
         throw new Error(`Analytics upload failed with HTTP ${response.status}`);
       }
-      if (debugEnabled) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: response.status, durationMs: Date.now() - startedAt, eventCount: batch.length, error: `HTTP ${response.status}`, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
+      if (debugEnabled()) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: response.status, durationMs: Date.now() - startedAt, eventCount: batch.length, error: `HTTP ${response.status}`, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
       return;
     }
-    if (debugEnabled) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: response.status, durationMs: Date.now() - startedAt, eventCount: batch.length, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
+    if (debugEnabled()) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: response.status, durationMs: Date.now() - startedAt, eventCount: batch.length, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
   } catch (error) {
-    if (debugEnabled) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: responseStatus, durationMs: Date.now() - startedAt, eventCount: batch.length, error: error instanceof Error ? error.message : String(error), browserOnline: navigator.onLine, timedOut, aborted: controller.signal.aborted, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
+    if (debugEnabled()) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: responseStatus, durationMs: Date.now() - startedAt, eventCount: batch.length, error: error instanceof Error ? error.message : String(error), browserOnline: navigator.onLine, timedOut, aborted: controller.signal.aborted, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
     const retryable = batch.filter(({ attempts }) => attempts + 1 < maxUploadAttempts)
       .map(({ event, attempts }) => ({ event, attempts: attempts + 1 }));
     queue.unshift(...retryable);

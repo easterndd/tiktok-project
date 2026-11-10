@@ -1,5 +1,5 @@
 import type { AlbumDetail, EpisodeSummary, PlayInfo } from '@quickreels/shared-types';
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, RefreshCw, X } from 'lucide-react';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useBlocker, useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -19,6 +19,7 @@ import { t } from '../lib/i18n';
 import { getSessionToken, subscribeToSession, useLocale } from '../lib/storage';
 import { hasTikTokMinis } from '../lib/ttminis';
 import styles from './WatchPage.module.css';
+import { activateDebugPanel, debugPanelAvailable } from '../lib/debug-panel';
 
 export function WatchPage() {
   const { albumId = '', episodeId } = useParams();
@@ -34,6 +35,7 @@ export function WatchPage() {
   const [playbackActive, setPlaybackActive] = useState(false);
   const [transitionAdPending, setTransitionAdPending] = useState(false);
   const retentionSeen = useRef(false);
+  const debugTaps = useRef({ count: 0, lastAt: 0 });
   const playRequest = useRef({ episodeId, startedAt: performance.now() });
   if (playRequest.current.episodeId !== episodeId) playRequest.current = { episodeId, startedAt: performance.now() };
   const v005App = ['bloomreel', 'quillshort', 'amberplay', 'nimbusclip', 'runereel'].includes(appKey);
@@ -115,15 +117,13 @@ export function WatchPage() {
       void prepareRewardedUnlockSession(nextEpisode.id).catch(() => undefined);
     }
   }, [nextEpisode?.access, nextEpisode?.id]);
-  const preloadEpisodeIds = [episodeId, nextEpisode?.access === 'PLAYABLE' ? nextEpisode.id : undefined].filter((id): id is string => Boolean(id));
-  const preloadQueries = useQueries({
-    queries: preloadEpisodeIds.map((id) => ({
-      queryKey: ['play', id, locale],
-      queryFn: () => apiClient.get<PlayInfo>(`/episodes/${id}/play?locale=${encodeURIComponent(locale)}`),
-      enabled: Boolean(id)
-    }))
+  const nextPlayableId = nextEpisode?.access === 'PLAYABLE' ? nextEpisode.id : undefined;
+  const nextPlayInfo = useQuery({
+    queryKey: ['play', nextPlayableId, locale],
+    queryFn: () => apiClient.get<PlayInfo>(`/episodes/${nextPlayableId}/play?locale=${encodeURIComponent(locale)}`),
+    enabled: Boolean(nextPlayableId), staleTime: 30_000
   });
-  const playerPlaylist = preloadQueries.flatMap((query) => query.data ? [query.data] : []);
+  const playerPlaylist = [playInfo.data, nextPlayInfo.data].filter((item): item is PlayInfo => Boolean(item));
   const unlock = useMutation({
     mutationFn: async (episode: EpisodeSummary) => {
       const closedAt = await unlockEpisodeByRewardedAd(episode.id);
@@ -158,9 +158,9 @@ export function WatchPage() {
   }, [albumId, defaultEpisode, episodeId, navigate]);
 
   if (!entryAdReady) return <section className={styles.resolving}><LoadingState label="Preparing your next story" /></section>;
-  if ((album.isError || episodes.isError) && (!v005App || !playInfo.data)) return <section className={styles.resolving}><div className="state"><p>{t(locale, 'unavailable')}</p><button className={styles.retryButton} onClick={() => { void Promise.all([album.refetch(), episodes.refetch()]); }}>{t(locale, 'retry')}</button><Link to="/">{t(locale, 'back')}</Link></div></section>;
-  if ((album.isLoading || episodes.isLoading) && (!v005App || !playInfo.data)) return <section className={styles.resolving}><LoadingState label={t(locale, 'preparingEpisode')} /></section>;
-  if ((!album.data || !defaultEpisode) && (!v005App || !playInfo.data)) return <section className={styles.resolving}><div className="state"><p>{t(locale, 'unavailable')}</p><Link to="/">{t(locale, 'back')}</Link></div></section>;
+  if ((album.isError || episodes.isError) && (!(v005App || isV006Release(releaseId)) || !playInfo.data)) return <section className={styles.resolving}><div className="state"><p>{t(locale, 'unavailable')}</p><button className={styles.retryButton} onClick={() => { void Promise.all([album.refetch(), episodes.refetch()]); }}>{t(locale, 'retry')}</button><Link to="/">{t(locale, 'back')}</Link></div></section>;
+  if ((album.isLoading || episodes.isLoading) && (!(v005App || isV006Release(releaseId)) || !playInfo.data)) return <section className={styles.resolving}><LoadingState label={t(locale, 'preparingEpisode')} /></section>;
+  if ((!album.data || !defaultEpisode) && (!(v005App || isV006Release(releaseId)) || !playInfo.data)) return <section className={styles.resolving}><div className="state"><p>{t(locale, 'unavailable')}</p><Link to="/">{t(locale, 'back')}</Link></div></section>;
   if (!episodeId || playInfo.isLoading) return <section className={styles.resolving}><LoadingState label={t(locale, 'preparingEpisode')} /></section>;
 
   const detail = album.data;
@@ -245,7 +245,12 @@ export function WatchPage() {
     />
     <header className={styles.watchHeader}>
       <button className={styles.backButton} onClick={goBack} aria-label={t(locale, 'back')}><ArrowLeft size={20} aria-hidden="true" /></button>
-      <div className={styles.episodeLabel}><strong>{detail?.title ?? 'Now playing'}</strong><span>{currentEpisode ? `${v005App ? 'Episode' : t(locale, 'episode')} ${currentEpisode.episodeNo}` : ''}</span></div>
+      <button type="button" className={styles.episodeLabel} onClick={() => {
+        if (!debugPanelAvailable()) return;
+        const now = Date.now();
+        debugTaps.current = { count: now - debugTaps.current.lastAt <= 500 ? debugTaps.current.count + 1 : 1, lastAt: now };
+        if (debugTaps.current.count >= 5) { debugTaps.current = { count: 0, lastAt: 0 }; activateDebugPanel(); navigate('/debug'); }
+      }}><strong>{detail?.title ?? 'Now playing'}</strong><span>{currentEpisode ? `${v005App ? 'Episode' : t(locale, 'episode')} ${currentEpisode.episodeNo}` : ''}</span></button>
       <button className={styles.episodeSelect} onClick={() => setEpisodePickerOpen(true)} aria-label={t(locale, 'episodes')}><ChevronDown size={19} aria-hidden="true" /></button>
     </header>
     <div className={styles.playerMeta}>

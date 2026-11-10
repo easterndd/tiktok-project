@@ -1,4 +1,6 @@
 import type { AppEntryAdSession } from './app-entry-ad';
+import { getAdPlatform, isV006Release } from './ad-platform';
+import { selectAdPlacement } from './ad-placement-selection';
 
 type Playback = { clientEventId: string; isEnded: boolean; placementId?: string; adType?: 'REWARDED' | 'INTERSTITIAL' };
 type Progress = { shouldContinue: boolean; completedCount: number };
@@ -82,7 +84,7 @@ async function runEntryAdFlowInternal(session: AppEntryAdSession, actions: Entry
       const adIndex = completed + 1;
       playback = await actions.show({
         mode,
-        placementId,
+        placementId: selectAdPlacement(placementId, placementIds, adIndex, getAdPlatform(), isV006Release()),
         placementIds,
         adLoadMode,
         strategyVariant,

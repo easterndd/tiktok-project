@@ -5,8 +5,8 @@ import { appKey, appName } from '../lib/app-brand';
 import { clearDebugRecords, getDebugEnvironment, getDebugRecords, subscribeDebugRecords, type DebugRecord } from '../lib/analytics';
 import { debugErrorZh } from '../lib/debug-error-zh';
 import styles from './DebugPage.module.css';
+import { debugPanelAvailable } from '../lib/debug-panel';
 
-const debugEnabled = import.meta.env.VITE_DEBUG_PANEL === 'true';
 type View = 'network' | 'events' | 'console' | 'environment';
 type DetailTab = 'overview' | 'headers' | 'payload' | 'response' | 'timing' | 'raw';
 const eventLabels: Record<string, string> = {
@@ -126,7 +126,7 @@ export function DebugPage() {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => subscribeDebugRecords(() => setRecords(getDebugRecords())), []);
-  if (!debugEnabled) return <Navigate to="/" replace />;
+  if (!debugPanelAvailable()) return <Navigate to="/" replace />;
 
   const counts = {
     network: records.filter((record) => record.kind === 'request').length,
@@ -156,7 +156,7 @@ export function DebugPage() {
         <button type="button" onClick={() => setRecords(getDebugRecords())} title="刷新记录" aria-label="刷新记录"><RefreshCw size={17} /></button>
         <button type="button" onClick={() => void copyRecords()} title="复制全部脱敏记录" aria-label="复制全部脱敏记录"><Copy size={17} /></button>
         <button type="button" onClick={() => { clearDebugRecords(); setRecords([]); setSelectedId(null); }} title="清空记录" aria-label="清空记录"><Trash2 size={17} /></button>
-        <button type="button" onClick={() => navigate('/')} title="关闭调试台" aria-label="关闭调试台"><X size={18} /></button>
+        <button type="button" onClick={() => window.history.length > 1 ? navigate(-1) : navigate('/')} title="关闭调试台" aria-label="关闭调试台"><X size={18} /></button>
       </div>
     </header>
     <nav className={styles.mainTabs} role="tablist" aria-label="调试视图">

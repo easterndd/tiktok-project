@@ -1,11 +1,44 @@
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
 import { describe, it } from 'node:test';
-import { runEntryAdFlow } from '../src/features/ads/entry-ad-flow.ts';
+
+const hooks = registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL?.endsWith('/features/ads/entry-ad-flow.ts') && specifier === './ad-platform') {
+      return { url: 'data:text/javascript,export const getAdPlatform = () => globalThis.__entryFlowPlatform ?? "unknown"; export const isV006Release = () => globalThis.__entryFlowV006 ?? false;', shortCircuit: true };
+    }
+    if (context.parentURL?.includes('/features/ads/') && specifier.startsWith('./') && !/\.(?:ts|tsx|js)$/.test(specifier)) return next(`${specifier}.ts`, context);
+    return next(specifier, context);
+  }
+});
+const { runEntryAdFlow } = await import('../src/features/ads/entry-ad-flow.ts');
 
 const session = { required: true, sessionId: 'session', mode: 'REWARDED_GATED', placementId: 'placement', requiredCount: 3, completedCount: 0, onUnavailable: 'BLOCK' };
 const base = { refreshSession: async () => session, wait: async () => {}, isActive: () => true, onError: () => {} };
 
 describe('entry ad gate flow', () => {
+  it('rotates Android v0.0.6 impressions and keeps iOS on the primary', async () => {
+    const ids = ['primary', 'backup'];
+    const selected = [];
+    const actions = {
+      ...base,
+      show: async ({ placementId, adIndex }) => { selected.push(placementId); return { clientEventId: String(adIndex), isEnded: true }; },
+      complete: async (_sessionId, id) => ({ completedCount: Number(id), shouldContinue: id !== '3' })
+    };
+    try {
+      globalThis.__entryFlowPlatform = 'android';
+      globalThis.__entryFlowV006 = true;
+      await runEntryAdFlow({ ...session, sessionId: 'android-rotation', placementId: ids[0], placementIds: ids }, actions);
+      assert.deepEqual(selected, ['primary', 'backup', 'primary']);
+      selected.length = 0;
+      globalThis.__entryFlowPlatform = 'ios';
+      await runEntryAdFlow({ ...session, sessionId: 'ios-single', placementId: ids[0], placementIds: ids }, actions);
+      assert.deepEqual(selected, ['primary', 'primary', 'primary']);
+    } finally {
+      delete globalThis.__entryFlowPlatform;
+      delete globalThis.__entryFlowV006;
+    }
+  });
   it('forwards the display callback without advancing before server acknowledgement', async () => {
     const events = [];
     await runEntryAdFlow({ ...session, requiredCount: 2 }, {

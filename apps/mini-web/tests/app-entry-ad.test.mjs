@@ -17,7 +17,7 @@ const mocks = {
   '../../lib/launch-context': 'export const getMiniLaunchAdId = () => null;',
   '../../lib/diagnostics': 'export const reportDiagnostic = () => {}; export const reportPerformance = (...args) => globalThis.__entryAdTestPerformance(...args);',
   '../../lib/analytics': 'export const captureSdkCallback = (name, payload = null) => ({ name, payload, capturedAt: new Date().toISOString() }); export const nextAdSequence = () => 1; export const newAdOperationId = (kind, seq) => kind + "-" + seq + "-test"; export const recordAdClose = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "close", input }); export const recordAdConfig = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "config", input }); export const recordAdLoad = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "load", input }); export const recordAdLoadResult = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "load", input }); export const recordAdShow = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "show", input });',
-  './ad-platform': 'export const getAdPlatform = () => "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const getMiniReleaseId = () => "default"; export const isV006Release = () => false; export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;',
+  './ad-platform': 'export const getAdPlatform = () => globalThis.__entryAdTestPlatform ?? "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const getMiniReleaseId = () => globalThis.__entryAdTestRelease ?? "default"; export const isV006Release = (release = getMiniReleaseId()) => release.includes("-v006-"); export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;',
   './ad-placement-manifest': 'export const restrictToPublicManifest = (_type, ids) => [...ids];',
   './ad-error-policy': 'export const classifyAdFailure = (error, origin) => globalThis.__entryAdTestClassify?.(error, origin) ?? "STOP"; export const normalizeErrorOrigin = (error) => error?.adErrorOrigin ?? "UNKNOWN"; export const taggedAdFailure = (message, origin) => Object.assign(new Error(message), { adErrorOrigin: origin });',
   './ad-activity': 'export const claimNativeAd = () => () => {}; export const markRewardedAdClosed = () => {};'
@@ -33,13 +33,14 @@ const hooks = registerHooks({
 });
 const { showAppEntryAd, completeAppEntryAd } = await import('../src/features/ads/app-entry-ad.ts');
 const previousWindow = globalThis.window;
-after(() => { hooks.deregister(); globalThis.window = previousWindow; delete globalThis.__entryAdTestPost; delete globalThis.__entryAdTestPerformance; delete globalThis.__entryAdTestAnalytics; delete globalThis.__entryAdApiError; delete globalThis.__entryAdTestClassify; });
+after(() => { hooks.deregister(); globalThis.window = previousWindow; delete globalThis.__entryAdTestPost; delete globalThis.__entryAdTestPerformance; delete globalThis.__entryAdTestAnalytics; delete globalThis.__entryAdApiError; delete globalThis.__entryAdTestClassify; delete globalThis.__entryAdTestPlatform; delete globalThis.__entryAdTestRelease; });
 
 function setup() {
   analyticsEvents.length = 0;
   const ads = [];
-  const create = () => {
+  const create = ({ adUnitId } = {}) => {
     const ad = {
+      unit: adUnitId,
       close: undefined, error: undefined, shows: 0,
       show: async () => { ad.shows++; },
       onClose: (callback) => { ad.close = callback; },
@@ -92,6 +93,36 @@ it('does not send REQUESTED and overlaps SHOWN with completion', async () => {
   acknowledgeShown();
   await completion;
   assert.equal(requests.filter(({ path }) => path.endsWith('/complete')).length, 2);
+});
+
+it('uses alternate authorized placements for Android entry ads and only the primary on iOS', async () => {
+  globalThis.__entryAdTestRelease = 'heartreel-v006-test';
+  const ads = setup();
+  const shown = [];
+  post = async () => ({ accepted: true });
+  try {
+    globalThis.__entryAdTestPlatform = 'android';
+    for (let index = 1; index <= 2; index++) {
+      const playback = showAppEntryAd({ ...input, sessionId: 'entry-rotation', placementId: 'primary-test', placementIds: ['primary-test', 'backup-test'], adIndex: index });
+      await flush();
+      const active = ads.find((ad) => ad.shows === 1 && typeof ad.close === 'function');
+      assert.ok(active);
+      shown.push(active.unit);
+      active.close({ isEnded: true });
+      await playback;
+    }
+    assert.deepEqual(shown, ['primary-test', 'backup-test']);
+    globalThis.__entryAdTestPlatform = 'ios';
+    const iosPlayback = showAppEntryAd({ ...input, sessionId: 'entry-ios', placementId: 'primary-test', placementIds: ['primary-test', 'backup-test'], adIndex: 2 });
+    await flush();
+    const iosActive = ads.find((ad) => ad.shows === 1 && typeof ad.close === 'function');
+    assert.equal(iosActive?.unit, 'primary-test');
+    iosActive.close({ isEnded: true });
+    await iosPlayback;
+  } finally {
+    delete globalThis.__entryAdTestPlatform;
+    delete globalThis.__entryAdTestRelease;
+  }
 });
 
 it('retries the same SHOWN ID and prewarms the next ad instance', async () => {
@@ -175,6 +206,7 @@ it('separates rejected SDK show from a failed display acknowledgement', async ()
 });
 
 it('uses the authorized backup once after a no-fill SDK rejection', async () => {
+  globalThis.__entryAdTestPlatform = 'android';
   const ads = setup();
   globalThis.window.setTimeout = (callback) => setTimeout(callback, 0);
   globalThis.__entryAdTestClassify = (error, origin) => origin === 'SDK_PROMISE' && /NO_FILL/.test(error.message) ? 'TRY_BACKUP_ONCE' : 'STOP';
@@ -200,5 +232,6 @@ it('uses the authorized backup once after a no-fill SDK rejection', async () => 
     assert.equal(analyticsEvents.find(({ kind, input }) => kind === 'show' && input.placementId === 'backup-test')?.input.attemptNo, 2);
   } finally {
     delete globalThis.__entryAdTestClassify;
+    delete globalThis.__entryAdTestPlatform;
   }
 });

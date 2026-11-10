@@ -7,6 +7,7 @@ import { WatchPage } from '../pages/WatchPage';
 import { ProfilePage } from '../pages/ProfilePage';
 import { DebugPage } from '../pages/DebugPage';
 import { App } from './App';
+import { debugPanelAvailable } from '../lib/debug-panel';
 
 export const router = createBrowserRouter([{ path: '/', element: <App />, children: [
   { index: true, element: <HomePage /> },
@@ -18,5 +19,5 @@ export const router = createBrowserRouter([{ path: '/', element: <App />, childr
   { path: 'watch/:albumId/:episodeId', element: <WatchPage /> },
   { path: 'privacy', element: <LegalPage type="privacy" /> },
   { path: 'terms', element: <LegalPage type="terms" /> },
-  ...(import.meta.env.VITE_DEBUG_PANEL === 'true' ? [{ path: 'debug', element: <DebugPage /> }] : [])
+  ...(debugPanelAvailable() ? [{ path: 'debug', element: <DebugPage /> }] : [])
 ] }]);

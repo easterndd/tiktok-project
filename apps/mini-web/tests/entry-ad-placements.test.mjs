@@ -7,11 +7,14 @@ const hooks = registerHooks({
     if (context.parentURL?.endsWith('/features/ads/entry-ad-placements.ts') && specifier === '../../lib/app-brand') {
       return { url: `data:text/javascript,${encodeURIComponent('export const storagePrefix = "entry-ad-test";')}`, shortCircuit: true };
     }
+    if (context.parentURL?.endsWith('/features/ads/entry-ad-placements.ts') && specifier === './ad-platform') {
+      return { url: `data:text/javascript,${encodeURIComponent('export const isV006Release = (release) => release.includes("-v006-"); export const getMiniReleaseId = () => "default";')}`, shortCircuit: true };
+    }
     return next(specifier, context);
   }
 });
 
-const { chooseEntryAdPlacement, markEntryAdPlacementAccepted, parseEntryAdPlacementIds } = await import('../src/features/ads/entry-ad-placements.ts');
+const { chooseEntryAdPlacement, markEntryAdPlacementAccepted, parseEntryAdPlacementIds, selectLocalEntryAdPlacementIds } = await import('../src/features/ads/entry-ad-placements.ts');
 after(() => hooks.deregister());
 
 it('accepts exactly two distinct TikTok rewarded placement IDs', () => {
@@ -19,6 +22,12 @@ it('accepts exactly two distinct TikTok rewarded placement IDs', () => {
   assert.deepEqual(parseEntryAdPlacementIds('ad123'), []);
   assert.deepEqual(parseEntryAdPlacementIds('ad123,ad123'), []);
   assert.deepEqual(parseEntryAdPlacementIds('ad123, invalid'), []);
+});
+
+it('uses the server-authorized entry path for v0.0.6 on every platform', () => {
+  const value = 'ad123,ad456';
+  assert.deepEqual(selectLocalEntryAdPlacementIds(value, 'heartreel-v006-test'), []);
+  assert.deepEqual(selectLocalEntryAdPlacementIds(value, 'heartreel-v005-test'), ['ad123', 'ad456']);
 });
 
 it('alternates placement IDs across accepted entry impressions', () => {

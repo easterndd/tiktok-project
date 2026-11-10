@@ -1,5 +1,5 @@
 import { appKey } from '../../lib/app-brand';
-import { isV006Release } from './ad-platform';
+import { getAdPlatform, isV006Release } from './ad-platform';
 
 export type AdPlacementType = 'REWARDED' | 'INTERSTITIAL';
 
@@ -26,7 +26,8 @@ export function getPublicAdPlacementIds(type: AdPlacementType) {
 export function restrictToPublicManifest(type: AdPlacementType, serverAllowedIds: string[]) {
   const publicIds = getPublicAdPlacementIds(type);
   if (!publicIds.length) return isV006Release() ? [] : [...new Set(serverAllowedIds)];
-  return serverAllowedIds.filter((id) => publicIds.includes(id));
+  const allowed = serverAllowedIds.filter((id) => publicIds.includes(id));
+  return isV006Release() && getAdPlatform() !== 'android' ? allowed.filter((id) => id === publicIds[0]) : allowed;
 }
 
 export function validatePublicManifestIds(value: unknown) {

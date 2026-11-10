@@ -11,7 +11,7 @@ const hooks = registerHooks({
       if (specifier === '../../lib/analytics') return { url: 'data:text/javascript,export const captureSdkCallback = (name, payload = null) => ({ name, payload, capturedAt: new Date().toISOString() }); export const nextAdSequence = () => 1; export const newAdOperationId = (kind, seq) => kind + "-" + seq + "-test"; export const recordAdClose = () => {}; export const recordAdLoad = () => {}; export const recordAdLoadResult = () => {}; export const recordAdShow = (input) => globalThis.__interstitialAnalytics.push(input);', shortCircuit: true };
     }
     if (context.parentURL?.includes('/features/ads/')) {
-      if (specifier === './ad-platform') return { url: 'data:text/javascript,export const getAdPlatform = () => "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;', shortCircuit: true };
+      if (specifier === './ad-platform') return { url: 'data:text/javascript,export const getAdPlatform = () => "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const isV006Release = () => false; export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;', shortCircuit: true };
       if (specifier.startsWith('./') && !/\.(?:ts|tsx|js)$/.test(specifier)) return next(`${specifier}.ts`, context);
     }
     return next(specifier, context);

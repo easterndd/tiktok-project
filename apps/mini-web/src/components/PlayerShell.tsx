@@ -170,7 +170,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     const autoplay = createPlayerAutoplay(
       () => detailedPlayback && (adInterruptionRef.current || nativeAdActive() || !isMiniPageVisible()) ? undefined : instance?.player,
       markPlaybackStarted,
-      () => { if (!disposed) setShowPlayFallback(true); }
+      () => { if (!disposed) { setPlayerStarting(false); setShowPlayFallback(true); } }
     );
     const attemptPlay = () => {
       if (!disposed && (!detailedPlayback || !adInterruptionRef.current && !nativeAdActive() && isMiniPageVisible())) autoplay.attempt();
@@ -272,6 +272,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
         return;
       }
       wasPlaying = true;
+      setPlayerStarting(false);
       setShowPlayFallback(false);
       if (observePlayback && firstFrameRecorded) { resumeFromSeek(); setActive(true); }
     };
@@ -279,6 +280,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     const onCanPlay = () => { if (observePlayback) reportPerformance('PLAYER_CANPLAY', `/episodes/${playInfo.localEpisodeId}`, performance.now() - startedAt); };
     const onReady = () => {
       reportPlaybackQuality('PLAYER_READY', 'READY', { startupMs: Math.max(0, Math.round(performance.now() - (requestStartedAt ?? startedAt))) });
+      setPlayerStarting(false);
       attemptPlay();
       requestResume();
     };
@@ -399,12 +401,16 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
         if (events.PLAYING) instance.on(events.PLAYING, onPlaying);
         if (events.LOADED_DATA) instance.on(events.LOADED_DATA, onLoadedData);
         if (events.CANPLAY) instance.on(events.CANPLAY, onCanPlay);
+        setPlayerStarting(false);
         attemptPlay();
         // READY can fire before start/playNext resolves; keep checking for the async kernel.
         playReadyTimer = window.setInterval(attemptPlay, 100);
         playFallbackTimer = window.setTimeout(() => {
           window.clearInterval(playReadyTimer);
-          if (!firstFrameRecorded && !disposed && !adInterruptionRef.current && !nativeAdActive()) setShowPlayFallback(true);
+          if (!firstFrameRecorded && !disposed && !adInterruptionRef.current && !nativeAdActive() && currentPlayer()?.paused !== false) {
+            setPlayerStarting(false);
+            setShowPlayFallback(true);
+          }
         }, 4_000);
       } catch (error) {
         if (disposed) return;

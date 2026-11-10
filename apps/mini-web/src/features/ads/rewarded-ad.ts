@@ -2,12 +2,13 @@ import { ApiError, apiClient } from '../../lib/api-client';
 import { isDemoMode } from '../../lib/storage';
 import { reportDiagnostic, reportPerformance } from '../../lib/diagnostics';
 import { adTimeout, adErrorMessage } from './ad-timeout';
-import { adLoadCallback, adLoadDurationMs, adLoadSupported, getRewardedAd, prewarmRewardedAd, releaseRewardedAd, waitForAdReady } from './ad-instance-cache';
+import { adLoadCallback, adLoadDurationMs, adLoadSupported, getRewardedAd, prewarmRewardedAd, prewarmRewardedPlacements, releaseRewardedAd, waitForAdReady } from './ad-instance-cache';
 import { claimNativeAd, markRewardedAdClosed } from './ad-activity';
 import { captureSdkCallback, newAdOperationId, nextAdSequence, recordAdClose, recordAdLoad, recordAdLoadResult, recordAdShow } from '../../lib/analytics';
 import { getAdPlatform, getDefaultAdLoadMode, getMiniReleaseId, isV006Release } from './ad-platform';
 import { classifyAdFailure, normalizeErrorOrigin, taggedAdFailure, type AdErrorOrigin } from './ad-error-policy';
 import { restrictToPublicManifest } from './ad-placement-manifest';
+import { selectAdPlacement } from './ad-placement-selection';
 
 const clientEventId = () => typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `client-${Date.now()}`;
 
@@ -53,7 +54,7 @@ export function prepareRewardedUnlockSession(episodeId: string, options: RewardO
       if (!session.placementIds.includes(session.placementId)) throw new Error('AD_PLACEMENT_CONFIGURATION_MISMATCH');
       session.adLoadMode ??= getDefaultAdLoadMode();
       session.strategyVariant ??= 'CONTROL';
-      prewarmRewardedAd(session.placementId, 1, session.adLoadMode);
+      prewarmRewardedPlacements(session.placementIds, session.adLoadMode);
       if (rewardSessions.get(key) === entry) {
         rewardSessions.set(key, { promise: Promise.resolve(session), expiresAt: entry.expiresAt });
       }
@@ -107,12 +108,12 @@ async function recordAdEvent(input: { clientEventId: string; eventType: 'SHOWN' 
   }
 }
 
-async function showOneRewardedAd(input: { adUnitId: string; placementIds: string[]; adLoadMode: 'DIRECT_SHOW' | 'EXPLICIT_LOAD'; strategyVariant: string; episodeId: string; sessionId: string; adIndex: number; rewardEventId: string; scope: RewardPurpose; previousClosedAt?: number }) {
+async function showOneRewardedAd(input: { adUnitId: string; placementIds: string[]; attemptNo?: number; requiredCount?: number; adLoadMode: 'DIRECT_SHOW' | 'EXPLICIT_LOAD'; strategyVariant: string; episodeId: string; sessionId: string; adIndex: number; rewardEventId: string; scope: RewardPurpose; previousClosedAt?: number }) {
   const { adUnitId, placementIds, adLoadMode, strategyVariant, episodeId, sessionId, adIndex, rewardEventId, scope, previousClosedAt } = input;
   const adSeq = nextAdSequence();
   const operationId = newAdOperationId('reward', adSeq);
   const placementRole = adUnitId === placementIds[0] ? 'PRIMARY' : 'BACKUP';
-  const attemptNo = placementRole === 'BACKUP' ? 2 : 1;
+  const attemptNo = input.attemptNo ?? 1;
   const releaseActivity = claimNativeAd('rewarded');
   if (!releaseActivity) throw new Error('AD_BUSY');
   let ad;
@@ -126,6 +127,7 @@ async function showOneRewardedAd(input: { adUnitId: string; placementIds: string
     const message = error instanceof Error ? error.message : String(error);
     const callback = ad ? (adLoadCallback(ad) ?? captureSdkCallback('load.wait.reject', error)) : captureSdkCallback('load.create.reject', error);
     recordAdLoad({ adSeq, adType: 'REWARDED', placementId: adUnitId, result: /timeout|abort/i.test(message) ? 'timeout' : 'fail', durationMs: ad ? adLoadDurationMs(ad, performance.now() - loadStartedAt) : performance.now() - loadStartedAt, error, callback, operationId, attemptNo, adPhase: 'LOAD', strategyVariant, placementRole, errorOrigin: normalizeErrorOrigin(error, callback.name === 'onError' ? 'onError' : 'load.reject') });
+    if (ad) releaseRewardedAd(adUnitId, ad);
     releaseActivity();
     reportDiagnostic({ kind: 'AD', phase: 'REWARDED_CREATE', message, path: `/episodes/${episodeId}` });
     throw error;
@@ -157,7 +159,7 @@ async function showOneRewardedAd(input: { adUnitId: string; placementIds: string
       if (!settled) {
         cleanup();
         release();
-        prewarmRewardedAd(adUnitId, 1, adLoadMode);
+        prewarmRewardedPlacements(placementIds, adLoadMode);
       }
       if (!isEnded) {
         void recordAdEvent({ clientEventId: `${rewardEventId}:incomplete`, eventType: 'CLOSED_INCOMPLETE', placementId: adUnitId, episodeId, sessionId, adIndex, scope });
@@ -189,6 +191,10 @@ async function showOneRewardedAd(input: { adUnitId: string; placementIds: string
       timeout.shown();
       shownAt = performance.now();
       recordAdShow({ adSeq, adType: 'REWARDED', placementId: adUnitId, result: 'success', durationMs: performance.now() - showStartedAt, callback: captureSdkCallback('show.resolve'), operationId, attemptNo, adPhase: 'SHOW', strategyVariant, placementRole });
+      if (getAdPlatform() === 'android' && isV006Release() && adIndex < (input.requiredCount ?? adIndex)) {
+        const nextId = selectAdPlacement(placementIds[0], placementIds, adIndex + 1, 'android', true);
+        if (nextId !== adUnitId) prewarmRewardedAd(nextId, 1, adLoadMode);
+      }
       reportPerformance('REWARDED_AD_SHOW_ACCEPTED', '/native-ads/rewarded', performance.now() - showStartedAt, { adIndex });
       if (previousClosedAt !== undefined) reportPerformance('REWARDED_CLOSE_TO_NEXT_AD_SHOW_ACCEPTED', '/native-ads/rewarded', performance.timeOrigin + performance.now() - previousClosedAt, { adIndex });
       return recordAdEvent({ clientEventId: rewardEventId, eventType: 'SHOWN', placementId: adUnitId, episodeId, sessionId, adIndex, scope }, true);
@@ -234,23 +240,24 @@ export async function unlockEpisodeByRewardedAd(episodeId: string, options: Rewa
   if (!allowedPlacementIds.includes(session.placementId)) throw new Error('AD_PLACEMENT_CONFIGURATION_MISMATCH');
   const adLoadMode = session.adLoadMode ?? getDefaultAdLoadMode();
   const strategyVariant = session.strategyVariant ?? 'CONTROL';
-  const canTryBackup = isV006Release(releaseId) && allowedPlacementIds.length > 1;
-  prewarmRewardedAd(session.placementId, 1, adLoadMode);
+  const canTryBackup = isV006Release(releaseId) && getAdPlatform() === 'android' && allowedPlacementIds.length > 1;
+  let adIndex = (session.completedCount ?? 0) + 1;
+  prewarmRewardedPlacements(allowedPlacementIds, adLoadMode);
 
   let shouldContinue = true;
-  let adIndex = (session.completedCount ?? 0) + 1;
   let previousClosedAt: number | undefined;
   while (shouldContinue) {
     let eventId = clientEventId();
     let closedAt: number;
+    const selectedId = selectAdPlacement(session.placementId, allowedPlacementIds, adIndex, getAdPlatform(), isV006Release(releaseId));
     try {
-      closedAt = await showOneRewardedAd({ adUnitId: session.placementId, placementIds: allowedPlacementIds, adLoadMode, strategyVariant, episodeId, sessionId: session.sessionId, adIndex, rewardEventId: eventId, scope: options.purpose ?? 'EPISODE_UNLOCK', previousClosedAt });
+      closedAt = await showOneRewardedAd({ adUnitId: selectedId, placementIds: allowedPlacementIds, requiredCount: session.requiredCount, adLoadMode, strategyVariant, episodeId, sessionId: session.sessionId, adIndex, rewardEventId: eventId, scope: options.purpose ?? 'EPISODE_UNLOCK', previousClosedAt });
     } catch (error) {
-      const backup = allowedPlacementIds.find((id) => id !== session.placementId);
+      const backup = allowedPlacementIds.find((id) => id !== selectedId);
       if (!canTryBackup || !backup || classifyAdFailure(error, normalizeErrorOrigin(error)) !== 'TRY_BACKUP_ONCE') throw error;
       await new Promise((resolve) => window.setTimeout(resolve, 650));
       eventId = clientEventId();
-      closedAt = await showOneRewardedAd({ adUnitId: backup, placementIds: allowedPlacementIds, adLoadMode, strategyVariant, episodeId, sessionId: session.sessionId, adIndex, rewardEventId: eventId, scope: options.purpose ?? 'EPISODE_UNLOCK', previousClosedAt });
+      closedAt = await showOneRewardedAd({ adUnitId: backup, placementIds: allowedPlacementIds, attemptNo: 2, requiredCount: session.requiredCount, adLoadMode, strategyVariant, episodeId, sessionId: session.sessionId, adIndex, rewardEventId: eventId, scope: options.purpose ?? 'EPISODE_UNLOCK', previousClosedAt });
     }
     const result = await completeReward(episodeId, session.sessionId, eventId);
     shouldContinue = result.shouldContinue;

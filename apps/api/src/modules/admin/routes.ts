@@ -250,6 +250,7 @@ const adPlacementPairInput = z.object({
   iosExperimentPercent: z.number().int().min(0).max(100).default(0)
 }).refine((value) => value.backupPlacementId !== value.primaryPlacementId, { path: ['backupPlacementId'], message: '主广告位和备用广告位不能相同。' })
   .refine((value) => value.releaseId === '*' || isV006Release(value.releaseId), { path: ['releaseId'], message: '广告位配对只能用于 v0.0.6 release 或通用备用模板。' })
+  .refine((value) => !/(?:^|-)v006-dual(?:-|$)/i.test(value.releaseId), { path: ['releaseId'], message: 'v0.0.6 双广告位新包由前端清单选择广告位，不使用后台配对开关。' })
   .refine((value) => value.iosExperimentPercent === 0 || value.iosLoadMode === 'DIRECT_SHOW', { path: ['iosExperimentPercent'], message: 'iOS 对照实验需要启用 DIRECT_SHOW 实验组。' });
 const codeReleaseParams = z.object({ releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/) });
 const codeReleaseInput = z.object({

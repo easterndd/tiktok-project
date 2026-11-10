@@ -54,7 +54,38 @@ it('caches only the pair lookup and invalidates it after an admin change', async
   assert.equal(lookups, 1);
   invalidateAdPlacementPolicyCache(app);
   const updated = await resolveAdPlacementPolicy(app, input);
-  assert.deepEqual(updated.placementIds, [primary, backup]);
+  assert.deepEqual(updated.placementIds, [primary]);
   assert.equal(updated.adLoadMode, 'DIRECT_SHOW');
   assert.equal(lookups, 2);
+  const android = await resolveAdPlacementPolicy(app, { ...input, platform: 'android' });
+  assert.deepEqual(android.placementIds, [primary, backup]);
+  const unknown = await resolveAdPlacementPolicy(app, { ...input, platform: 'unknown' });
+  assert.deepEqual(unknown.placementIds, [primary]);
+});
+
+it('authorizes the new client-managed pair without a database switch and preserves old releases', async () => {
+  const app = {
+    config: { MINI_APP_KEY: 'heartreel', TIKTOK_APP_ID: appId },
+    prisma: { adPlacementPair: { findUnique: () => { throw new Error('new release must not query pairs'); } } }
+  } as unknown as FastifyInstance;
+  for (const platform of ['android', 'ios', 'unknown'] as const) {
+    const policy = await resolveAdPlacementPolicy(app, {
+      releaseId: 'heartreel-v006-dual-test', adType: 'REWARDED', primaryPlacementId: primary, platform
+    });
+    assert.deepEqual(policy.placementIds, [primary, backup]);
+    assert.equal(policy.adLoadMode, 'EXPLICIT_LOAD');
+    assert.equal(policy.strategyVariant, platform === 'android' ? 'ANDROID_DUAL_CLIENT' : platform === 'ios' ? 'IOS_SINGLE_CLIENT' : 'SINGLE_CLIENT');
+  }
+  const mismatched = await resolveAdPlacementPolicy(app, {
+    releaseId: 'sweetreel-v006-dual-test', adType: 'REWARDED', primaryPlacementId: primary, platform: 'android'
+  });
+  assert.deepEqual(mismatched.placementIds, [primary]);
+  const wrongPrimary = await resolveAdPlacementPolicy(app, {
+    releaseId: 'heartreel-v006-dual-test', adType: 'REWARDED', primaryPlacementId: backup, platform: 'android'
+  });
+  assert.deepEqual(wrongPrimary.placementIds, [backup]);
+  const wrongAppId = { ...app, config: { MINI_APP_KEY: 'heartreel', TIKTOK_APP_ID: 'wrong' } } as FastifyInstance;
+  assert.deepEqual((await resolveAdPlacementPolicy(wrongAppId, {
+    releaseId: 'heartreel-v006-dual-test', adType: 'REWARDED', primaryPlacementId: primary, platform: 'android'
+  })).placementIds, [primary]);
 });

@@ -1,10 +1,11 @@
-import { adLoadCallback, adLoadDurationMs, adLoadSupported, getInterstitialAd, prewarmInterstitialAd, releaseInterstitialAd, waitForAdReady } from './ad-instance-cache';
+import { adLoadCallback, adLoadDurationMs, adLoadSupported, getInterstitialAd, prewarmInterstitialAd, prewarmInterstitialPlacements, releaseInterstitialAd, waitForAdReady } from './ad-instance-cache';
 import { claimNativeAd, nativeAdActive, rewardedEndedRecently } from './ad-activity';
 import { adErrorMessage } from './ad-timeout';
 import { reportDiagnostic, reportPerformance } from '../../lib/diagnostics';
 import { captureSdkCallback, newAdOperationId, nextAdSequence, recordAdClose, recordAdLoad, recordAdLoadResult, recordAdShow } from '../../lib/analytics';
-import { getDefaultAdLoadMode, isMiniPageVisible, type AdLoadMode } from './ad-platform';
+import { getAdPlatform, getDefaultAdLoadMode, isMiniPageVisible, isV006Release, type AdLoadMode } from './ad-platform';
 import { classifyAdFailure, normalizeErrorOrigin, taggedAdFailure, type AdErrorOrigin } from './ad-error-policy';
+import { selectAdPlacement } from './ad-placement-selection';
 
 let transitionCount = 0;
 let shownCount = 0;
@@ -65,7 +66,7 @@ function frequencyAllows(now = Date.now()) {
 }
 
 export function prepareEpisodeInterstitial(placementId: string | null | undefined) {
-  if (placementId) prewarmInterstitialAd(placementId, 1, activePlacementPolicy.adLoadMode);
+  if (placementId) prewarmInterstitialPlacements(activePlacementPolicy.placementIds.length ? activePlacementPolicy.placementIds : [placementId], activePlacementPolicy.adLoadMode);
 }
 
 export async function showEpisodeTimedInterstitial(placementId: string | null | undefined): Promise<number | undefined> {
@@ -133,21 +134,22 @@ export async function showEpisodeTransitionInterstitial(placementId: string | nu
 }
 
 async function showInterstitial(placementId: string): Promise<number | undefined> {
+  prewarmInterstitialPlacements(activePlacementPolicy.placementIds.length ? activePlacementPolicy.placementIds : [placementId], activePlacementPolicy.adLoadMode);
+  const selectedId = selectAdPlacement(placementId, activePlacementPolicy.placementIds, shownCount + 1, getAdPlatform(), isV006Release());
   try {
-    return await showInterstitialOnce(placementId);
+    return await showInterstitialOnce(selectedId);
   } catch (error) {
-    const backup = activePlacementPolicy.placementIds.find((id) => id !== placementId);
-    if (!backup || classifyAdFailure(error, normalizeErrorOrigin(error)) !== 'TRY_BACKUP_ONCE') throw error;
+    const backup = activePlacementPolicy.placementIds.find((id) => id !== selectedId);
+    if (getAdPlatform() !== 'android' || !backup || classifyAdFailure(error, normalizeErrorOrigin(error)) !== 'TRY_BACKUP_ONCE') throw error;
     await new Promise((resolve) => window.setTimeout(resolve, 650));
-    return showInterstitialOnce(backup);
+    return showInterstitialOnce(backup, 2);
   }
 }
 
-async function showInterstitialOnce(placementId: string): Promise<number | undefined> {
+async function showInterstitialOnce(placementId: string, attemptNo = 1): Promise<number | undefined> {
   const adSeq = nextAdSequence();
   const operationId = newAdOperationId('interstitial', adSeq);
   const placementRole = placementId === activePlacementPolicy.placementIds[0] ? 'PRIMARY' : 'BACKUP';
-  const attemptNo = placementRole === 'BACKUP' ? 2 : 1;
   let supported = false;
   try { supported = Boolean(window.TTMinis?.canIUse('createInterstitialAd')); } catch { /* Unsupported runtime. */ }
   if (!supported) {
@@ -195,7 +197,11 @@ async function showInterstitialOnce(placementId: string): Promise<number | undef
         reportDiagnostic({ kind: 'AD', phase: 'EPISODE_INTERSTITIAL_SHOW', message });
       }
       if (error) recordTimedFailure(error);
-      else { failedTimedAttempts = 0; if (continuousMode) lastShownAt = Date.now(); prewarmInterstitialAd(placementId, 1, activePlacementPolicy.adLoadMode); }
+      else {
+        failedTimedAttempts = 0;
+        if (continuousMode) lastShownAt = Date.now();
+        prewarmInterstitialPlacements(activePlacementPolicy.placementIds.length ? activePlacementPolicy.placementIds : [placementId], activePlacementPolicy.adLoadMode);
+      }
       if (error) reject(taggedAdFailure(adErrorMessage(error), origin));
       else resolve(closedAt);
     };
@@ -217,6 +223,10 @@ async function showInterstitialOnce(placementId: string): Promise<number | undef
         recordAdShow({ adSeq, adType: 'INTERSTITIAL', placementId, result: 'success', durationMs: performance.now() - showStartedAt, callback: captureSdkCallback('show.resolve'), operationId, attemptNo, adPhase: 'SHOW', strategyVariant: activePlacementPolicy.strategyVariant, placementRole });
         reportPerformance('EPISODE_INTERSTITIAL_SHOW_ACCEPTED', '/native-ads/interstitial', performance.now() - showStartedAt);
         shownCount += 1;
+        if (getAdPlatform() === 'android' && isV006Release() && shownCount < activePolicy.maxPerSession) {
+          const nextId = selectAdPlacement(activePlacementPolicy.placementIds[0] ?? placementId, activePlacementPolicy.placementIds, shownCount + 1, 'android', true);
+          if (nextId !== placementId) prewarmInterstitialAd(nextId, 1, activePlacementPolicy.adLoadMode);
+        }
         if (!continuousMode) lastShownAt = Date.now();
         if (closed) finish();
       }, (error) => finish(error, 'SDK_PROMISE'));
