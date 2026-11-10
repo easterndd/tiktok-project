@@ -6,7 +6,8 @@ import { loadEnv } from '../config/env';
 export const requiredV006Migrations = [
   '20261106090000_client_analytics_event',
   '20261107090000_preserve_episode_interstitial_default',
-  '20261109090000_v006_ads_player_observability'
+  '20261109090000_v006_ads_player_observability',
+  '20261110090000_v006_analytics_indexes'
 ] as const;
 
 const requiredColumns: Record<string, readonly string[]> = {
@@ -79,8 +80,13 @@ async function inspectDatabase(databaseUrl: string): Promise<V006SchemaSnapshot>
         AND table_name IN ('AdPlacementPair', 'RewardedUnlockSession', 'AppEntryAdSession', 'AppEntryAdPolicy', 'ClientAnalyticsEvent', 'PlaybackQualityEvent')
     `;
     const indexes = await client.$queryRaw<Array<{ indexname: string }>>`
-      SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()
-        AND indexname IN (
+      SELECT index_class.relname AS indexname
+      FROM pg_index index_data
+      JOIN pg_class index_class ON index_class.oid = index_data.indexrelid
+      JOIN pg_namespace index_schema ON index_schema.oid = index_class.relnamespace
+      WHERE index_schema.nspname = current_schema()
+        AND index_data.indisvalid AND index_data.indisready
+        AND index_class.relname IN (
           'AdPlacementPair_releaseId_adType_primaryPlacementId_key',
           'ClientAnalyticsEvent_miniAppKey_operationId_idx',
           'ClientAnalyticsEvent_release_os_event_idx',

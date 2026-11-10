@@ -1,0 +1,37 @@
+\set ON_ERROR_STOP on
+SET lock_timeout = '5s';
+SET statement_timeout = '45min';
+
+SELECT format('DROP INDEX CONCURRENTLY IF EXISTS %I.%I;', index_schema.nspname, index_class.relname)
+FROM pg_index index_data
+JOIN pg_class index_class ON index_class.oid = index_data.indexrelid
+JOIN pg_namespace index_schema ON index_schema.oid = index_class.relnamespace
+WHERE index_schema.nspname IN ('public', 'dramaflicks', 'heartreel', 'sweetreel', 'luxereel')
+  AND index_class.relname IN ('ClientAnalyticsEvent_miniAppKey_operationId_idx', 'ClientAnalyticsEvent_release_os_event_idx')
+  AND NOT (index_data.indisvalid AND index_data.indisready)
+\gexec
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "ClientAnalyticsEvent_miniAppKey_operationId_idx"
+  ON public."ClientAnalyticsEvent"("miniAppKey", "operationId");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "ClientAnalyticsEvent_release_os_event_idx"
+  ON public."ClientAnalyticsEvent"("miniAppKey", "releaseId", "platform", "eventKey", "receivedAt");
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "ClientAnalyticsEvent_miniAppKey_operationId_idx"
+  ON dramaflicks."ClientAnalyticsEvent"("miniAppKey", "operationId");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "ClientAnalyticsEvent_release_os_event_idx"
+  ON dramaflicks."ClientAnalyticsEvent"("miniAppKey", "releaseId", "platform", "eventKey", "receivedAt");
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "ClientAnalyticsEvent_miniAppKey_operationId_idx"
+  ON heartreel."ClientAnalyticsEvent"("miniAppKey", "operationId");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "ClientAnalyticsEvent_release_os_event_idx"
+  ON heartreel."ClientAnalyticsEvent"("miniAppKey", "releaseId", "platform", "eventKey", "receivedAt");
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "ClientAnalyticsEvent_miniAppKey_operationId_idx"
+  ON sweetreel."ClientAnalyticsEvent"("miniAppKey", "operationId");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "ClientAnalyticsEvent_release_os_event_idx"
+  ON sweetreel."ClientAnalyticsEvent"("miniAppKey", "releaseId", "platform", "eventKey", "receivedAt");
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "ClientAnalyticsEvent_miniAppKey_operationId_idx"
+  ON luxereel."ClientAnalyticsEvent"("miniAppKey", "operationId");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "ClientAnalyticsEvent_release_os_event_idx"
+  ON luxereel."ClientAnalyticsEvent"("miniAppKey", "releaseId", "platform", "eventKey", "receivedAt");
