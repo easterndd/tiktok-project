@@ -42,9 +42,9 @@ ALTER TABLE "ClientAnalyticsEvent"
   ADD COLUMN "errorOrigin" TEXT,
   ADD COLUMN "strategyVariant" TEXT,
   ADD COLUMN "placementRole" TEXT;
-CREATE INDEX "ClientAnalyticsEvent_miniAppKey_operationId_idx"
+CREATE INDEX CONCURRENTLY "ClientAnalyticsEvent_miniAppKey_operationId_idx"
   ON "ClientAnalyticsEvent"("miniAppKey", "operationId");
-CREATE INDEX "ClientAnalyticsEvent_release_os_event_idx"
+CREATE INDEX CONCURRENTLY "ClientAnalyticsEvent_release_os_event_idx"
   ON "ClientAnalyticsEvent"("miniAppKey", "releaseId", "platform", "eventKey", "receivedAt");
 
 ALTER TABLE "PlaybackQualityEvent"
