@@ -41,6 +41,7 @@ enum UploadStatus {
 enum UploadSourceType {
   URL
   FILE
+  REPLACEMENT
 }
 
 enum CoverAssetStatus {
@@ -1016,6 +1017,7 @@ model UploadJob {
   id              String           @id @default(cuid())
   episodeId       String
   providerJobId   String?          @unique
+  replacesByteplusVid String?
   sourceUrl       String
   sourceType      UploadSourceType @default(URL)
   sourceName      String?

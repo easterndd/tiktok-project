@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { buildApp } from './app';
@@ -708,6 +711,54 @@ describe('QuicK ReeLS API', () => {
     assert.equal(episode.byteplusVid, null);
     assert.equal(episode.byteplusUploadStatus, 'PENDING');
     assert.equal(episode.status, 'DRAFT');
+  });
+
+  it('queues a direct file replacement only for an episode rejected in the reconciled version', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-rejected-upload-'));
+    try {
+      const prisma = await createPrismaStub();
+      const album = await prisma.album.findUnique();
+      const episode = await prisma.episode.findUnique();
+      Object.assign(album, { status: 'OFFLINE', publishStatus: 'UNLISTED', reviewStatus: '3', tiktokVersion: 1 });
+      Object.assign(episode, { status: 'OFFLINE', byteplusVid: 'old-vid', byteplusUploadStatus: 'READY',
+        tiktokVideoStatus: 'READY', tiktokEpisodeId: 'platform-1' });
+      album.episodes = [episode];
+      const reconciliation = { id: 'reconcile-1', completedAt: new Date(), providerResponse: {
+        checked_version: 1, review_status: 3,
+        episode_info_list: [{ episode_id: 'platform-1', seq: 1, byteplus_vid: 'old-vid',
+          review_result: { overall_review_status: 3 } }],
+        episode_failures: [{ episode_id: 'platform-1', review_status: '3', exception_reason: 'Episode Video: rejected' }]
+      } };
+      prisma.platformSyncJob.findFirst = async (args: any) => args.where.kind === 'RECONCILE' ? reconciliation : null;
+      prisma.episode.updateMany = async ({ where, data }: any) => {
+        if (where.byteplusVid !== episode.byteplusVid || where.byteplusUploadStatus !== episode.byteplusUploadStatus) return { count: 0 };
+        Object.assign(episode, data);
+        return { count: 1 };
+      };
+      let queued: any;
+      prisma.uploadJob.create = async ({ data }: any) => { queued = { id: 'replacement-1', ...data }; return queued; };
+      const app = await buildApp({ ...env, LOCAL_UPLOAD_STORAGE_DIR: directory }, { prisma });
+      apps.push(app);
+      const headers = { authorization: 'Bearer ' + await token(app, 'admin') };
+      const report = await app.inject({ method: 'GET', url: '/api/v1/admin/albums/album-1/rejected-episodes', headers });
+      assert.equal(report.statusCode, 200, report.body);
+      assert.deepEqual(report.json().items.map((item: any) => item.episodeNo), [1]);
+      const boundary = 'replacement-boundary';
+      const payload = Buffer.from('--' + boundary + '\r\nContent-Disposition: form-data; name="file"; filename="corrected.mp4"\r\nContent-Type: video/mp4\r\n\r\nvideo-data\r\n--' + boundary + '--\r\n');
+      const replaced = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/replace-video',
+        headers: { ...headers, 'content-type': 'multipart/form-data; boundary=' + boundary }, payload });
+      assert.equal(replaced.statusCode, 202, replaced.body);
+      assert.equal(queued.replacesByteplusVid, 'old-vid');
+      assert.equal(queued.sourceType, 'REPLACEMENT');
+      assert.equal(episode.byteplusVid, 'old-vid');
+      assert.equal(episode.byteplusUploadStatus, 'UPLOADING');
+      album.reviewStatus = 'PASSED';
+      episode.byteplusUploadStatus = 'READY';
+      const blocked = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/replace-video',
+        headers: { ...headers, 'content-type': 'multipart/form-data; boundary=' + boundary }, payload });
+      assert.equal(blocked.statusCode, 409, blocked.body);
+      assert.equal(episode.byteplusVid, 'old-vid');
+    } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
   it('deletes an offline shared playback copy without deleting its source authorization', async () => {

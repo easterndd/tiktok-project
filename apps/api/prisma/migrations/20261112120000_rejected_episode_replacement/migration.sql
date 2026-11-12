@@ -1,0 +1,2 @@
+ALTER TYPE "UploadSourceType" ADD VALUE IF NOT EXISTS 'REPLACEMENT';
+ALTER TABLE "UploadJob" ADD COLUMN "replacesByteplusVid" TEXT;

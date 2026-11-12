@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { stat, unlink } from 'node:fs/promises';
 import { resolve, relative, isAbsolute } from 'node:path';
-import type { PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import type { Env } from '../config/env';
 import { BytePlusVodError, BytePlusVodService, episodeMediaTitle, isBytePlusTransferFailure, type BytePlusMedia } from './byteplus-vod.service';
 import { enqueueVideoSync } from './platform-sync.service';
 import { getOrCreateSharedMediaAsset } from './shared-platform.service';
+import { assertRejectedEpisodeReplacement } from './rejected-episode-replacement.service';
 
 type Db = PrismaClient;
 const leaseMs = 2 * 60_000;
@@ -78,10 +79,10 @@ export async function findUploadMedia(service: BytePlusVodService, env: Env, job
   return unique[0] ?? null;
 }
 
-export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, service: BytePlusVodService, env: Env, options: { jobId?: string; concurrency?: 1 | 2; now?: () => Date; maxRetries?: number; log?: (message: string, details?: Record<string, unknown>) => void } = {}) {
+export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, service: BytePlusVodService, env: Env, options: { jobId?: string; sourceType?: 'FILE' | 'REPLACEMENT'; concurrency?: 1 | 2; now?: () => Date; maxRetries?: number; log?: (message: string, details?: Record<string, unknown>) => void } = {}) {
   const now = options.now ?? (() => new Date());
   const jobs = await prisma.uploadJob.findMany({
-    where: { ...(options.jobId ? { id: options.jobId } : {}), sourceType: 'FILE', status: { in: ['PENDING', 'PROCESSING'] },
+    where: { ...(options.jobId ? { id: options.jobId } : {}), sourceType: options.sourceType ?? 'FILE', status: { in: ['PENDING', 'PROCESSING'] },
       AND: [
         { OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now() } }] },
         { OR: [{ leaseExpiresAt: { lte: now() } }, { leaseExpiresAt: null, status: 'PENDING' },
@@ -106,10 +107,17 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
     }, 30_000);
     const fail = async (message: string, definite = false) => prisma.$transaction(async (tx) => {
       const changed = await tx.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { status: 'FAILED', errorMessage: message, ...(definite ? { remoteStartedAt: null } : {}), leaseToken: null, leaseExpiresAt: null, nextAttemptAt: null, completedAt: now() } });
-      if (changed.count) await tx.episode.updateMany({ where: { id: job.episodeId, byteplusVid: null, uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } }, data: { status: 'ERROR', byteplusUploadStatus: 'FAILED' } });
+      if (changed.count && job.replacesByteplusVid) {
+        await tx.episode.updateMany({ where: { id: job.episodeId, byteplusVid: job.replacesByteplusVid, byteplusUploadStatus: 'UPLOADING',
+          uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } }, data: { byteplusUploadStatus: 'READY' } });
+      } else if (changed.count) {
+        await tx.episode.updateMany({ where: { id: job.episodeId, byteplusVid: null,
+          uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } }, data: { status: 'ERROR', byteplusUploadStatus: 'FAILED' } });
+      }
     });
     try {
       if (job.uploadScope && job.uploadScope !== uploadScope(env)) throw conflict('上传任务的小程序或 Client Key 已改变，不能继续上传。');
+      if (job.replacesByteplusVid) await assertRejectedEpisodeReplacement(prisma, job.episode.albumId, job.episodeId, job.replacesByteplusVid, 'UPLOADING');
       let media: BytePlusMedia | null = null;
       if (job.providerJobId || remoteStartedAt) {
         try {
@@ -138,7 +146,9 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
           return;
         }
         if (job.providerJobId) { await fail('已记录的 VID 在 BytePlus 中不存在，请重新上传。'); return; }
-        if (job.episode.byteplusVid) { await fail('分集已绑定其他视频，已停止旧上传任务。'); return; }
+        if (job.episode.byteplusVid && job.episode.byteplusVid !== job.replacesByteplusVid) {
+          await fail('分集已绑定其他视频，已停止旧上传任务。'); return;
+        }
         if (job.retryCount >= (options.maxRetries ?? env.UPLOAD_MAX_RETRIES)) { await fail(job.errorMessage ?? '自动上传重试次数已耗尽，请重试原任务或重新选择文件上传。'); return; }
         const directory = localUploadDirectory(env);
         const path = relative(directory, resolve(job.localFilePath));
@@ -202,13 +212,17 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
         byteplusSpaceName: env.BYTEPLUS_SPACE_NAME, byteplusRegion: env.BYTEPLUS_REGION, miniAppKey: env.MINI_APP_KEY,
         title: media.title, coverUrl: media.coverUrl, durationMs: media.durationMs, firstUploadJobId: job.id, sourceFileName: job.sourceName ?? undefined });
       await prisma.$transaction(async (tx) => {
+        if (job.replacesByteplusVid) await assertRejectedEpisodeReplacement(tx, job.episode.albumId, job.episodeId, job.replacesByteplusVid, 'UPLOADING');
         const changed = await tx.uploadJob.updateMany({ where: { id: job.id, status: 'PROCESSING', leaseToken }, data: { status: 'SUCCEEDED', providerJobId: media!.vid, completedAt: now(), errorMessage: null, leaseToken: null, leaseExpiresAt: null, nextAttemptAt: null, localFilePath: null } });
         if (!changed.count) throw new Error('上传任务已由其他操作接管。');
-        const bound = await tx.episode.updateMany({ where: { id: job.episodeId, OR: [{ byteplusVid: null }, { byteplusVid: media!.vid }] }, data: { status: 'READY', byteplusUploadStatus: 'READY', byteplusVid: media!.vid, byteplusCoverUrl: media!.coverUrl,
+        const bound = await tx.episode.updateMany({ where: job.replacesByteplusVid
+          ? { id: job.episodeId, byteplusVid: job.replacesByteplusVid, byteplusUploadStatus: 'UPLOADING', status: { not: 'ONLINE' } }
+          : { id: job.episodeId, OR: [{ byteplusVid: null }, { byteplusVid: media!.vid }] },
+          data: { status: 'READY', byteplusUploadStatus: 'READY', byteplusVid: media!.vid, byteplusCoverUrl: media!.coverUrl,
           coverUrl: job.episode.coverAsset?.status === 'READY' ? job.episode.coverAsset.publicUrl : media!.coverUrl, durationMs: media!.durationMs,
           tiktokVideoStatus: 'NOT_STARTED', tiktokVideoJobId: null, tiktokVideoError: null } });
         if (!bound.count) throw new Error('分集已绑定其他 VID，无法覆盖。');
-      });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       if (job.localFilePath) await unlink(job.localFilePath).catch(() => undefined);
       if (env.TIKTOK_CLIENT_KEY && env.TIKTOK_CLIENT_SECRET) await enqueueVideoSync(prisma as any, job.episodeId).catch((error) => options.log?.('Could not enqueue video sync.', { jobId: job.id, error: String(error) }));
     } catch (error) {

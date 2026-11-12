@@ -226,6 +226,9 @@ export async function buildAlbumSnapshot(prisma: Db, albumId: string): Promise<A
     throw workflowConflict('剧目缺少 TikTok 所需的年份、剧目类型或 1 至 3 个标签。');
   }
   const albumCoverPicId = album.coverAsset.providerImageId;
+  if (album.episodes.some((episode: any) => episode.byteplusVid && episode.byteplusUploadStatus === 'UPLOADING')) {
+    throw workflowConflict('驳回分集的视频替换仍在进行，请等待新 VID 绑定及 TikTok 媒资登记完成后再同步版本。');
+  }
   const missingVideos = album.episodes.filter((episode: any) => !episode.byteplusVid || episode.tiktokVideoStatus !== 'READY');
   if (missingVideos.length) {
     const episodeNumbers = missingVideos.map((episode: any) => episode.episodeNo).join('、');

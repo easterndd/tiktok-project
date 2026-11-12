@@ -35,6 +35,27 @@ test('rejects version sync locally when the TikTok description is empty', async 
   });
 });
 
+test('a corrected version changes only rejected episode VIDs and preserves every platform episode ID', async () => {
+  const prisma = { album: { findUnique: async () => ({
+    coverAsset: { providerImageId: 'album-cover' }, releaseYear: 2026, dramaType: 2, tagList: [1],
+    language: 'en', title: 'Drama', description: 'Description',
+    episodes: [
+      { id: 'local-1', episodeNo: 1, title: 'Episode 1', tiktokEpisodeId: 'platform-1',
+        byteplusVid: 'corrected-1', byteplusUploadStatus: 'READY', tiktokVideoStatus: 'READY' },
+      { id: 'local-2', episodeNo: 2, title: 'Episode 2', tiktokEpisodeId: 'platform-2',
+        byteplusVid: 'original-2', byteplusUploadStatus: 'READY', tiktokVideoStatus: 'READY' },
+      { id: 'local-17', episodeNo: 17, title: 'Episode 17', tiktokEpisodeId: 'platform-17',
+        byteplusVid: 'corrected-17', byteplusUploadStatus: 'READY', tiktokVideoStatus: 'READY' }
+    ]
+  }) } };
+  const snapshot = await buildAlbumSnapshot(prisma as any, 'album-1');
+  assert.deepEqual(snapshot.episodes.map(({ episode_id, byteplus_vid }) => [episode_id, byteplus_vid]), [
+    ['platform-1', 'corrected-1'],
+    ['platform-2', 'original-2'],
+    ['platform-17', 'corrected-17']
+  ]);
+});
+
 test('requeues a failed platform sync job when an operator retries it', async () => {
   const updateInputs: Record<string, unknown>[] = [];
   const prisma = {
