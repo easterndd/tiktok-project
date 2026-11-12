@@ -1346,7 +1346,7 @@ function AdminApp() {
           </div></td>
         </tr>;
       })}</tbody></table></div></Panel>}
-      {tab === 'albums' && resourceStatus.albums?.loaded && canWriteContent && <DramaMaterials albums={albums} api={api} onSaved={() => loadTab('albums')} selection={materialSelection} enableRejectedReplacement={activeApp === 'bloomreel'}
+      {tab === 'albums' && resourceStatus.albums?.loaded && canWriteContent && <DramaMaterials albums={albums} api={api} onSaved={() => loadTab('albums')} selection={materialSelection} enableRejectedReplacement={activeApp === 'bloomreel' || activeApp === 'riftsaga'}
         uploadVideo={async (episodeId, file, onProgress, mode) => {
           const form = new FormData();
           form.append('episodeId', episodeId);

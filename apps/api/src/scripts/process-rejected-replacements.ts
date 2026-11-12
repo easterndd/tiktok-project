@@ -7,8 +7,10 @@ import { processLocalUploadJobs } from '../services/local-upload.service';
 
 async function main() {
   const root = loadEnv();
-  const env = miniAppEnvironment({ ...root, MINI_APP_KEY: 'main' }, 'bloomreel');
-  if (!env?.BYTEPLUS_ACCESS_KEY || !env.BYTEPLUS_SECRET_KEY) throw new Error('BloomReel BytePlus configuration is missing.');
+  const appKey = process.env.REPLACEMENT_APP_KEY ?? 'bloomreel';
+  if (appKey !== 'bloomreel' && appKey !== 'riftsaga') throw new Error('Replacement worker app key is not allowed.');
+  const env = miniAppEnvironment({ ...root, MINI_APP_KEY: 'main' }, appKey);
+  if (!env?.BYTEPLUS_ACCESS_KEY || !env.BYTEPLUS_SECRET_KEY) throw new Error(`${appKey} BytePlus configuration is missing.`);
   const db = new PrismaClient({ datasources: { db: { url: runtimeDatabaseUrl(
     env.DATABASE_URL, root.DATABASE_POOLER_HOST, root.DATABASE_POOLER_PORT, 1
   ) } } });
@@ -21,7 +23,7 @@ async function main() {
       sourceType: 'REPLACEMENT', concurrency: 1,
       log: (message, details) => console.log(JSON.stringify({ message, details }))
     });
-    console.log(JSON.stringify({ processedReplacementJobs: count }));
+    console.log(JSON.stringify({ miniAppKey: appKey, processedReplacementJobs: count }));
   } finally {
     await Promise.all([db.$disconnect(), shared.$disconnect()]);
   }
