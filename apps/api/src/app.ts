@@ -75,6 +75,8 @@ function isAllowedCorsOrigin(origin: string | undefined, configuredOrigins: stri
 const miniBootstrapPath = new RegExp(`^/api/(?:(?:${miniAppKeys.filter((key) => key !== 'main').join('|')})/)?v1/(?:auth/anonymous/session|app-entry-ad-sessions)$`);
 const miniPerformancePath = /\/(?:auth\/anonymous\/session|app-entry-ad-sessions(?:\/[^/]+\/(?:complete|shown))?|home(?:\/progress)?|ad-events|episode-interstitial\/config|episodes\/[^/]+\/reward-session(?:\/[^/]+\/complete)?)$/;
 const requestStartedAt = new WeakMap<object, number>();
+const requestReceivedAt = new WeakMap<object, number>();
+const responseErrorCode = new WeakMap<object, string>();
 const responseLogSamples: ResponseLogSampleCache = new Map();
 const responseLogSampleIntervalMs = 10_000;
 const maxResponseLogSampleKeys = 4_096;
@@ -106,6 +108,7 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
   registerErrorHandler(app);
   const configuredCorsOrigins = env.API_CORS_ORIGIN.split(',');
   app.addHook('onRequest', (request, _reply, done) => {
+    requestReceivedAt.set(request, performance.now());
     const isBootstrapRequest = isMiniBootstrapRequest(request.url);
     const corsAllowed = isAllowedCorsOrigin(request.headers.origin, configuredCorsOrigins);
     if (isBootstrapRequest && (env.NODE_ENV !== 'production' || !corsAllowed || Math.random() < 0.01)) {
@@ -166,8 +169,29 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
       reply.header('Server-Timing', `${databaseMs === undefined ? '' : `db;dur=${databaseMs.toFixed(1)}, `}app;dur=${Math.max(0, performance.now() - startedAt).toFixed(1)}`);
     }
   });
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (reply.statusCode >= 400 && typeof payload === 'string' && payload.length <= 8_192) {
+      try {
+        const code = (JSON.parse(payload) as { error?: { code?: unknown } }).error?.code;
+        if (typeof code === 'string' && /^[A-Z0-9_]{1,80}$/.test(code)) responseErrorCode.set(request, code);
+      } catch { /* Non-JSON error responses retain their HTTP status. */ }
+    }
+    return payload;
+  });
   app.addHook('onResponse', (request, reply, done) => {
     releaseRequest(request);
+    if (reply.statusCode >= 400) {
+      const details = {
+        requestId: request.id,
+        method: request.method,
+        route: request.routeOptions.url ?? request.url.split('?', 1)[0],
+        statusCode: reply.statusCode,
+        errorCode: responseErrorCode.get(request) ?? null,
+        durationMs: requestReceivedAt.has(request) ? Number((performance.now() - requestReceivedAt.get(request)!).toFixed(1)) : null
+      };
+      if (reply.statusCode >= 500) request.log.error(details, 'API request failed');
+      else request.log.warn(details, 'API request rejected');
+    }
     const pathParts = request.url.split('?', 1)[0].split('/');
     if (pathParts[1] === 'api') {
       const candidateKey = pathParts[2] === 'v1' ? 'main' : pathParts[2];
@@ -190,7 +214,7 @@ export async function buildApp(env: Env, options: { prisma?: PrismaClient; talet
     const startedAt = requestStartedAt.get(request);
     if (startedAt !== undefined) {
       const durationMs = Number((performance.now() - startedAt).toFixed(1));
-      const needsDetailedLog = reply.statusCode >= 400 || durationMs >= 2_000;
+      const needsDetailedLog = durationMs >= 2_000;
       let shouldLog = needsDetailedLog || env.NODE_ENV !== 'production' || Math.random() < 0.01;
       let suppressedResponses = 0;
       if (env.NODE_ENV === 'production' && needsDetailedLog) {

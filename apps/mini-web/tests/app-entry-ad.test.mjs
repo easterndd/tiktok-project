@@ -10,14 +10,17 @@ globalThis.__entryAdTestPost = (...args) => post(...args);
 globalThis.__entryAdTestPerformance = (...args) => performanceReports.push(args);
 const analyticsEvents = [];
 globalThis.__entryAdTestAnalytics = analyticsEvents;
+const traceModes = [];
+globalThis.__entryAdTestTraceModes = traceModes;
 const mocks = {
   '../../lib/api-client': 'export class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } } globalThis.__entryAdApiError = ApiError; export const apiClient = { post: (...args) => globalThis.__entryAdTestPost(...args) };',
   '../../lib/storage': 'export const isDemoMode = () => false;',
   '../../lib/app-brand': 'export const storagePrefix = "test";',
-  '../../lib/launch-context': 'export const getMiniLaunchAdId = () => null;',
+  '../../lib/launch-context': 'export const getMiniLaunchAdId = () => null; export const getMiniLaunchIds = () => ({ launchId: "00000000-0000-4000-8000-000000000001", entryId: "entry-test" }); export const getMiniLaunchRef = () => undefined;',
   '../../lib/diagnostics': 'export const reportDiagnostic = () => {}; export const reportPerformance = (...args) => globalThis.__entryAdTestPerformance(...args);',
-  '../../lib/analytics': 'export const captureSdkCallback = (name, payload = null) => ({ name, payload, capturedAt: new Date().toISOString() }); export const nextAdSequence = () => 1; export const newAdOperationId = (kind, seq) => kind + "-" + seq + "-test"; export const recordAdClose = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "close", input }); export const recordAdConfig = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "config", input }); export const recordAdLoad = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "load", input }); export const recordAdLoadResult = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "load", input }); export const recordAdShow = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "show", input });',
-  './ad-platform': 'export const getAdPlatform = () => globalThis.__entryAdTestPlatform ?? "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const getMiniReleaseId = () => globalThis.__entryAdTestRelease ?? "default"; export const isV006Release = (release = getMiniReleaseId()) => release.includes("-v006-"); export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;',
+  '../../lib/client-trace': 'export const captureClientTrace = () => {}; export const setClientTraceLocalOnly = (value) => globalThis.__entryAdTestTraceModes.push(value);',
+  '../../lib/analytics': 'export const captureSdkCallback = (name, payload = null) => ({ name, payload, capturedAt: new Date().toISOString() }); export const nextAdSequence = () => 1; export const newAdOperationId = (kind, seq) => kind + "-" + seq + "-test"; export const recordAdClose = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "close", input }); export const recordAdConfig = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "config", input }); export const recordAdLoad = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "load", input }); export const recordAdLoadResult = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "load", input }); export const recordAdShow = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "show", input }); export const recordEntryAdDecision = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "entryDecision", input });',
+  './ad-platform': 'export const getAdPlatform = () => globalThis.__entryAdTestPlatform ?? "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const getMiniReleaseId = () => globalThis.__entryAdTestRelease ?? "default"; export const isV006Release = (release = getMiniReleaseId()) => release.includes("-v006-"); export const isV006DualRelease = (release = getMiniReleaseId()) => release.includes("-v006-dual-"); export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;',
   './ad-placement-manifest': 'export const restrictToPublicManifest = (_type, ids) => [...ids];',
   './ad-error-policy': 'export const classifyAdFailure = (error, origin) => globalThis.__entryAdTestClassify?.(error, origin) ?? "STOP"; export const normalizeErrorOrigin = (error) => error?.adErrorOrigin ?? "UNKNOWN"; export const taggedAdFailure = (message, origin) => Object.assign(new Error(message), { adErrorOrigin: origin });',
   './ad-activity': 'export const claimNativeAd = () => () => {}; export const markRewardedAdClosed = () => {};'
@@ -31,9 +34,11 @@ const hooks = registerHooks({
     return next(specifier, context);
   }
 });
-const { showAppEntryAd, completeAppEntryAd } = await import('../src/features/ads/app-entry-ad.ts');
+const { showAppEntryAd, completeAppEntryAd, startAppEntryAdSession } = await import('../src/features/ads/app-entry-ad.ts');
+const { primeEntryRewardedPool } = await import('../src/features/ads/ad-instance-cache.ts');
 const previousWindow = globalThis.window;
-after(() => { hooks.deregister(); globalThis.window = previousWindow; delete globalThis.__entryAdTestPost; delete globalThis.__entryAdTestPerformance; delete globalThis.__entryAdTestAnalytics; delete globalThis.__entryAdApiError; delete globalThis.__entryAdTestClassify; delete globalThis.__entryAdTestPlatform; delete globalThis.__entryAdTestRelease; });
+const previousSessionStorage = globalThis.sessionStorage;
+after(() => { hooks.deregister(); globalThis.window = previousWindow; globalThis.sessionStorage = previousSessionStorage; delete globalThis.__entryAdTestPost; delete globalThis.__entryAdTestPerformance; delete globalThis.__entryAdTestAnalytics; delete globalThis.__entryAdTestTraceModes; delete globalThis.__entryAdApiError; delete globalThis.__entryAdTestClassify; delete globalThis.__entryAdTestPlatform; delete globalThis.__entryAdTestRelease; });
 
 function setup() {
   analyticsEvents.length = 0;
@@ -51,12 +56,67 @@ function setup() {
     ads.push(ad);
     return ad;
   };
-  globalThis.window = { TTMinis: { canIUse: () => true, createRewardedVideoAd: create, createInterstitialAd: create } };
+  globalThis.window = { setTimeout, TTMinis: { canIUse: () => true, createRewardedVideoAd: create, createInterstitialAd: create } };
   return ads;
 }
 
 const input = { mode: 'REWARDED_GATED', placementId: 'placement', sessionId: 'session', adIndex: 1 };
 const flush = () => new Promise(setImmediate);
+
+it('primes both Android entry placements in parallel and hands off before close telemetry', async () => {
+  globalThis.__entryAdTestPlatform = 'android';
+  globalThis.__entryAdTestRelease = 'heartreel-v006-dual-test';
+  const ads = setup();
+  post = async () => ({ accepted: true });
+  try {
+    primeEntryRewardedPool(['primary-dual', 'backup-dual']);
+    assert.deepEqual(ads.slice(0, 2).map((ad) => ad.unit), ['primary-dual', 'backup-dual']);
+    await flush();
+    const first = showAppEntryAd({ ...input, sessionId: 'dual-handoff', placementId: 'primary-dual', placementIds: ['primary-dual', 'backup-dual'], requiredCount: 2, fastHandoff: true });
+    await flush();
+    const firstAd = ads.find((ad) => ad.unit === 'primary-dual' && ad.shows === 1);
+    assert.ok(firstAd);
+    firstAd.close({ isEnded: true });
+    await first;
+    const second = showAppEntryAd({ ...input, sessionId: 'dual-handoff', placementId: 'primary-dual', placementIds: ['primary-dual', 'backup-dual'], requiredCount: 2, adIndex: 2, fastHandoff: true });
+    for (let tick = 0; tick < 10 && !ads.some((ad) => ad.unit === 'backup-dual' && ad.shows === 1); tick++) await Promise.resolve();
+    const secondAd = ads.find((ad) => ad.unit === 'backup-dual' && ad.shows === 1);
+    assert.ok(secondAd);
+    assert.equal(analyticsEvents.some(({ kind }) => kind === 'close'), false);
+    secondAd.close({ isEnded: true });
+    await second;
+  } finally {
+    delete globalThis.__entryAdTestPlatform;
+    delete globalThis.__entryAdTestRelease;
+  }
+});
+
+it('retries a busy Android show with the same prepared instance', async () => {
+  globalThis.__entryAdTestPlatform = 'android';
+  globalThis.__entryAdTestRelease = 'heartreel-v006-dual-test';
+  const ads = setup();
+  post = async () => ({ accepted: true });
+  try {
+    primeEntryRewardedPool(['primary-busy', 'backup-busy']);
+    await flush();
+    const primary = ads[0];
+    let busy = true;
+    primary.show = async () => {
+      primary.shows++;
+      if (busy) { busy = false; throw new Error('104111006: ad busy'); }
+    };
+    const showInput = { ...input, sessionId: 'busy-handoff', placementId: 'primary-busy', placementIds: ['primary-busy', 'backup-busy'], fastHandoff: true };
+    await assert.rejects(showAppEntryAd(showInput), /104111006/);
+    const retry = showAppEntryAd(showInput);
+    await flush();
+    assert.equal(primary.shows, 2);
+    primary.close({ isEnded: true });
+    await retry;
+  } finally {
+    delete globalThis.__entryAdTestPlatform;
+    delete globalThis.__entryAdTestRelease;
+  }
+});
 
 it('does not send REQUESTED and overlaps SHOWN with completion', async () => {
   const ads = setup();

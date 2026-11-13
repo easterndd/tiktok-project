@@ -4,14 +4,21 @@ import { classifyLaunchAttribution } from './launch-attribution.service';
 
 test('classifies a valid adId in the raw WebView URL', () => {
   assert.deepEqual(classifyLaunchAttribution({ rawUrl: 'https://example.test/?ttoclid=preview&adId=1879822310597858' }), {
-    status: 'ATTRIBUTED', adId: '1879822310597858', reason: 'VALID_AD_ID'
+    status: 'ATTRIBUTED', adId: '1879822310597858', reason: 'VALID_AD_ID', signalStatus: 'AVAILABLE'
   });
 });
 
 test('classifies preview-code traffic without adId as unattributed', () => {
   assert.deepEqual(classifyLaunchAttribution({ rawUrl: 'https://example.test/?ttoclid=fd007e49-593a-4c61-84c3-326c913a8609' }), {
-    status: 'UNATTRIBUTED', adId: null, reason: 'MISSING_AD_ID'
+    status: 'UNATTRIBUTED', adId: null, reason: 'MISSING_AD_ID', signalStatus: 'UNAVAILABLE'
   });
+});
+
+test('marks conflicting valid ad ids and rejects invalid values without attributing', () => {
+  assert.equal(classifyLaunchAttribution({
+    rawUrl: 'https://example.test/?adId=1881556363195874', launchQuery: { ad_id: '1881556347239714' }
+  }).status, 'AD_ID_CONFLICT');
+  assert.equal(classifyLaunchAttribution({ launchQuery: { adId: 'bad/value' } }).status, 'INVALID');
 });
 
 test('rejects common adId placeholders', () => {

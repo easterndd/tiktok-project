@@ -8,16 +8,21 @@ import { serialByKey, singleFlight } from '../../lib/single-flight';
 import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { requestCountry } from '../../lib/content-visibility';
-import { isV006Release, resolveAdPlacementPolicy, sessionAllowedPlacementIds, type AdClientPlatform } from '../ads/ad-placement-policy';
+import { isV006DualRelease, isV006Release, resolveAdPlacementPolicy, sessionAllowedPlacementIds, supportsV006DualApp, type AdClientPlatform } from '../ads/ad-placement-policy';
 
 const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
 const policyCacheTtlMs = 5_000;
 const releaseIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default');
-const startInput = z.object({ launchId: z.string().uuid(), releaseId: releaseIdSchema, adId: z.string().trim().max(128).nullable().optional(), platform: z.enum(['ios', 'android', 'unknown']).optional() });
+const startInput = z.object({ launchId: z.string().uuid(), launchRef: z.string().uuid().optional(), releaseId: releaseIdSchema, adId: z.string().trim().max(128).nullable().optional(), platform: z.enum(['ios', 'android', 'unknown']).optional(), entryFlowVersion: z.literal(2).optional() });
 const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.boolean() });
 const shownInput = z.object({ clientEventId: z.string().uuid(), adIndex: z.number().int().positive(), placementId: z.string().trim().min(1).max(128).optional() });
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
+const observationsInput = z.object({ observations: z.array(z.object({
+  eventId: z.string().uuid(), adIndex: z.number().int().min(1).max(100),
+  placementId: z.string().min(1).max(128), eventType: z.enum(['SHOWN', 'CLOSED_COMPLETED', 'CLOSED_INCOMPLETE']),
+  occurredAt: z.string().datetime()
+})).min(1).max(25) });
 
 type PolicyRecord = Awaited<ReturnType<FastifyInstance['prisma']['appEntryAdPolicy']['findUnique']>>;
 type PolicyValue = NonNullable<PolicyRecord> | ReturnType<typeof disabledPolicy>;
@@ -67,7 +72,7 @@ function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
 
 export type AppEntryAdPolicyInput = ReturnType<typeof disabledPolicy>;
 
-function sessionResponse(session: { id: string; releaseId?: string; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; allowedPlacementIds?: string[]; placementPolicyVersion?: number; adLoadMode?: string; strategyVariant?: string; requiredCount: number; countMode: 'COMPLETED' | 'SHOWN'; completedCount: number; status: string }, fallback: 'ALLOW' | 'BLOCK') {
+function sessionResponse(session: { id: string; releaseId?: string; mode: 'INTERSTITIAL' | 'REWARDED_GATED'; placementId: string; allowedPlacementIds?: string[]; placementPolicyVersion?: number; adLoadMode?: string; strategyVariant?: string; requiredCount: number; countMode: 'COMPLETED' | 'SHOWN'; completedCount: number; status: string; expiresAt?: Date }, fallback: 'ALLOW' | 'BLOCK', entryFlowVersion?: number) {
   if (session.status === 'COMPLETED' || session.completedCount >= session.requiredCount) return { required: false as const };
   return {
     required: true as const,
@@ -81,7 +86,8 @@ function sessionResponse(session: { id: string; releaseId?: string; mode: 'INTER
     requiredCount: session.requiredCount,
     countMode: session.countMode,
     completedCount: session.completedCount,
-    onUnavailable: fallback
+    onUnavailable: fallback,
+    ...(entryFlowVersion === 2 ? { entryFlowVersion: 2, expiresAt: session.expiresAt } : {})
   };
 }
 
@@ -194,14 +200,51 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     preHandler: requireUser,
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
-    const { launchId, releaseId, adId, platform = 'unknown' } = startInput.parse(request.body);
+    const { launchId, launchRef, releaseId, adId, platform = 'unknown', entryFlowVersion } = startInput.parse(request.body);
     queueSharedIpVisit(app.sharedPrisma, {
       ipAddress: request.ip, miniAppKey: app.config.MINI_APP_KEY, userId: request.user.sub, clientSessionId: launchId,
       countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
       secret: app.rootConfig.JWT_SECRET
     }, (error) => request.log.warn({ err: error }, 'Shared IP visit could not be recorded'));
     return singleFlight(app, `entry-session:${request.user.sub}:${request.ip}:${releaseId}:${launchId}:${JSON.stringify(adId)}`, async () => {
-    if (app.rootConfig.ENTRY_AD_ATTRIBUTION_GATE_ENABLED) {
+    const isDualV006 = supportsV006DualApp(app.config.MINI_APP_KEY) && isV006DualRelease(releaseId);
+    let launchRecord: Awaited<ReturnType<typeof app.prisma.miniAppLaunch.findUnique>> | null = null;
+    let decision: { id: string; decision: string; reason: string } | null = isDualV006 && launchRef
+      ? await app.prisma.miniAppEntryAdDecision.findUnique({ where: { launchRef } }) : null;
+    let responseFlowVersion: number | undefined;
+    const saveDecision = async (input: { attributionStatus: string; decision: 'SHOW' | 'SUPPRESS'; reason: string; policyVersion?: number; requiredCount?: number; countMode?: string; sessionId?: string }) => {
+      if (!isDualV006 || !launchRecord) return null;
+      try {
+        return await app.prisma.miniAppEntryAdDecision.create({ data: {
+          launchRef: launchRecord.launchRef, miniAppKey: app.config.MINI_APP_KEY, launchId, releaseId,
+          userId: request.user.sub, attributionStatus: input.attributionStatus, decision: input.decision,
+          reason: input.reason, policyVersion: input.policyVersion, requiredCount: input.requiredCount,
+          countMode: input.countMode, sessionId: input.sessionId, requestId: request.id
+        } });
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+        return app.prisma.miniAppEntryAdDecision.findUnique({ where: { launchRef: launchRecord.launchRef } });
+      }
+    };
+    const withDecision = (session: Parameters<typeof sessionResponse>[0], fallback: 'ALLOW' | 'BLOCK') => {
+      const response = sessionResponse(session, fallback, responseFlowVersion);
+      return decision ? { ...response, decisionId: decision.id, decision: decision.decision as 'SHOW' | 'SUPPRESS', decisionReason: decision.reason, launchRef } : response;
+    };
+    if (isDualV006) {
+      if (!launchRef) return { required: false as const, decision: 'SUPPRESS' as const, decisionReason: 'ATTRIBUTION_UNAVAILABLE' };
+      launchRecord = await app.prisma.miniAppLaunch.findUnique({ where: { launchRef } });
+      if (!launchRecord || launchRecord.userId !== request.user.sub || launchRecord.launchId !== launchId || launchRecord.releaseId !== releaseId || launchRecord.miniAppKey !== app.config.MINI_APP_KEY) {
+        return { required: false as const, decision: 'SUPPRESS' as const, decisionReason: 'ATTRIBUTION_UNAVAILABLE' };
+      }
+      if (decision?.decision === 'SUPPRESS') return { required: false as const, decisionId: decision.id, decision: 'SUPPRESS' as const, decisionReason: decision.reason, launchRef };
+      if (!decision && launchRecord.localAttributionStatus !== 'ATTRIBUTED') {
+        const reason = launchRecord.localAttributionStatus === 'AD_ID_CONFLICT' ? 'AD_ID_CONFLICT'
+          : launchRecord.localAttributionStatus === 'INVALID' ? 'INVALID_ATTRIBUTION_SIGNAL' : 'UNATTRIBUTED';
+        const suppressed = await saveDecision({ attributionStatus: launchRecord.localAttributionStatus, decision: 'SUPPRESS', reason });
+        return { required: false as const, decisionId: suppressed?.id, decision: 'SUPPRESS' as const, decisionReason: reason, launchRef };
+      }
+    }
+    if (!isDualV006 && app.rootConfig.ENTRY_AD_ATTRIBUTION_GATE_ENABLED) {
       let attribution;
       if (adId !== undefined) {
         attribution = classifyLaunchAttribution({ launchQuery: adId === null ? {} : { adId } });
@@ -215,7 +258,11 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       if (attribution.status !== 'ATTRIBUTED') return { required: false as const };
     }
     const policy = await measureDatabase(request, () => observeAppEntryAdRelease(app, releaseId));
-    if (!policy.enabled || !policy.placementId) return { required: false as const };
+    if (!policy.enabled || !policy.placementId) {
+      const saved = await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SUPPRESS', reason: 'POLICY_DISABLED', policyVersion: policy.version });
+      return { required: false as const, ...(saved ? { decisionId: saved.id, decision: 'SUPPRESS' as const, decisionReason: saved.reason, launchRef } : {}) };
+    }
+    responseFlowVersion = entryFlowVersion === 2 && supportsV006DualApp(app.config.MINI_APP_KEY) && isV006DualRelease(releaseId) && policy.mode === 'REWARDED_GATED' ? 2 : undefined;
     const placementPolicy = await resolveAdPlacementPolicy(app, {
       releaseId,
       adType: policy.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED',
@@ -229,11 +276,20 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       }),
       measureDatabase(request, () => app.prisma.user.findUnique({ where: { id: request.user.sub }, select: { appEntryAdExempt: true, mergedIntoUserId: true } }))
     ]);
-    if (ipExempt) return { required: false as const };
-    if (viewer?.appEntryAdExempt) return { required: false as const };
+    if (ipExempt) {
+      const saved = await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SUPPRESS', reason: 'IP_EXEMPT', policyVersion: policy.version });
+      return { required: false as const, ...(saved ? { decisionId: saved.id, decision: 'SUPPRESS' as const, decisionReason: saved.reason, launchRef } : {}) };
+    }
+    if (viewer?.appEntryAdExempt) {
+      const saved = await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SUPPRESS', reason: 'USER_EXEMPT', policyVersion: policy.version });
+      return { required: false as const, ...(saved ? { decisionId: saved.id, decision: 'SUPPRESS' as const, decisionReason: saved.reason, launchRef } : {}) };
+    }
     if (viewer?.mergedIntoUserId) {
       const canonical = await measureDatabase(request, () => app.prisma.user.findUnique({ where: { id: viewer.mergedIntoUserId! }, select: { appEntryAdExempt: true } }));
-      if (canonical?.appEntryAdExempt) return { required: false as const };
+      if (canonical?.appEntryAdExempt) {
+        const saved = await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SUPPRESS', reason: 'USER_EXEMPT', policyVersion: policy.version });
+        return { required: false as const, ...(saved ? { decisionId: saved.id, decision: 'SUPPRESS' as const, decisionReason: saved.reason, launchRef } : {}) };
+      }
     }
     const now = new Date();
 
@@ -241,8 +297,8 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       where: { userId_releaseId_launchId: { userId: request.user.sub, releaseId, launchId } }
     }));
     if (existing) {
-      if (existing.status === 'COMPLETED' || existing.completedCount >= existing.requiredCount) return sessionResponse(existing, policy.onUnavailable);
-      if (existing.expiresAt > now && existing.status === 'ACTIVE') return sessionResponse(existing, policy.onUnavailable);
+      if (existing.status === 'COMPLETED' || existing.completedCount >= existing.requiredCount) return withDecision(existing, policy.onUnavailable);
+      if (existing.expiresAt > now && existing.status === 'ACTIVE') return withDecision(existing, policy.onUnavailable);
 
       const renewed = await measureDatabase(request, () => app.prisma.appEntryAdSession.update({
         where: { id: existing.id },
@@ -251,7 +307,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
           expiresAt: new Date(now.getTime() + sessionTtlMs)
         }
       }));
-      return sessionResponse(renewed, policy.onUnavailable);
+      return withDecision(renewed, policy.onUnavailable);
     }
 
     let session;
@@ -278,8 +334,45 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       session = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({ where: { userId_releaseId_launchId: { userId: request.user.sub, releaseId, launchId } } }));
       if (!session) throw error;
     }
-    return sessionResponse(session, policy.onUnavailable);
+    const savedDecision = decision ?? await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SHOW', reason: 'ENTRY_AD_REQUIRED', policyVersion: policy.version, requiredCount: policy.requiredCount, countMode: policy.countMode, sessionId: session.id });
+    return { ...sessionResponse(session, policy.onUnavailable, responseFlowVersion), ...(savedDecision ? { decisionId: savedDecision.id, decision: 'SHOW' as const, decisionReason: savedDecision.reason, launchRef } : {}) };
     });
+  });
+
+  app.post('/app-entry-ad-sessions/:sessionId/observations', {
+    preHandler: requireUser,
+    bodyLimit: 32 * 1024,
+    config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
+  }, async (request, reply) => {
+    const { sessionId } = sessionParams.parse(request.params);
+    const { observations } = observationsInput.parse(request.body);
+    const session = await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } });
+    if (!session || session.userId !== request.user.sub || !supportsV006DualApp(app.config.MINI_APP_KEY) || !isV006DualRelease(session.releaseId) || session.mode !== 'REWARDED_GATED') {
+      return reply.code(409).send({ error: { code: 'ENTRY_SESSION_UNAVAILABLE', message: 'Entry ad session is unavailable.', requestId: request.id } });
+    }
+    const allowed = sessionAllowedPlacementIds(session);
+    if (observations.some((item) => item.adIndex > session.requiredCount || !allowed.includes(item.placementId))) {
+      return reply.code(409).send({ error: { code: 'PLACEMENT_NOT_ALLOWED', message: 'Entry ad observation does not match this session.', requestId: request.id } });
+    }
+    const accepted = await app.prisma.entryAdObservation.createMany({
+      data: observations.map((item) => ({
+        sessionId, clientEventId: item.eventId, adIndex: item.adIndex, placementId: item.placementId,
+        eventType: item.eventType, occurredAt: new Date(item.occurredAt)
+      })), skipDuplicates: true
+    });
+    const stored = await app.prisma.entryAdObservation.findMany({ where: { sessionId }, select: { clientEventId: true, adIndex: true, eventType: true } });
+    const shown = new Set(stored.filter((item) => item.eventType === 'SHOWN').map((item) => `${item.adIndex}:${item.clientEventId}`));
+    const shownIndices = new Set(stored.filter((item) => item.eventType === 'SHOWN').map((item) => item.adIndex));
+    const completedIndices = new Set(stored.filter((item) => item.eventType === 'CLOSED_COMPLETED' && shown.has(`${item.adIndex}:${item.clientEventId}`)).map((item) => item.adIndex));
+    const counted = session.countMode === 'SHOWN' ? shownIndices : completedIndices;
+    let completedCount = 0;
+    while (counted.has(completedCount + 1) && completedCount < session.requiredCount) completedCount++;
+    await app.prisma.appEntryAdSession.updateMany({ where: { id: sessionId, clientReportedShownCount: { lt: shownIndices.size } }, data: { clientReportedShownCount: shownIndices.size } });
+    await app.prisma.appEntryAdSession.updateMany({ where: { id: sessionId, clientReportedCompletedCount: { lt: completedIndices.size } }, data: { clientReportedCompletedCount: completedIndices.size } });
+    await app.prisma.appEntryAdSession.updateMany({ where: { id: sessionId, completedCount: { lt: completedCount } }, data: {
+        completedCount, ...(completedCount >= session.requiredCount ? { status: 'COMPLETED', clientReportedAt: new Date() } : {})
+      } });
+    return reply.code(202).send({ accepted: accepted.count, received: observations.length, reportedCount: completedCount });
   });
 
   app.post('/app-entry-ad-sessions/:sessionId/complete', {

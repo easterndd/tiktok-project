@@ -38,8 +38,11 @@ import { assertDisplayMetadataOwner, carryBaseTextChanges, displayMetadataInput,
 import { listEntryAdIpExemptions, listSharedIpVisits, listSharedIps, listViewerIdsForIp, normalizeIp, recentViewerIps, removeEntryAdIpExemption, setEntryAdIpExemption, setEntryAdIpExemptions } from '../../services/shared-ip.service';
 import { campaignEntryApps, normalizeCampaignEntryBase } from '../../lib/campaign-entry';
 import { TikTokShortDramaApiService } from '../../services/tiktok-short-drama-api.service';
-import { assertV006PlacementPair, invalidateAdPlacementPolicyCache, isV006Release } from '../ads/ad-placement-policy';
+import { assertV006PlacementPair, invalidateAdPlacementPolicyCache, isV006Release, supportsV006DualApp } from '../ads/ad-placement-policy';
 import { readV006AdDiagnostics, readV006PlayerDiagnostics } from './v006-diagnostics';
+import { readClientTraceRecords, readClientTraceSessions } from './client-traces';
+import { assertRejectedEpisodeReplacement, readRejectedEpisodeReplacements } from '../../services/rejected-episode-replacement.service';
+import { excludeRejectedAndSaveSubmissionPlan, readAlbumSubmissionPlan } from '../../services/album-submission-plan.service';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 
@@ -791,6 +794,28 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const { releaseId } = z.object({ releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default') }).parse(request.query);
     return readAppEntryAdPolicy(app, releaseId);
   });
+  app.get('/admin/launch-attribution', { preHandler: requireAdmin }, async (request) => {
+    const query = z.object({
+      launchId: z.string().uuid().optional(),
+      launchRef: z.string().uuid().optional(),
+      releaseId: z.string().trim().min(1).max(64).optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(50)
+    }).refine((value) => value.launchId || value.launchRef || value.releaseId, { message: 'Provide a launchId, launchRef, or releaseId.' }).parse(request.query);
+    const items = await app.prisma.miniAppLaunch.findMany({
+      where: {
+        miniAppKey: app.config.MINI_APP_KEY,
+        ...(query.launchId ? { launchId: query.launchId } : {}),
+        ...(query.launchRef ? { launchRef: query.launchRef } : {}),
+        ...(query.releaseId ? { releaseId: query.releaseId } : {})
+      },
+      orderBy: { createdAt: 'desc' }, take: query.limit
+    });
+    const decisions = items.length ? await app.prisma.miniAppEntryAdDecision.findMany({
+      where: { launchRef: { in: items.map((item) => item.launchRef) } }, orderBy: { decidedAt: 'desc' }
+    }) : [];
+    const decisionsByLaunch = new Map(decisions.map((item) => [item.launchRef, item]));
+    return { items: items.map((item) => ({ ...item, decision: decisionsByLaunch.get(item.launchRef) ?? null })) };
+  });
   app.get('/admin/app-entry-ad-policies', { preHandler: requireAdmin }, async () => {
     const policies = await app.prisma.appEntryAdPolicy.findMany({
       orderBy: { updatedAt: 'desc' },
@@ -925,6 +950,16 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return { items: albums.map((album) => ({ ...album, sharedPlayback: sharedIds.has(album.id), episodeCount: album._count.episodes, _count: undefined })) };
   });
 
+  app.get('/admin/albums/:albumId/rejected-episodes', { preHandler: requirePermission('content.read') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    return readRejectedEpisodeReplacements(app.prisma, albumId);
+  });
+
+  app.get('/admin/albums/:albumId/submission-plan', { preHandler: requirePermission('content.read') }, async (request) => {
+    const { albumId } = albumParams.parse(request.params);
+    return readAlbumSubmissionPlan(app.prisma, albumId);
+  });
+
   app.get('/admin/episodes', { preHandler: requireAdmin }, async () => {
     const episodes = await app.prisma.episode.findMany({
       orderBy: [{ album: { title: 'asc' } }, { sortOrder: 'asc' }],
@@ -961,11 +996,12 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     });
     if (authorization && authorization.status !== 'AUTHORIZED') return { items: [] };
     const episodes = await app.prisma.episode.findMany({
-      where: { albumId, status: 'ONLINE', tiktokEpisodeId: { not: null }, byteplusVid: { not: null }, OR: [{ isFree: true }, { episodeNo: { lte: freeEpisodeCount } }] },
-      select: { id: true, episodeNo: true, title: true, tiktokEpisodeId: true, isFree: true },
-      orderBy: { episodeNo: 'asc' }, take: 1000
+      where: { albumId, status: 'ONLINE', tiktokEpisodeId: { not: null }, byteplusVid: { not: null } },
+      select: { id: true, episodeNo: true, platformSeq: true, title: true, tiktokEpisodeId: true, isFree: true },
+      orderBy: [{ platformSeq: 'asc' }, { episodeNo: 'asc' }], take: 1000
     });
-    return { items: episodes };
+    return { items: episodes.filter((episode) => isEpisodeFree({ ...episode, episodeNo: episode.platformSeq ?? episode.episodeNo }, album.accessConfig))
+      .map((episode) => ({ ...episode, episodeNo: episode.platformSeq ?? episode.episodeNo })) };
   });
   app.post('/admin/campaign-entry/generate-link', {
     preHandler: requirePermission('content.write'),
@@ -977,9 +1013,9 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const input = z.object({ episodeId: z.string().min(1).max(128) }).parse(request.body);
     const episode = await app.prisma.episode.findFirst({
       where: { id: input.episodeId, status: 'ONLINE', tiktokEpisodeId: { not: null }, byteplusVid: { not: null }, album: { ...publicAlbumWhere(app.config), tiktokAlbumId: { not: null } } },
-      select: { id: true, albumId: true, episodeNo: true, isFree: true, tiktokEpisodeId: true, album: { select: { accessConfig: true, tiktokAlbumId: true } } }
+      select: { id: true, albumId: true, episodeNo: true, platformSeq: true, isFree: true, tiktokEpisodeId: true, album: { select: { accessConfig: true, tiktokAlbumId: true } } }
     });
-    if (!episode || !episode.tiktokEpisodeId || !episode.album.tiktokAlbumId || !isEpisodeFree(episode, episode.album.accessConfig)) {
+    if (!episode || !episode.tiktokEpisodeId || !episode.album.tiktokAlbumId || !isEpisodeFree({ ...episode, episodeNo: episode.platformSeq ?? episode.episodeNo }, episode.album.accessConfig)) {
       return reply.code(400).send({ error: { code: 'INVALID_CAMPAIGN_EPISODE', message: '只能为已上线且免费的分集生成投放链接。', requestId: request.id } });
     }
     const authorization = await app.sharedPrisma.miniAppAlbumAuthorization.findFirst({
@@ -1595,6 +1631,53 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post('/admin/episodes/:episodeId/replace-video', { preHandler: requirePermission('content.write') }, async (request, reply) => {
+    const { episodeId } = episodeParams.parse(request.params);
+    const episode = await app.prisma.episode.findUnique({ where: { id: episodeId }, select: { id: true, albumId: true, byteplusVid: true, status: true } });
+    if (!episode) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '分集不存在。', requestId: request.id } });
+    await assertPlatformOwner(app, episode.albumId);
+    if (!episode.byteplusVid) throw Object.assign(new Error('该集尚无旧视频，请使用普通上传。'), { statusCode: 409 });
+    await assertRejectedEpisodeReplacement(app.prisma, episode.albumId, episodeId, episode.byteplusVid, 'READY');
+    const upload = await request.file();
+    if (!upload) return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: '请选择修正后的视频文件。', requestId: request.id } });
+    const fileName = upload.filename.trim();
+    const extension = fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.')).toLowerCase() : '';
+    if (!['.mp4', '.mov', '.m4v'].includes(extension)) {
+      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'TikTok 短剧仅接受兼容的 MP4、MOV 或 M4V 视频格式。', requestId: request.id } });
+    }
+
+    const tempDirectory = localUploadDirectory(app.config);
+    const tempPath = join(tempDirectory, randomUUID() + extension);
+    await mkdir(tempDirectory, { recursive: true });
+    let queued = false;
+    try {
+      await pipeline(upload.file, createWriteStream(tempPath));
+      if (upload.file.truncated) throw Object.assign(new Error('所选文件超过 2 GB 大小限制。'), { statusCode: 413 });
+      const job = await app.prisma.$transaction(async (tx) => {
+        await assertRejectedEpisodeReplacement(tx, episode.albumId, episodeId, episode.byteplusVid!, 'READY');
+        const claimed = await tx.episode.updateMany({
+          where: { id: episodeId, byteplusVid: episode.byteplusVid, byteplusUploadStatus: 'READY', status: { not: 'ONLINE' },
+            uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } },
+          data: { byteplusUploadStatus: 'UPLOADING' }
+        });
+        if (claimed.count !== 1) throw Object.assign(new Error('该集已有替换任务或状态已变化，请刷新后重试。'), { statusCode: 409 });
+        const created = await tx.uploadJob.create({ data: {
+          episodeId, sourceUrl: 'local://' + fileName, sourceType: 'FILE', sourceName: fileName,
+          localFilePath: tempPath, uploadScope: uploadScope(app.config), replacesByteplusVid: episode.byteplusVid,
+          status: 'PENDING', nextAttemptAt: new Date()
+        } });
+        await tx.auditLog.create({ data: { adminUserId: request.user.sub,
+          action: 'QUEUE_REJECTED_EPISODE_REPLACEMENT', resource: 'UploadJob', resourceId: created.id,
+          metadata: { episodeId, previousByteplusVid: episode.byteplusVid } } });
+        return created;
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      queued = true;
+      return reply.code(202).send({ job, replacement: true, episode: { id: episodeId, status: episode.status, byteplusVid: episode.byteplusVid } });
+    } finally {
+      if (!queued) await unlink(tempPath).catch(() => undefined);
+    }
+  });
+
   app.post('/admin/upload-jobs/:jobId/reconcile', { preHandler: requireAdmin }, async (request, reply) => {
     const { jobId } = jobParams.parse(request.params);
     const input = z.object({ byteplusVid: z.string().trim().min(1).max(256).optional() }).parse(request.body ?? {});
@@ -1634,8 +1717,12 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: { code: 'BYTEPLUS_SPACE_MISMATCH', message: '无法确认该视频属于当前 BytePlus 空间，不能绑定到当前小程序。', requestId: request.id } });
     }
     await assertMediaScope(app.sharedPrisma, app.config, media);
+    if (job.replacesByteplusVid && (media.publishStatus !== 'Published' || !await mediaService.hasPlayableUrl(media.vid))) {
+      throw Object.assign(new Error('替换视频尚未可播放，请等待后台继续处理后再对账。'), { statusCode: 409 });
+    }
     if (!job.uploadScope || !matchesUploadTags(media.tags, job.uploadScope, job.id)) throw Object.assign(new Error('此 VID 无法证明属于原上传任务，请使用自动恢复或重新上传。'), { statusCode: 409 });
-    if (job.episode.byteplusVid && job.episode.byteplusVid !== media.vid) {
+    if (job.episode.byteplusVid && job.episode.byteplusVid !== media.vid &&
+        job.episode.byteplusVid !== job.replacesByteplusVid) {
       return reply.code(409).send({ error: { code: 'CONFLICT', message: '该分集已经绑定了另一个 BytePlus VID。', requestId: request.id } });
     }
     const sharedMedia = await getOrCreateSharedMediaAsset(app.sharedPrisma as any, {
@@ -1649,13 +1736,17 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       durationMs: media.durationMs
     });
     const episode = await app.prisma.$transaction(async (tx) => {
+      if (job.replacesByteplusVid) {
+        await assertRejectedEpisodeReplacement(tx, job.episode.albumId, job.episodeId, job.replacesByteplusVid, 'UPLOADING');
+      }
       const updatedJob = await tx.uploadJob.updateMany({
         where: { id: job.id, status: 'PROCESSING', leaseToken: job.leaseToken, leaseExpiresAt: job.leaseExpiresAt },
         data: { status: 'SUCCEEDED', providerJobId: media.vid, errorMessage: null, completedAt: new Date(), leaseToken: null, leaseExpiresAt: null, localFilePath: null }
       });
       if (updatedJob.count !== 1) throw Object.assign(new Error('该对账任务已被其他操作处理，请刷新后查看。'), { statusCode: 409 });
       const bound = await tx.episode.updateMany({
-        where: { id: job.episodeId, byteplusVid: null, byteplusUploadStatus: 'UPLOADING' },
+        where: { id: job.episodeId, byteplusVid: job.replacesByteplusVid ?? null, byteplusUploadStatus: 'UPLOADING',
+          ...(job.replacesByteplusVid ? { status: { not: 'ONLINE' as const } } : {}) },
         data: {
           byteplusVid: media.vid,
           byteplusCoverUrl: media.coverUrl,
@@ -1670,9 +1761,11 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       });
       if (bound.count !== 1) throw Object.assign(new Error('分集状态已变化，请刷新后检查 VID。'), { statusCode: 409 });
       return tx.episode.findUniqueOrThrow({ where: { id: job.episodeId } });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     if (job.localFilePath) await unlink(job.localFilePath).catch(() => undefined);
-    await audit(app, request.user.sub, 'RECONCILE_LOCAL_UPLOAD', 'UploadJob', job.id, { episodeId: job.episodeId, byteplusVid: media.vid });
+    await audit(app, request.user.sub, 'RECONCILE_LOCAL_UPLOAD', 'UploadJob', job.id, {
+      episodeId: job.episodeId, byteplusVid: media.vid, replacesByteplusVid: job.replacesByteplusVid
+    });
     const syncJob = app.config.TIKTOK_CLIENT_KEY && app.config.TIKTOK_CLIENT_SECRET
       ? await enqueueVideoSync(app.prisma as any, job.episodeId, request.user.sub)
       : null;
@@ -1718,7 +1811,19 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     }
     const retriedJob = await app.prisma.$transaction(async (tx) => {
       if (job.sourceType === 'FILE') {
-        const claimed = await tx.episode.updateMany({ where: { id: job.episodeId, byteplusVid: null, uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } }, data: { status: 'UPLOADING', byteplusUploadStatus: 'UPLOADING' } });
+        const replacesVid = job.replacesByteplusVid;
+        if (replacesVid) {
+          const episode = await tx.episode.findUnique({ where: { id: job.episodeId }, select: { albumId: true } });
+          if (!episode) throw Object.assign(new Error('分集不存在。'), { statusCode: 404 });
+          await assertRejectedEpisodeReplacement(tx, episode.albumId, job.episodeId, replacesVid, 'READY');
+        }
+        const claimed = await tx.episode.updateMany({
+          where: replacesVid
+            ? { id: job.episodeId, byteplusVid: replacesVid, byteplusUploadStatus: 'READY', status: { not: 'ONLINE' },
+              uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } }
+            : { id: job.episodeId, byteplusVid: null, uploadJobs: { none: { status: { in: ['PENDING', 'PROCESSING'] } } } },
+          data: replacesVid ? { byteplusUploadStatus: 'UPLOADING' } : { status: 'UPLOADING', byteplusUploadStatus: 'UPLOADING' }
+        });
         if (claimed.count !== 1) throw Object.assign(new Error('分集已有视频或上传任务，请刷新。'), { statusCode: 409 });
         const changed = await tx.uploadJob.updateMany({ where: { id: job.id, status: 'FAILED' }, data: { status: 'PENDING', retryCount: 0, leaseToken: null, leaseExpiresAt: null, errorMessage: null, completedAt: null, nextAttemptAt: new Date() } });
         if (changed.count !== 1) throw Object.assign(new Error('任务状态已变化，请刷新。'), { statusCode: 409 });
@@ -1738,7 +1843,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       });
       await tx.episode.update({ where: { id: job.episodeId }, data: { status: 'DRAFT' } });
       return next;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     await audit(app, request.user.sub, 'RETRY', 'UploadJob', retriedJob.id, { episodeId: retriedJob.episodeId });
     return retriedJob;
   });
@@ -1860,6 +1965,21 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const job = await enqueueAlbumVersionSync(app.prisma as any, albumId, request.user.sub);
     await audit(app, request.user.sub, 'SYNC_TIKTOK_ALBUM_VERSION', 'Album', albumId, { jobId: job.id, snapshotHash: job.snapshotHash });
     return { job };
+  });
+
+  app.post('/admin/albums/:albumId/submission-plan/exclude-rejected', { preHandler: requirePermission('content.sync') }, async (request) => {
+    ensureTikTokPlatformConfigured(app);
+    const { albumId } = albumParams.parse(request.params);
+    await assertPlatformOwner(app, albumId);
+    z.object({ confirmation: z.literal('EXCLUDE_REJECTED') }).strict().parse(request.body);
+    const plan = await excludeRejectedAndSaveSubmissionPlan(app.prisma as any, albumId);
+    const job = await enqueueAlbumVersionSync(app.prisma as any, albumId, request.user.sub);
+    await audit(app, request.user.sub, 'EXCLUDE_REJECTED_EPISODES_AND_SYNC_VERSION', 'Album', albumId, {
+      includedEpisodeIds: plan.included.map((episode) => episode.id),
+      excludedEpisodeIds: plan.excluded.map((episode) => episode.id),
+      syncJobId: job.id
+    });
+    return { plan, job };
   });
 
   app.post('/admin/albums/:albumId/reconcile', { preHandler: requirePermission('content.sync') }, async (request) => {
@@ -2076,6 +2196,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   if (clientAnalyticsMiniApps.has(app.config.MINI_APP_KEY)) {
     app.get('/admin/analytics/ad-diagnostics', { preHandler: requirePermission('analytics.read') }, (request) => readV006AdDiagnostics(app, request.query));
     app.get('/admin/analytics/player-diagnostics', { preHandler: requirePermission('analytics.read') }, (request) => readV006PlayerDiagnostics(app, request.query));
+    if (supportsV006DualApp(app.config.MINI_APP_KEY)) {
+      app.get('/admin/client-traces', { preHandler: requirePermission('analytics.read') }, (request) => readClientTraceSessions(app, request.query));
+      app.get('/admin/client-traces/:traceId/records', { preHandler: requirePermission('analytics.read') }, (request) => readClientTraceRecords(app, request.params, request.query));
+    }
   }
   app.get('/admin/analytics/overview', { preHandler: requireAdmin }, async () => {
     return cachedAnalytics(app, 'overview', async () => {

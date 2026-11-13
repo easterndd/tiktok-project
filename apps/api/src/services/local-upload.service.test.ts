@@ -81,7 +81,76 @@ function database(filePath: string | null, overrides: Record<string, unknown> = 
   return { prisma: prisma as unknown as PrismaClient, job, episode, assets };
 }
 
+function rejectedReplacementDatabase(filePath: string | null) {
+  const db = database(filePath, { replacesByteplusVid: 'old-vid' });
+  const album = { id: 'album-1', title: 'Drama', status: 'OFFLINE', reviewStatus: '3',
+    tiktokVersion: 1, publishStatus: 'UNLISTED' };
+  Object.assign(db.episode, { album, status: 'OFFLINE', tiktokEpisodeId: 'platform-1',
+    byteplusVid: 'old-vid', byteplusUploadStatus: 'UPLOADING', tiktokVideoStatus: 'READY' });
+  const prisma = db.prisma as any;
+  prisma.album = { findUnique: async (args: any) => args.select?.episodes?.where
+    ? { episodes: [db.episode] }
+    : { ...album, episodes: [db.episode] } };
+  prisma.platformSyncJob = { findFirst: async (args: any) => args.where.kind === 'RECONCILE'
+    ? { id: 'reconcile-1', completedAt: instant, providerResponse: {
+      checked_version: 1, review_status: 3,
+      episode_info_list: [{ episode_id: 'platform-1', seq: 1, byteplus_vid: 'old-vid', review_result: { overall_review_status: 3 } }],
+      episode_failures: [{ episode_id: 'platform-1', review_status: '3', exception_reason: 'Episode Video: rejected' }]
+    } } : null };
+  prisma.episode.findUnique = async () => db.episode;
+  const updateMany = prisma.episode.updateMany.bind(prisma.episode);
+  prisma.episode.updateMany = async (args: any) => {
+    if (args.where.byteplusVid !== undefined && args.where.byteplusVid !== db.episode.byteplusVid) return { count: 0 };
+    if (args.where.byteplusUploadStatus && args.where.byteplusUploadStatus !== db.episode.byteplusUploadStatus) return { count: 0 };
+    return updateMany(args);
+  };
+  return db;
+}
+
 describe('local upload recovery', () => {
+  it('keeps the rejected episode old VID until the new video is playable, then preserves its platform episode ID', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-replacement-'));
+    try {
+      const path = join(directory, 'corrected.mp4');
+      await writeFile(path, 'video');
+      const db = rejectedReplacementDatabase(path);
+      let playable = false;
+      const provider = vod({ known: [mediaFor()], playable: () => playable });
+      let current = instant;
+      const config = { ...env, LOCAL_UPLOAD_STORAGE_DIR: directory };
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, config, { now: () => current });
+      assert.equal(provider.uploadCount(), 1);
+      assert.equal(db.job.status, 'PROCESSING');
+      assert.equal(db.episode.byteplusVid, 'old-vid');
+      assert.equal(db.episode.tiktokEpisodeId, 'platform-1');
+      playable = true;
+      current = new Date(instant.getTime() + 60_000);
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service, config, { now: () => current });
+      assert.equal(provider.uploadCount(), 1);
+      assert.equal(db.job.status, 'SUCCEEDED');
+      assert.equal(db.episode.byteplusVid, 'vid-1');
+      assert.equal(db.episode.tiktokEpisodeId, 'platform-1');
+      assert.equal(db.episode.tiktokVideoStatus, 'NOT_STARTED');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('retains the rejected episode old VID when replacement upload fails', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-replacement-failed-'));
+    try {
+      const path = join(directory, 'corrected.mp4');
+      await writeFile(path, 'video');
+      const db = rejectedReplacementDatabase(path);
+      const provider = vod({ upload: async () => { throw new BytePlusVodError('rejected upload', false); } });
+      await processLocalUploadJobs(db.prisma, db.prisma, provider.service,
+        { ...env, LOCAL_UPLOAD_STORAGE_DIR: directory }, { now: () => instant });
+      assert.equal(db.job.status, 'FAILED');
+      assert.equal(db.episode.byteplusVid, 'old-vid');
+      assert.equal(db.episode.byteplusUploadStatus, 'READY');
+      assert.equal(db.episode.status, 'OFFLINE');
+      assert.equal((await stat(path)).size, 5);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   it('uses BytePlus-compatible tags while keeping app and job identities distinct', () => {
     const scope = uploadScope(env);
     const tags = uploadTags(scope, 'job-1');

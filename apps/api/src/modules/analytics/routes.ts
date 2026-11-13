@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 
-const eventKeys = ['app_open', 'ad_config', 'ad_load', 'ad_show', 'ad_close'] as const;
+const eventKeys = ['app_open', 'ad_config', 'ad_load', 'ad_show', 'ad_close', 'launch_attribution', 'entry_ad_decision'] as const;
 const results = ['success', 'fail', 'timeout', 'unsupported'] as const;
 const analyticsEnabledMiniApps = new Set(['dramaflicks', 'heartreel', 'zenclip', 'sweetreel', 'luxereel']);
 const jsonValue = z.unknown().superRefine((value, ctx) => {
@@ -45,7 +45,7 @@ export const clientAnalyticsEventInput = z.object({
     if (JSON.stringify(value).length > 8_192) ctx.addIssue({ code: 'custom', message: 'metadata is too large' });
   }).optional()
 }).superRefine((event, ctx) => {
-  if (event.eventKey !== 'app_open' && event.eventKey !== 'ad_config' && !event.placementId) {
+  if (!['app_open', 'ad_config', 'launch_attribution', 'entry_ad_decision'].includes(event.eventKey) && !event.placementId) {
     ctx.addIssue({ code: 'custom', path: ['placementId'], message: 'placementId is required for ad events' });
   }
   if (event.eventKey === 'ad_close' && event.isEnded === undefined) {

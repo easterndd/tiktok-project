@@ -252,6 +252,7 @@ model Album {
   platformPublishedAt      DateTime?
   reviewStatus             String?
   publishStatus            String?
+  platformEpisodePlan      Json?
   releaseYear              Int?
   dramaType                Int?
   tagList                  Json?
@@ -348,6 +349,7 @@ model Episode {
   byteplusCoverUrl     String?
   coverAssetId         String?
   episodeNo            Int
+  platformSeq          Int?
   title                String
   description          String?                  @db.Text
   coverUrl             String?
@@ -751,6 +753,50 @@ model MiniAppEntryLink {
   @@index([miniAppKey, registeredAt])
 }
 
+model MiniAppLaunch {
+  id                       String   @id @default(cuid())
+  miniAppKey               String
+  launchId                 String
+  entryId                  String
+  launchRef                String   @unique
+  userId                   String
+  releaseId                String
+  collectionStatus         String
+  localAttributionStatus   String
+  attributionReason        String
+  platformAttributionStatus String @default("UNKNOWN")
+  signalSummary            Json
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@unique([miniAppKey, launchId])
+  @@index([miniAppKey, releaseId, createdAt])
+  @@index([userId, createdAt])
+  @@index([localAttributionStatus, createdAt])
+}
+
+model MiniAppEntryAdDecision {
+  id                     String   @id @default(cuid())
+  launchRef              String   @unique
+  miniAppKey             String
+  launchId               String
+  releaseId              String
+  userId                 String
+  attributionStatus      String
+  decision               String
+  reason                 String
+  policyVersion          Int?
+  requiredCount          Int?
+  countMode              String?
+  sessionId              String?
+  requestId              String
+  decidedAt              DateTime @default(now())
+
+  @@index([miniAppKey, releaseId, decidedAt])
+  @@index([userId, decidedAt])
+  @@index([decision, reason, decidedAt])
+}
+
 model AppEntryAdSession {
   id             String                  @id @default(cuid())
   userId         String
@@ -766,6 +812,9 @@ model AppEntryAdSession {
   requiredCount  Int
   countMode      AppEntryAdCountMode     @default(COMPLETED)
   completedCount Int                     @default(0)
+  clientReportedShownCount Int             @default(0)
+  clientReportedCompletedCount Int         @default(0)
+  clientReportedAt DateTime?
   status         AppEntryAdSessionStatus @default(ACTIVE)
   expiresAt      DateTime
   createdAt      DateTime                @default(now())
@@ -774,9 +823,27 @@ model AppEntryAdSession {
   user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   completions AppEntryAdCompletion[]
   adEvents    AdEvent[]              @relation("AdEventAppEntrySession")
+  observations EntryAdObservation[]
 
   @@unique([userId, releaseId, launchId])
   @@index([userId, status, expiresAt])
+}
+
+model EntryAdObservation {
+  id          String   @id @default(cuid())
+  sessionId   String
+  clientEventId String
+  adIndex     Int
+  placementId String
+  eventType   String
+  occurredAt  DateTime
+  receivedAt  DateTime @default(now())
+
+  session AppEntryAdSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, clientEventId, eventType])
+  @@index([sessionId, adIndex, receivedAt])
+  @@index([receivedAt])
 }
 
 model AppEntryAdCompletion {
@@ -1016,6 +1083,7 @@ model UploadJob {
   id              String           @id @default(cuid())
   episodeId       String
   providerJobId   String?          @unique
+  replacesByteplusVid String?
   sourceUrl       String
   sourceType      UploadSourceType @default(URL)
   sourceName      String?
@@ -1078,6 +1146,50 @@ model MiniAppRuntimeError {
 
   @@index([createdAt])
   @@index([kind, createdAt])
+}
+
+model ClientTraceSession {
+  id          String   @id
+  miniAppKey  String
+  releaseId   String
+  userId      String?
+  platform    String?
+  startedAt   DateTime
+  lastEventAt DateTime
+  createdAt   DateTime @default(now())
+  records     ClientTraceRecord[]
+
+  @@index([miniAppKey, releaseId, lastEventAt])
+  @@index([lastEventAt])
+}
+
+model ClientTraceRecord {
+  id          String   @id @default(cuid())
+  traceId     String
+  recordId    String
+  seq         Int
+  kind        String
+  phase       String?
+  operationId String?
+  sessionId   String?
+  requestId   String?
+  placementId String?
+  errorCode   String?
+  subErrorCode String?
+  eventAt     DateTime
+  receivedAt  DateTime @default(now())
+  payload     Json
+  truncated   Boolean @default(false)
+
+  trace ClientTraceSession @relation(fields: [traceId], references: [id], onDelete: Cascade)
+
+  @@unique([traceId, recordId])
+  @@index([traceId, seq])
+  @@index([operationId, eventAt])
+  @@index([requestId, eventAt])
+  @@index([errorCode, eventAt])
+  @@index([sessionId, eventAt])
+  @@index([receivedAt])
 }
 
 model ClientAnalyticsEvent {

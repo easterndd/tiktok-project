@@ -2,13 +2,18 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { useNavigate } from 'react-router-dom';
 import { acknowledgeAppEntryAdShown, completeAppEntryAd, showAppEntryAd, startAppEntryAdSession } from '../features/ads/app-entry-ad';
 import { runEntryAdFlow } from '../features/ads/entry-ad-flow';
+import { runEntryAdFlowV2 } from '../features/ads/entry-ad-flow-v2';
+import { queueEntryObservation } from '../features/ads/entry-observations';
+import { queueLegacyEntryObservation } from '../features/ads/entry-legacy-observations';
 import { getLocalEntryAdPlacementIds } from '../features/ads/entry-ad-placements';
 import { attemptLocalEntryAd } from '../features/ads/local-entry-ad';
 import { ensureAnonymousSession, ensureTikTokSession, recordMiniLaunch } from '../features/auth/anonymous-session';
 import { reportDiagnostic } from '../lib/diagnostics';
+import { recordEntryAdDecision } from '../lib/analytics';
 import { ApiError, apiClient } from '../lib/api-client';
 import { campaignLaunchOptionsEvent, getCampaignEntryTarget, hasCampaignEntryIntent } from '../lib/launch-context';
 import { appKey } from '../lib/app-brand';
+import { isV006DualRelease } from '../features/ads/ad-platform';
 import styles from './EntryAdGate.module.css';
 
 type GateState = 'LOADING' | 'READY' | 'ERROR';
@@ -72,6 +77,18 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
     const run = async () => {
       await waitForCampaignLaunchOptions(controller.signal);
       if (controller.signal.aborted) return;
+      let launchRecord: Awaited<ReturnType<typeof recordMiniLaunch>> | undefined;
+      let attributionUnavailable = false;
+      if (isV006DualRelease()) {
+        await ensureAnonymousSession();
+        try {
+          launchRecord = await recordMiniLaunch();
+        } catch (cause) {
+          attributionUnavailable = true;
+          recordEntryAdDecision({ decision: 'SUPPRESS', reason: 'ATTRIBUTION_UNAVAILABLE', required: false });
+          reportDiagnostic({ kind: 'STARTUP', phase: 'LAUNCH_ATTRIBUTION_SAVE', message: cause instanceof Error ? cause.message : String(cause) });
+        }
+      }
       const campaignTarget = getCampaignEntryTarget();
       if (!campaignTarget && hasCampaignEntryIntent()) {
         window.clearTimeout(startupTimer);
@@ -99,7 +116,7 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
         }
       }
 
-      if (localEntryMode) {
+      if (localEntryMode && !isV006DualRelease()) {
         const anonymousSession = ensureAnonymousSession();
         void anonymousSession.then(() => setState('READY'), () => setState('READY'));
         void attemptLocalEntryAd({
@@ -136,11 +153,26 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
           if (appKey === 'storyland') await ensureTikTokSession().catch(() => undefined);
           if (controller.signal.aborted) return;
           step = 'ENTRY_AD_POLICY';
-          const session = await startAppEntryAdSession();
+          if (attributionUnavailable || (isV006DualRelease() && !launchRecord?.launchRef)) {
+            if (!attributionUnavailable) recordEntryAdDecision({ decision: 'SUPPRESS', reason: 'ATTRIBUTION_UNAVAILABLE', required: false });
+            window.clearTimeout(startupTimer);
+            setState('READY');
+            if (appKey !== 'storyland') void ensureTikTokSession().catch(() => undefined);
+            return;
+          }
+          const session = await startAppEntryAdSession(launchRecord?.launchRef);
           if (controller.signal.aborted) return;
           if (session.required) {
             step = 'ENTRY_AD_PLAYBACK';
-            await runEntryAdFlow(session, { show: showAppEntryAd, complete: (sessionId, clientEventId, isEnded, adIndex, placementId, adType) => session.countMode === 'SHOWN'
+            if (session.entryFlowVersion === 2 && session.mode === 'REWARDED_GATED') {
+              await runEntryAdFlowV2(session, {
+                show: showAppEntryAd, observe: (observation) => session.legacyObservationProtocol
+                  ? queueLegacyEntryObservation(session.sessionId!, session.countMode ?? 'COMPLETED', observation)
+                  : queueEntryObservation(session.sessionId!, observation),
+                wait, isActive: () => !controller.signal.aborted,
+                onError: (cause) => reportDiagnostic({ kind: 'AD', phase: 'ENTRY_AD_PLAYBACK_V2', message: cause instanceof Error ? cause.message : String(cause) })
+              });
+            } else await runEntryAdFlow(session, { show: showAppEntryAd, complete: (sessionId, clientEventId, isEnded, adIndex, placementId, adType) => session.countMode === 'SHOWN'
               ? acknowledgeAppEntryAdShown(sessionId, clientEventId, adIndex!, placementId, adType)
               : completeAppEntryAd(sessionId, clientEventId, isEnded), refreshSession: startAppEntryAdSession, wait, isActive: () => !controller.signal.aborted, onError: (cause) => {
               reportDiagnostic({ kind: 'AD', phase: 'ENTRY_AD_PLAYBACK', message: cause instanceof Error ? cause.message : String(cause) });

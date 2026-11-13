@@ -459,7 +459,7 @@ export function PlayerShell({ message, coverUrl, title, playInfo, playlist = [],
     catch { setPlayerError('Playback could not start. Please try again.'); }
   };
   return <section className={`${styles.shell} ${immersive ? styles.immersive : ''}`} aria-label={t(locale, 'watchEpisode')}>
-    {coverUrl && <img src={coverUrl} alt="" className={styles.poster} onError={(event) => { event.currentTarget.src = '/fallback-cover.svg'; }} />}
+    {coverUrl && !isLocalPlayback && <img src={coverUrl} alt="" className={styles.poster} onError={(event) => { event.currentTarget.src = '/fallback-cover.svg'; }} />}
     <div className={styles.scrim} />
     {playInfo && !visibleMessage && (isLocalPlayback
       ? <video ref={localVideo} className={styles.localVideo} src={playInfo.sourceUrl ?? undefined} poster={coverUrl ?? undefined} controls playsInline autoPlay preload="auto" />

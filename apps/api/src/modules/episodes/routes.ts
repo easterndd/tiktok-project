@@ -52,10 +52,10 @@ async function createOrResumeRewardSession(app: FastifyInstance, userId: string,
   const now = new Date();
   const episode = await app.prisma.episode.findFirst({
     where: { id: episodeId, status: 'ONLINE', album: publicAlbumWhere(app.config) },
-    select: { id: true, isFree: true, episodeNo: true, album: { select: { accessConfig: true, regions: true } } }
+    select: { id: true, isFree: true, episodeNo: true, platformSeq: true, album: { select: { accessConfig: true, regions: true } } }
   });
   if (!episode || !isAlbumVisibleInCountry(episode.album.regions, country)) return { missing: true };
-  if (isEpisodeFree(episode, episode.album.accessConfig)) return { access: 'PLAYABLE' };
+  if (isEpisodeFree({ ...episode, episodeNo: episode.platformSeq ?? episode.episodeNo }, episode.album.accessConfig)) return { access: 'PLAYABLE' };
   const unlocked = await app.prisma.episodeUnlock.findUnique({ where: { userId_episodeId: { userId, episodeId } }, select: { id: true } });
   if (unlocked) return { access: 'PLAYABLE' };
 
@@ -125,10 +125,10 @@ async function completeRewardSession(app: FastifyInstance, userId: string, episo
     const now = new Date();
     const episode = await tx.episode.findFirst({
       where: { id: episodeId, status: 'ONLINE', album: publicAlbumWhere(app.config) },
-      select: { id: true, isFree: true, episodeNo: true, album: { select: { accessConfig: true, regions: true } } }
+      select: { id: true, isFree: true, episodeNo: true, platformSeq: true, album: { select: { accessConfig: true, regions: true } } }
     });
     if (!episode || !isAlbumVisibleInCountry(episode.album.regions, country)) return { missing: true as const };
-    if (isEpisodeFree(episode, episode.album.accessConfig)) return { access: 'PLAYABLE' as const, shouldContinue: false as const };
+    if (isEpisodeFree({ ...episode, episodeNo: episode.platformSeq ?? episode.episodeNo }, episode.album.accessConfig)) return { access: 'PLAYABLE' as const, shouldContinue: false as const };
     const unlocked = await tx.episodeUnlock.findUnique({ where: { userId_episodeId: { userId, episodeId } }, select: { id: true } });
     if (unlocked) return { access: 'PLAYABLE' as const, shouldContinue: false as const };
 
@@ -215,9 +215,9 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
         status: 'ONLINE',
         album: { tiktokAlbumId: parsed.data.album_id, ...publicAlbumWhere(app.config) }
       },
-      select: { id: true, albumId: true, episodeNo: true, isFree: true, album: { select: { accessConfig: true, regions: true } } }
+      select: { id: true, albumId: true, episodeNo: true, platformSeq: true, isFree: true, album: { select: { accessConfig: true, regions: true } } }
     });
-    if (!episode || !isEpisodeFree(episode, episode.album.accessConfig)
+    if (!episode || !isEpisodeFree({ ...episode, episodeNo: episode.platformSeq ?? episode.episodeNo }, episode.album.accessConfig)
       || !isAlbumVisibleInCountry(episode.album.regions, country)) return { status: 'INVALID' as const };
     const authorization = await app.sharedPrisma.miniAppAlbumAuthorization.findFirst({
       where: { miniAppKey: app.config.MINI_APP_KEY, targetLocalAlbumId: episode.albumId },
@@ -287,7 +287,8 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
     });
     if (!episode || !isAlbumVisibleInCountry(episode.album.regions, country)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Episode not found.', requestId: request.id } }) as never;
 
-    const unlocked = isEpisodeFree(episode, episode.album.accessConfig) || Boolean(user && await app.prisma.episodeUnlock.findUnique({
+    const effectiveEpisode = { ...episode, episodeNo: episode.platformSeq ?? episode.episodeNo };
+    const unlocked = isEpisodeFree(effectiveEpisode, episode.album.accessConfig) || Boolean(user && await app.prisma.episodeUnlock.findUnique({
       where: { userId_episodeId: { userId: user.sub, episodeId } },
       select: { id: true }
     }));
@@ -314,7 +315,7 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
       playbackMode: localPlaybackUrl ? 'LOCAL' : 'BYTEPLUS',
       albumId: episode.album.tiktokAlbumId ?? `local-${episode.albumId}`,
       localEpisodeId: episode.id,
-      episodeNo: episode.episodeNo,
+      episodeNo: episode.platformSeq ?? episode.episodeNo,
       episodeId: episode.tiktokEpisodeId ?? `local-${episode.id}`,
       vid: episode.byteplusVid ?? `local-${episode.id}`,
       playAuthToken,

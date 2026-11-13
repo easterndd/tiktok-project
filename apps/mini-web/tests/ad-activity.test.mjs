@@ -31,3 +31,15 @@ it('notifies player listeners once the native release cooldown ends', async () =
     hooks.deregister();
   }
 });
+
+it('allows an entry handoff during Android cooldown without allowing other ads through', () => {
+  const releaseFirst = claimNativeAd('entry');
+  assert.ok(releaseFirst);
+  releaseFirst();
+  assert.equal(claimNativeAd('rewarded'), null);
+  const releaseNext = claimNativeAd('entry', { entryHandoff: true });
+  assert.ok(releaseNext);
+  assert.equal(claimNativeAd('entry', { entryHandoff: true }), null);
+  releaseNext();
+  resetAdActivityForTests();
+});

@@ -2,7 +2,30 @@ const sensitiveParameter = /(?:token|auth|secret|password|email|phone|openid|ope
 const maxQueryEntries = 32;
 let initialWebviewUrl = typeof window === 'undefined' ? '' : window.location.href;
 let sdkLaunchPayload: TikTokMiniDramaShowPayload | undefined;
+function newLaunchUuid() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const value = Math.floor(Math.random() * 16);
+    return (character === 'x' ? value : (value & 0x3) | 0x8).toString(16);
+  });
+}
+
+const launchId = newLaunchUuid();
+const entryId = newLaunchUuid();
+let miniLaunchRef: string | undefined;
 export const campaignLaunchOptionsEvent = 'quickreels:campaign-launch-options';
+
+export function getMiniLaunchIds() {
+  return { launchId, entryId };
+}
+
+export function setMiniLaunchRef(value?: string) {
+  miniLaunchRef = value;
+}
+
+export function getMiniLaunchRef() {
+  return miniLaunchRef;
+}
 
 function readInitialSdkLaunchPayload() {
   const minis = window.TTMinis;
@@ -41,7 +64,8 @@ function safeQuery(value: unknown) {
   for (const [key, raw] of Object.entries(value).slice(0, maxQueryEntries)) {
     if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(key) || sensitiveParameter.test(key)) continue;
     if (typeof raw !== 'string' && typeof raw !== 'number' && typeof raw !== 'boolean') continue;
-    const normalized = String(raw).trim().slice(0, 128);
+    const normalized = String(raw).trim();
+    if (normalized.length > 4096) continue;
     if (!normalized || /(?:https?:\/\/|www\.)/i.test(normalized)) continue;
     result[key] = normalized;
   }

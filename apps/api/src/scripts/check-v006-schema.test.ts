@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import { preflightKeys, requiredV006Migrations, validateV006Schema, type V006SchemaSnapshot } from './check-v006-schema';
+import { preflightKeys, requiredV006Migrations, requiredV006DualMigrations, validateV006Schema, type V006SchemaSnapshot } from './check-v006-schema';
 
 const appliedAt = new Date('2026-11-09T00:00:00.000Z');
 const snapshot: V006SchemaSnapshot = {
@@ -29,6 +29,14 @@ const snapshot: V006SchemaSnapshot = {
 
 it('accepts a fully migrated Mini app database', () => {
   assert.deepEqual(validateV006Schema(snapshot, 'heartreel'), []);
+});
+
+it('requires the new entry trace migration only for a dual-release target', () => {
+  assert.deepEqual(validateV006Schema(snapshot, 'heartreel'), []);
+  const issues = validateV006Schema(snapshot, 'heartreel', true);
+  assert.ok(issues.some((issue) => issue.includes(requiredV006DualMigrations[0])));
+  assert.ok(issues.some((issue) => issue.includes('ClientTraceRecord.payload')));
+  assert.ok(issues.some((issue) => issue.includes('EntryAdObservation_sessionId_clientEventId_eventType_key')));
 });
 
 it('fails closed on a pending migration, unsafe legacy default, missing column, index, or wrong schema', () => {

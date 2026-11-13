@@ -383,6 +383,15 @@ tbody tr:nth-child(4) .drama-thumb { background: linear-gradient(145deg, #f3c36c
 .diagnostic-table td:first-child { display: table-cell; }
 .diagnostic-table code { white-space: normal; overflow-wrap: anywhere; }
 .diagnostic-table small { color: var(--muted); }
+.trace-timeline { border-top: 1px solid var(--line); padding: 16px 22px 22px; min-width: 0; }
+.trace-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.trace-heading code { overflow-wrap: anywhere; }
+.trace-record { border-top: 1px solid var(--line); padding: 9px 0; }
+.trace-record summary { cursor: pointer; overflow-wrap: anywhere; }
+.trace-record summary time { font-variant-numeric: tabular-nums; color: var(--muted); }
+.trace-record summary strong { color: #b34734; }
+.trace-record p { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.trace-record pre { max-height: 400px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f6f8; padding: 10px; font-size: 12px; }
 @media (max-width: 760px) { .entry-link-row { grid-template-columns: 1fr; align-items: stretch; } .entry-link-actions { flex-wrap: wrap; } }
 @media (max-width: 1080px) { .admin-layout { grid-template-columns: 206px minmax(0, 1fr); } .main { padding: 32px 24px 44px; } .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .content-grid, .lower-grid { grid-template-columns: 1fr; } }
 @media (max-width: 1080px) { .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

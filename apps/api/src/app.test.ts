@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { buildApp } from './app';
@@ -103,6 +106,9 @@ async function createPrismaStub() {
     entryCompletions: new Map<string, any>(),
     appSessions: new Map<string, any>(),
     activityEvents: new Map<string, any>(),
+    miniAppLaunches: new Map<string, any>(),
+    miniAppEntryAdDecisions: new Map<string, any>(),
+    clientAnalyticsEvents: new Map<string, any>(),
     healthQueryCalls: { adFailureCount: 0, adFailureList: 0 },
     legacyLaunchMetadata: { metadata: { launchQuery: { adId: 'test-ad-id' } } } as any | null,
     sharedIps: new Map<string, any>(),
@@ -250,6 +256,37 @@ async function createPrismaStub() {
       findMany: async ({ where, take, skip = 0 }: any) => [...state.activityEvents.values()].reverse().filter((event) =>
         (typeof where.userId === 'string' ? where.userId === event.userId : where.userId.in.includes(event.userId))
         && event.eventType === where.eventType).slice(skip, skip + take)
+    },
+    miniAppLaunch: {
+      upsert: async ({ where, create, update }: any) => {
+        const key = `${where.miniAppKey_launchId.miniAppKey}:${where.miniAppKey_launchId.launchId}`;
+        const value = { ...(state.miniAppLaunches.get(key) ?? create), ...update };
+        state.miniAppLaunches.set(key, value);
+        state.miniAppLaunches.set(`ref:${value.launchRef}`, value);
+        return value;
+      },
+      findUnique: async ({ where }: any) => where.launchRef ? state.miniAppLaunches.get(`ref:${where.launchRef}`) ?? null
+        : state.miniAppLaunches.get(`${where.miniAppKey_launchId.miniAppKey}:${where.miniAppKey_launchId.launchId}`) ?? null,
+      findMany: async () => [...state.miniAppLaunches.values()].filter((item: any) => item.launchRef)
+    },
+    miniAppEntryAdDecision: {
+      findUnique: async ({ where }: any) => state.miniAppEntryAdDecisions.get(where.launchRef) ?? null,
+      create: async ({ data }: any) => {
+        const value = { id: `entry-decision-${state.miniAppEntryAdDecisions.size + 1}`, ...data };
+        state.miniAppEntryAdDecisions.set(data.launchRef, value);
+        return value;
+      },
+      findMany: async () => [...state.miniAppEntryAdDecisions.values()]
+    },
+    clientAnalyticsEvent: {
+      createMany: async ({ data }: any) => {
+        let count = 0;
+        for (const item of data) if (!state.clientAnalyticsEvents.has(item.eventId)) {
+          state.clientAnalyticsEvents.set(item.eventId, item);
+          count += 1;
+        }
+        return { count };
+      }
     },
     watchProgress: { findMany: async () => [] },
     user: {
@@ -708,6 +745,53 @@ describe('QuicK ReeLS API', () => {
     assert.equal(episode.byteplusVid, null);
     assert.equal(episode.byteplusUploadStatus, 'PENDING');
     assert.equal(episode.status, 'DRAFT');
+  });
+
+  it('queues a direct file replacement only for an episode rejected in the reconciled version', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'quickreels-rejected-upload-'));
+    try {
+      const prisma = await createPrismaStub();
+      const album = await prisma.album.findUnique();
+      const episode = await prisma.episode.findUnique();
+      Object.assign(album, { status: 'OFFLINE', publishStatus: 'UNLISTED', reviewStatus: '3', tiktokVersion: 1 });
+      Object.assign(episode, { status: 'OFFLINE', byteplusVid: 'old-vid', byteplusUploadStatus: 'READY',
+        tiktokVideoStatus: 'READY', tiktokEpisodeId: 'platform-1' });
+      album.episodes = [episode];
+      const reconciliation = { id: 'reconcile-1', completedAt: new Date(), providerResponse: {
+        checked_version: 1, review_status: 3,
+        episode_info_list: [{ episode_id: 'platform-1', seq: 1, byteplus_vid: 'old-vid',
+          review_result: { overall_review_status: 3 } }],
+        episode_failures: [{ episode_id: 'platform-1', review_status: '3', exception_reason: 'Episode Video: rejected' }]
+      } };
+      prisma.platformSyncJob.findFirst = async (args: any) => args.where.kind === 'RECONCILE' ? reconciliation : null;
+      prisma.episode.updateMany = async ({ where, data }: any) => {
+        if (where.byteplusVid !== episode.byteplusVid || where.byteplusUploadStatus !== episode.byteplusUploadStatus) return { count: 0 };
+        Object.assign(episode, data);
+        return { count: 1 };
+      };
+      let queued: any;
+      prisma.uploadJob.create = async ({ data }: any) => { queued = { id: 'replacement-1', ...data }; return queued; };
+      const app = await buildApp({ ...env, LOCAL_UPLOAD_STORAGE_DIR: directory }, { prisma });
+      apps.push(app);
+      const headers = { authorization: 'Bearer ' + await token(app, 'admin') };
+      const report = await app.inject({ method: 'GET', url: '/api/v1/admin/albums/album-1/rejected-episodes', headers });
+      assert.equal(report.statusCode, 200, report.body);
+      assert.deepEqual(report.json().items.map((item: any) => item.episodeNo), [1]);
+      const boundary = 'replacement-boundary';
+      const payload = Buffer.from('--' + boundary + '\r\nContent-Disposition: form-data; name="file"; filename="corrected.mp4"\r\nContent-Type: video/mp4\r\n\r\nvideo-data\r\n--' + boundary + '--\r\n');
+      const replaced = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/replace-video',
+        headers: { ...headers, 'content-type': 'multipart/form-data; boundary=' + boundary }, payload });
+      assert.equal(replaced.statusCode, 202, replaced.body);
+      assert.equal(queued.replacesByteplusVid, 'old-vid');
+      assert.equal(episode.byteplusVid, 'old-vid');
+      assert.equal(episode.byteplusUploadStatus, 'UPLOADING');
+      album.reviewStatus = 'PASSED';
+      episode.byteplusUploadStatus = 'READY';
+      const blocked = await app.inject({ method: 'POST', url: '/api/v1/admin/episodes/episode-1/replace-video',
+        headers: { ...headers, 'content-type': 'multipart/form-data; boundary=' + boundary }, payload });
+      assert.equal(blocked.statusCode, 409, blocked.body);
+      assert.equal(episode.byteplusVid, 'old-vid');
+    } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
   it('deletes an offline shared playback copy without deleting its source authorization', async () => {
@@ -1881,6 +1965,58 @@ describe('QuicK ReeLS API', () => {
     const missing = await app.inject({ method: 'PATCH', url: '/api/v1/admin/app-entry-ad-releases/main-missing', headers: adminHeaders,
       payload: { portalVersion: 'Version 8', portalStatus: 'RELEASED' } });
     assert.equal(missing.statusCode, 404);
+  });
+
+  it('uses the current v006-dual launch attribution for entry decisions and keeps a suppressed launch frozen', async () => {
+    const database = await createPrismaStub();
+    const app = await createTestApp({ DRAMAFLICKS_DATABASE_URL: 'postgresql://test:test@localhost:5432/dramaflicks' },
+      { miniPrisma: { dramaflicks: database as unknown as PrismaClient } });
+    apps.push(app);
+    const base = '/api/dramaflicks/v1';
+    const userHeaders = { authorization: `Bearer ${await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'dramaflicks' })}` };
+    const adminHeaders = { authorization: `Bearer ${await app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: 'dramaflicks', role: 'OWNER', tokenVersion: 0 })}` };
+    const releaseId = 'dramaflicks-v006-dual-attribution-test';
+    const policy = await app.inject({ method: 'PUT', url: `${base}/admin/app-entry-ad-policy`, headers: adminHeaders,
+      payload: { releaseId, enabled: true, mode: 'REWARDED_GATED', placementId: 'ad7690454033278421044', requiredCount: 2, countMode: 'SHOWN', onUnavailable: 'ALLOW' } });
+    assert.equal(policy.statusCode, 200);
+    const naturalLaunchId = '11111111-1111-4111-8111-111111111111';
+    const naturalContext = await app.inject({ method: 'POST', url: `${base}/auth/launch-context`, headers: userHeaders,
+      payload: { launchId: naturalLaunchId, entryId: naturalLaunchId, releaseId, rawUrl: 'https://example.test/?ttoclid=preview' } });
+    assert.equal(naturalContext.statusCode, 200);
+    assert.equal(naturalContext.json().attribution.status, 'UNATTRIBUTED');
+    const naturalLaunchEvent = [...(database as any)._state.activityEvents.values()].find((event: any) => event.metadata?.launchId === naturalLaunchId);
+    assert.equal('rawUrl' in naturalLaunchEvent.metadata, false);
+    assert.equal('sdkPayloadRaw' in naturalLaunchEvent.metadata, false);
+    const naturalEntry = await app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers: userHeaders,
+      payload: { launchId: naturalLaunchId, launchRef: naturalContext.json().launchRef, releaseId, adId: '1881556363195874', entryFlowVersion: 2 } });
+    assert.equal(naturalEntry.statusCode, 200);
+    assert.equal(naturalEntry.json().required, false);
+    assert.equal(naturalEntry.json().decisionReason, 'UNATTRIBUTED');
+    const repeated = await app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers: userHeaders,
+      payload: { launchId: naturalLaunchId, launchRef: naturalContext.json().launchRef, releaseId, entryFlowVersion: 2 } });
+    assert.equal(repeated.json().decisionId, naturalEntry.json().decisionId);
+    const paidLaunchId = '22222222-2222-4222-8222-222222222222';
+    const paidContext = await app.inject({ method: 'POST', url: `${base}/auth/launch-context`, headers: userHeaders,
+      payload: { launchId: paidLaunchId, entryId: paidLaunchId, releaseId, rawUrl: 'https://example.test/?adId=1881556363195874&ttclid=long-click-token' } });
+    assert.equal(paidContext.json().attribution.status, 'ATTRIBUTED');
+    const paidLaunchEvent = [...(database as any)._state.activityEvents.values()].find((event: any) => event.metadata?.launchId === paidLaunchId);
+    assert.equal('rawUrl' in paidLaunchEvent.metadata, false);
+    assert.equal(JSON.stringify(paidLaunchEvent.metadata).includes('long-click-token'), false);
+    const paidEntry = await app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers: userHeaders,
+      payload: { launchId: paidLaunchId, launchRef: paidContext.json().launchRef, releaseId, entryFlowVersion: 2 } });
+    assert.equal(paidEntry.statusCode, 200);
+    assert.equal(paidEntry.json().required, true);
+    assert.equal(paidEntry.json().decisionReason, 'ENTRY_AD_REQUIRED');
+    const funnelEvents = await app.inject({ method: 'POST', url: `${base}/analytics/events`, headers: userHeaders,
+      payload: { events: [
+        { eventId: 'attribution-event-0001', eventKey: 'launch_attribution', releaseId, launchId: naturalLaunchId, metadata: { launchRef: naturalContext.json().launchRef, status: 'UNATTRIBUTED', reason: 'MISSING_AD_ID' } },
+        { eventId: 'decision-event-00001', eventKey: 'entry_ad_decision', releaseId, launchId: naturalLaunchId, metadata: { launchRef: naturalContext.json().launchRef, decisionId: naturalEntry.json().decisionId, decision: 'SUPPRESS', reason: 'UNATTRIBUTED' } }
+      ] } });
+    assert.equal(funnelEvents.statusCode, 202);
+    assert.equal(funnelEvents.json().accepted, 2);
+    const adminQuery = await app.inject({ url: `${base}/admin/launch-attribution?launchId=${naturalLaunchId}`, headers: adminHeaders });
+    assert.equal(adminQuery.statusCode, 200);
+    assert.equal(adminQuery.json().items[0].decision.reason, 'UNATTRIBUTED');
   });
 
   it('replays the current entry ad on an early close in completed mode', async () => {

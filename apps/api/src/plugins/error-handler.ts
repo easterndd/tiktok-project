@@ -12,18 +12,20 @@ export function registerErrorHandler(app: FastifyInstance) {
       || (error as { statusCode?: number }).statusCode === 503) {
       const code = (error as { code?: string }).code ?? 'SERVER_BUSY';
       const suppressed = sampleResponseLog(busySamples, `${request.routeOptions.url}:${code}`, Date.now(), 10_000, 256);
-      if (suppressed !== null) request.log.warn({ errorCode: code, route: request.routeOptions.url, suppressed }, 'Database admission or transaction busy');
+      request.log.warn({ requestId: request.id, errorCode: code, route: request.routeOptions.url, suppressed: suppressed ?? 0 }, 'Database admission or transaction busy');
       reply.header('Retry-After', '2');
       return reply.status(503).send({ error: { code: 'SERVER_BUSY', message: 'The service is busy. Please retry shortly.', requestId: request.id } });
     }
     if (error instanceof ZodError) {
-      request.log.warn({ issues: error.issues.map((issue) => ({ path: issue.path.join('.'), code: issue.code })) }, 'Request validation failed');
+      request.log.warn({ requestId: request.id, issues: error.issues.map((issue) => ({ path: issue.path.join('.'), code: issue.code })) }, 'Request validation failed');
       return reply.status(400).send({ error: { code: 'VALIDATION_ERROR', message: '请求参数不正确。', requestId: request.id } });
     }
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      request.log.warn({ requestId: request.id, errorCode: error.code, route: request.routeOptions.url }, 'Database unique constraint rejected request');
       return reply.status(409).send({ error: { code: 'CONFLICT', message: '请求与现有数据冲突。', requestId: request.id } });
     }
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      request.log.warn({ requestId: request.id, errorCode: error.code, route: request.routeOptions.url }, 'Database record was not found');
       return reply.status(404).send({ error: { code: 'NOT_FOUND', message: '请求的资源不存在。', requestId: request.id } });
     }
     if (error instanceof ProviderNotConfiguredError) {

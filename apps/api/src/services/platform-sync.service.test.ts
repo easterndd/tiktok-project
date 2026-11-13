@@ -9,9 +9,9 @@ test('reports every episode missing TikTok registration before version sync', as
     coverAsset: { providerImageId: 'cover-1' }, releaseYear: 2026, dramaType: 2, tagList: [1],
     description: 'Description',
     episodes: [
-      { episodeNo: 15, byteplusVid: 'vid-15', tiktokVideoStatus: 'READY' },
-      { episodeNo: 16, byteplusVid: 'vid-16', tiktokVideoStatus: 'PENDING' },
-      { episodeNo: 18, byteplusVid: null, tiktokVideoStatus: 'NOT_STARTED' }
+      { id: 'episode-15', episodeNo: 15, byteplusVid: 'vid-15', tiktokVideoStatus: 'READY' },
+      { id: 'episode-16', episodeNo: 16, byteplusVid: 'vid-16', tiktokVideoStatus: 'PENDING' },
+      { id: 'episode-18', episodeNo: 18, byteplusVid: null, tiktokVideoStatus: 'NOT_STARTED' }
     ]
   }) } };
   await assert.rejects(() => buildAlbumSnapshot(prisma as any, 'album-1'), (error: any) => {
@@ -33,6 +33,56 @@ test('rejects version sync locally when the TikTok description is empty', async 
     assert.match(error.message, /剧情简介/);
     return true;
   });
+});
+
+test('a corrected version changes only rejected episode VIDs and preserves every platform episode ID', async () => {
+  const prisma = { album: { findUnique: async () => ({
+    coverAsset: { providerImageId: 'album-cover' }, releaseYear: 2026, dramaType: 2, tagList: [1],
+    language: 'en', title: 'Drama', description: 'Description',
+    episodes: [
+      { id: 'local-1', episodeNo: 1, title: 'Episode 1', tiktokEpisodeId: 'platform-1',
+        byteplusVid: 'corrected-1', byteplusUploadStatus: 'READY', tiktokVideoStatus: 'READY' },
+      { id: 'local-2', episodeNo: 2, title: 'Episode 2', tiktokEpisodeId: 'platform-2',
+        byteplusVid: 'original-2', byteplusUploadStatus: 'READY', tiktokVideoStatus: 'READY' },
+      { id: 'local-17', episodeNo: 17, title: 'Episode 17', tiktokEpisodeId: 'platform-17',
+        byteplusVid: 'corrected-17', byteplusUploadStatus: 'READY', tiktokVideoStatus: 'READY' }
+    ]
+  }) } };
+  const snapshot = await buildAlbumSnapshot(prisma as any, 'album-1');
+  assert.deepEqual(snapshot.episodes.map(({ episode_id, byteplus_vid }) => [episode_id, byteplus_vid]), [
+    ['platform-1', 'corrected-1'],
+    ['platform-2', 'original-2'],
+    ['platform-17', 'corrected-17']
+  ]);
+});
+
+test('a saved rejected-episode plan creates a compact version snapshot without renumbering local episodes', async () => {
+  const episodes = [1, 2, 6].map((episodeNo) => ({
+    id: `local-${episodeNo}`, episodeNo, title: `Episode ${episodeNo}`,
+    tiktokEpisodeId: `platform-${episodeNo}`, byteplusVid: `vid-${episodeNo}`,
+    byteplusUploadStatus: 'READY', tiktokVideoStatus: 'READY'
+  }));
+  const prisma: any = { album: { findUnique: async () => ({
+    id: 'album-1', reviewStatus: '3', platformEpisodePlan: ['local-1', 'local-6'],
+    coverAsset: { providerImageId: 'cover-1' }, releaseYear: 2026, dramaType: 2, tagList: [1],
+    language: 'en', title: 'Drama', description: 'Description', episodes
+  }) } };
+  const snapshot = await buildAlbumSnapshot(prisma, 'album-1');
+  assert.equal(snapshot.albumInfo.seq_num, 2);
+  assert.deepEqual(snapshot.episodes.map(({ localEpisodeId, episode_id, seq, byteplus_vid }) => [localEpisodeId, episode_id, seq, byteplus_vid]), [
+    ['local-1', 'platform-1', 1, 'vid-1'], ['local-6', 'platform-6', 2, 'vid-6']
+  ]);
+  assert.deepEqual(episodes.map((episode) => episode.episodeNo), [1, 2, 6]);
+});
+
+test('a rejected version cannot sync until an explicit submission plan has been saved', async () => {
+  const prisma: any = { album: { findUnique: async () => ({
+    id: 'album-1', reviewStatus: '3', platformEpisodePlan: null,
+    coverAsset: { providerImageId: 'cover-1' }, releaseYear: 2026, dramaType: 2, tagList: [1],
+    language: 'en', title: 'Drama', description: 'Description',
+    episodes: [{ id: 'local-1', episodeNo: 1, title: 'Episode 1', byteplusVid: 'vid-1', tiktokVideoStatus: 'READY' }]
+  }) } };
+  await assert.rejects(() => buildAlbumSnapshot(prisma, 'album-1'), /排除驳回分集并重排/);
 });
 
 test('requeues a failed platform sync job when an operator retries it', async () => {
@@ -262,7 +312,7 @@ test('recreates a TikTok album when its saved ID is not found for the current cl
 
   assert.equal((submittedEpisodes[0] as { episode_id?: string }).episode_id, undefined);
   assert.deepEqual((episodeUpdateManyInputs[0].data as Record<string, unknown>).tiktokEpisodeId, null);
-  assert.equal((episodeUpdates[0].data as Record<string, unknown>).tiktokEpisodeId, 'new-episode-1');
+  assert.equal((episodeUpdates[0].data as Record<string, unknown>).tiktokEpisodeId, undefined);
   assert.equal((albumUpdates.at(-1)?.data as Record<string, unknown>).tiktokAlbumId, 'new-album-1');
   assert.equal((syncJobUpdates.at(-1)?.data as Record<string, unknown>).status, 'SUCCEEDED');
 });
@@ -306,7 +356,7 @@ test('resumes a recreated album without reusing episode ids from the old snapsho
   await processPlatformSyncJobs(prisma as any, api as any, { now: () => new Date('2026-09-23T10:00:00.000Z') });
 
   assert.equal(submittedEpisodes[0].episode_id, undefined);
-  assert.equal((episodeUpdates[0].data as Record<string, unknown>).tiktokEpisodeId, 'new-episode-1');
+  assert.equal((episodeUpdates[0].data as Record<string, unknown>).tiktokEpisodeId, undefined);
   assert.equal((syncJobUpdates.at(-1)?.data as Record<string, unknown>).status, 'SUCCEEDED');
 });
 
@@ -529,13 +579,13 @@ test('reconciliation keeps old episodes online while the new version is under re
   const prisma: any = {
     platformSyncJob: {
       findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async (input: Record<string, any>) => { jobUpdates.push(input); return input; },
-      findFirst: async () => ({ snapshotJson: { episodes: [{ localEpisodeId: 'episode-1' }, { localEpisodeId: 'episode-2' }, { localEpisodeId: 'episode-3' }] } })
+      findFirst: async () => ({ snapshotJson: { episodes: [{ localEpisodeId: 'episode-1', seq: 1 }, { localEpisodeId: 'episode-2', seq: 2 }, { localEpisodeId: 'episode-3', seq: 3 }] } })
     },
     album: {
       findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2, onlineVersion: 1 }),
       update: async (input: Record<string, any>) => { albumUpdates.push(input); return input; }
     },
-    episode: { updateMany: async (input: Record<string, any>) => { episodeUpdates.push(input); return input; } },
+    episode: { updateMany: async (input: Record<string, any>) => { episodeUpdates.push(input); return { count: 1 }; } },
     $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
   };
   const api = { queryAlbum: async (input: { version?: number }) => ({ requestId: 'request-id', data: input.version === 1
@@ -545,8 +595,9 @@ test('reconciliation keeps old episodes online while the new version is under re
   assert.equal(albumUpdates[0].data.status, 'ONLINE');
   assert.equal(albumUpdates[0].data.reviewStatus, '1');
   assert.equal(episodeUpdates[0].data.status, 'OFFLINE');
-  assert.deepEqual(episodeUpdates[1].where.id.in, ['episode-1', 'episode-2', 'episode-3']);
-  assert.equal(episodeUpdates[1].data.status, 'ONLINE');
+  assert.deepEqual(episodeUpdates.filter((item) => item.where.id).map((item) => [item.where.id, item.data.status, item.data.platformSeq]), [
+    ['episode-1', 'ONLINE', 1], ['episode-2', 'ONLINE', 2], ['episode-3', 'ONLINE', 3]
+  ]);
   assert.equal(jobUpdates.at(-1)?.data.providerResponse.episode_failures[0].seq, 4);
   assert.equal(jobUpdates.at(-1)?.data.providerResponse.online_episode_failures[0].exception_reason, 'removed from BytePlus');
 });
@@ -597,13 +648,13 @@ test('switching a listed album waits for reconciliation before exposing new epis
   const prisma: any = {
     platformSyncJob: {
       findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async (input: Record<string, any>) => input,
-      findFirst: async () => ({ snapshotJson: { episodes: [1, 2, 3, 4].map((number) => ({ localEpisodeId: `episode-${number}` })) } })
+      findFirst: async () => ({ snapshotJson: { episodes: [1, 2, 3, 4].map((number) => ({ localEpisodeId: `episode-${number}`, seq: number })) } })
     },
     album: {
       findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2, onlineVersion: 1, platformPublishedVersion: 1, publishStatus: 'LISTED' }),
       update: async (input: Record<string, any>) => { albumUpdates.push(input); return input; }
     },
-    episode: { updateMany: async (input: Record<string, any>) => { episodeUpdates.push(input); return input; } },
+    episode: { updateMany: async (input: Record<string, any>) => { episodeUpdates.push(input); return { count: 1 }; } },
     $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
   };
   const api = { queryAlbum: async () => ({ data: { review_status: 2 } }), setOnlineVersion: async () => ({ onlineVersion: 2, requestId: 'request-id' }) };
@@ -620,19 +671,63 @@ test('reconciliation opens the added episode after the new online version is con
   const prisma: any = {
     platformSyncJob: {
       findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async (input: Record<string, any>) => input,
-      findFirst: async () => ({ snapshotJson: { episodes: [1, 2, 3, 4].map((number) => ({ localEpisodeId: `episode-${number}` })) } })
+      findFirst: async () => ({ snapshotJson: { episodes: [1, 2, 3, 4].map((number) => ({ localEpisodeId: `episode-${number}`, seq: number })) } })
     },
     album: {
       findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-1', tiktokVersion: 2, onlineVersion: 2, platformPublishedVersion: 1 }),
       update: async (input: Record<string, any>) => { albumUpdates.push(input); return input; }
     },
-    episode: { updateMany: async (input: Record<string, any>) => { episodeUpdates.push(input); return input; } },
+    episode: { updateMany: async (input: Record<string, any>) => { episodeUpdates.push(input); return { count: 1 }; } },
     $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
   };
   const api = { queryAlbum: async () => ({ requestId: 'request-id', data: { current_version: 2, online_version: 2, publish_status: 1, review_status: 2, episode_info_list: [] } }) };
   await processPlatformSyncJobs(prisma, api as any);
   assert.equal(albumUpdates[0].data.platformPublishedVersion, 2);
-  assert.deepEqual(episodeUpdates[1].where.id.in, ['episode-1', 'episode-2', 'episode-3', 'episode-4']);
+  assert.deepEqual(episodeUpdates.slice(1).map((item) => [item.where.id, item.data.status, item.data.platformSeq]), [
+    ['episode-1', 'ONLINE', 1], ['episode-2', 'ONLINE', 2], ['episode-3', 'ONLINE', 3], ['episode-4', 'ONLINE', 4]
+  ]);
+});
+
+test('publishing a compacted version activates only its snapshot and switches mapped platform episode IDs', async () => {
+  const episodeUpdates: Record<string, any>[] = [];
+  const albumUpdates: Record<string, any>[] = [];
+  const publishJob = { id: 'publish-2', kind: 'PUBLISH', status: 'PENDING', attemptCount: 0, albumId: 'album-1', snapshotJson: { version: 2 } };
+  const versionSnapshot = {
+    episodes: [
+      { localEpisodeId: 'episode-1', episode_id: 'old-platform-1', seq: 1, byteplus_vid: 'vid-1' },
+      { localEpisodeId: 'episode-6', episode_id: 'old-platform-6', seq: 2, byteplus_vid: 'vid-6' }
+    ]
+  };
+  const prisma: any = {
+    platformSyncJob: {
+      findMany: async () => [publishJob],
+      updateMany: async () => ({ count: 1 }),
+      update: async (input: Record<string, any>) => input,
+      findFirst: async () => ({
+        snapshotJson: versionSnapshot,
+        providerResponse: { version: 2, episode_id_map: { 'old-platform-1': 'new-platform-1', 'old-platform-6': 'new-platform-6' } }
+      })
+    },
+    album: {
+      findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-album-1', onlineVersion: 2, publishStatus: 'UNLISTED', platformPublishedVersion: 1 }),
+      update: async (input: Record<string, any>) => { albumUpdates.push(input); return input; }
+    },
+    episode: { updateMany: async (input: Record<string, any>) => { episodeUpdates.push(input); return { count: 1 }; } },
+    $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
+  };
+  const api = {
+    queryAlbum: async () => ({ data: { review_status: 2 } }),
+    setAlbumStatus: async () => ({ status: 1, requestId: 'publish-request' })
+  };
+
+  await processPlatformSyncJobs(prisma, api as any);
+
+  assert.equal(albumUpdates[0].data.platformPublishedVersion, 2);
+  assert.deepEqual(episodeUpdates.map((item) => [item.where.id ?? null, item.data.status, item.data.platformSeq ?? null, item.data.tiktokEpisodeId ?? null]), [
+    [null, 'OFFLINE', null, null],
+    ['episode-1', 'ONLINE', 1, 'new-platform-1'],
+    ['episode-6', 'ONLINE', 2, 'new-platform-6']
+  ]);
 });
 
 test('uncertain review result is not replayed automatically', async () => {
