@@ -41,7 +41,7 @@ import { TikTokShortDramaApiService } from '../../services/tiktok-short-drama-ap
 import { assertV006PlacementPair, invalidateAdPlacementPolicyCache, isV006Release } from '../ads/ad-placement-policy';
 import { readV006AdDiagnostics, readV006PlayerDiagnostics } from './v006-diagnostics';
 import { assertRejectedEpisodeReplacement, readRejectedEpisodeReplacements } from '../../services/rejected-episode-replacement.service';
-import { enqueueApprovedEpisodeSubmissionPlan, readApprovedEpisodeSubmissionPlan } from '../../services/platform-submission-plan.service';
+import { enqueueRejectedEpisodeExclusionPlan, readRejectedEpisodeExclusionPlan } from '../../services/platform-submission-plan.service';
 
 const albumParams = z.object({ albumId: z.string().min(1).max(128) });
 
@@ -936,7 +936,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/admin/albums/:albumId/submission-plan', { preHandler: requirePermission('content.read') }, async (request) => {
     const { albumId } = albumParams.parse(request.params);
     await assertPlatformOwner(app, albumId);
-    return readApprovedEpisodeSubmissionPlan(app.prisma as any, albumId);
+    return readRejectedEpisodeExclusionPlan(app.prisma as any, albumId);
   });
 
   app.post('/admin/albums/:albumId/submission-plan/sync', { preHandler: requirePermission('content.sync') }, async (request) => {
@@ -944,8 +944,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const { albumId } = albumParams.parse(request.params);
     const input = z.object({ reconciliationJobId: z.string().min(1).max(128) }).strict().parse(request.body);
     await assertPlatformOwner(app, albumId);
-    const result = await enqueueApprovedEpisodeSubmissionPlan(app.prisma as any, albumId, input.reconciliationJobId, request.user.sub);
-    await audit(app, request.user.sub, 'SYNC_APPROVED_TIKTOK_EPISODE_PLAN', 'Album', albumId, {
+    const result = await enqueueRejectedEpisodeExclusionPlan(app.prisma as any, albumId, input.reconciliationJobId, request.user.sub);
+    await audit(app, request.user.sub, 'SYNC_REJECTION_EXCLUSION_TIKTOK_EPISODE_PLAN', 'Album', albumId, {
       planId: result.planId, jobId: result.job.id, alreadyQueued: result.alreadyQueued
     });
     return result;

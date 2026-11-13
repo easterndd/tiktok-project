@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enqueueApprovedEpisodeSubmissionPlan, readApprovedEpisodeSubmissionPlan } from './platform-submission-plan.service';
+import { enqueueRejectedEpisodeExclusionPlan, readRejectedEpisodeExclusionPlan } from './platform-submission-plan.service';
 
 function fixture() {
   const episodes = [
@@ -23,9 +23,9 @@ function fixture() {
   const reconciliation = {
     id: 'reconcile-3', completedAt: new Date('2026-11-13T03:00:00Z'),
     providerResponse: { checked_version: 3, review_status: 3, episode_info_list: [
-      { episode_id: 'platform-1', seq: 1, byteplus_vid: 'vid-1', review_result: { overall_review_status: 2 } },
+      { episode_id: 'platform-1', seq: 1, byteplus_vid: 'vid-1' },
       { episode_id: 'platform-2', seq: 2, byteplus_vid: 'vid-2', review_result: { overall_review_status: 3 } },
-      { episode_id: 'platform-17', seq: 3, byteplus_vid: 'vid-17', review_result: { overall_review_status: 2 } }
+      { episode_id: 'platform-17', seq: 3, byteplus_vid: 'vid-17' }
     ], episode_failures: [{ episode_id: 'platform-2', review_status: 3, exception_reason: 'Rejected' }] }
   };
   const jobs: any[] = [];
@@ -51,9 +51,9 @@ function fixture() {
   return { db, album, jobs, getPlan: () => planRow };
 }
 
-test('previews only passed episodes with compressed platform sequence numbers', async () => {
+test('previews every non-rejected episode even when none is confirmed passed', async () => {
   const { db } = fixture();
-  const plan = await readApprovedEpisodeSubmissionPlan(db, 'album-1');
+  const plan = await readRejectedEpisodeExclusionPlan(db, 'album-1');
   assert.equal(plan.canSubmit, true);
   assert.deepEqual(plan.included.map((episode: any) => [episode.id, episode.localEpisodeNo, episode.platformSeq]), [
     ['local-1', 1, 1], ['local-17', 17, 2]
@@ -64,7 +64,7 @@ test('previews only passed episodes with compressed platform sequence numbers', 
 
 test('queues an immutable version snapshot without deleting or renumbering local episodes', async () => {
   const { db, album, jobs, getPlan } = fixture();
-  const result = await enqueueApprovedEpisodeSubmissionPlan(db, 'album-1', 'reconcile-3', 'admin-1');
+  const result = await enqueueRejectedEpisodeExclusionPlan(db, 'album-1', 'reconcile-3', 'admin-1');
   assert.equal(result.job.status, 'PENDING');
   assert.equal(getPlan().status, 'SYNC_QUEUED');
   const snapshot = result.job.snapshotJson as any;
@@ -77,10 +77,10 @@ test('queues an immutable version snapshot without deleting or renumbering local
   assert.equal(jobs.length, 1);
 });
 
-test('does not create a plan when a passing episode VID changed since review', async () => {
+test('does not create a plan when a retained episode VID changed since the reviewed version', async () => {
   const { db, album } = fixture();
   album.episodes[0].byteplusVid = 'changed-vid';
-  const plan = await readApprovedEpisodeSubmissionPlan(db, 'album-1');
+  const plan = await readRejectedEpisodeExclusionPlan(db, 'album-1');
   assert.equal(plan.canSubmit, false);
-  assert.match(plan.message ?? '', /VID 与通过审核版本不一致/);
+  assert.match(plan.message ?? '', /VID 与当前平台版本不一致/);
 });

@@ -189,9 +189,9 @@ function DramaMaterialEditor({ drama, report, submissionPlan, setSubmissionPlan,
   const [scope, setScope] = useState(drama.metadata);
   const [confirmed, setConfirmed] = useState(false);
   const needsConfirmation = scope?.canEdit !== false && scope?.shared && scope.version === 0 && scope.targets?.some((target) => target.differs);
-  async function syncApprovedPlan() {
+  async function syncRejectionExclusionPlan() {
     if (!submissionPlan?.canSubmit || !submissionPlan.reconciliationJobId) return;
-    const confirmText = `将创建 TikTok 新版本：保留已通过的 ${submissionPlan.included.length} 集，排除驳回的 ${submissionPlan.excluded.length} 集，并把保留集重新编号为 1-${submissionPlan.included.length}。本地集数和解锁记录不变。继续吗？`;
+    const confirmText = `将创建 TikTok 新版本：仅排除明确驳回的 ${submissionPlan.excluded.length} 集，保留其余 ${submissionPlan.included.length} 集（包括审核状态未确认的分集），并将平台序号重排为 1-${submissionPlan.included.length}。同步完成后仍需执行平台对账，再从“平台审核”发起送审。本地集数和解锁记录不变。继续吗？`;
     if (!window.confirm(confirmText)) return;
     setSubmittingPlan(true);
     setError('');
@@ -246,7 +246,7 @@ function DramaMaterialEditor({ drama, report, submissionPlan, setSubmissionPlan,
       <p className="material-message">排除的分集不会删除本地记录；新版本通过审核并切换上架后，它们才会从用户端剧集列表中移除。</p>
       {submissionPlan.message && <p className="material-message" role="status">{submissionPlan.message}</p>}
       {submissionPlan.syncJob && <p className="material-message" role="status">版本同步任务：{submissionPlan.syncJob.status} · {submissionPlan.syncJob.id}</p>}
-      <button className="primary" type="button" disabled={!submissionPlan.canSubmit || submittingPlan} onClick={() => void syncApprovedPlan()}><RefreshCw size={15} />{submittingPlan ? '提交中...' : '排除驳回集并同步新版本'}</button>
+      <button className="primary" type="button" disabled={!submissionPlan.canSubmit || submittingPlan} onClick={() => void syncRejectionExclusionPlan()}><RefreshCw size={15} />{submittingPlan ? '提交中...' : '排除驳回集并同步新版本'}</button>
     </section> : null}
     {scope?.canEdit === false && <p className="material-message" role="status">统一文案由主小程序 OWNER 管理，当前可编辑本应用封面。</p>}
     {scope?.shared && <div className="material-message"><p>剧名、简介及多语言文案将同步到：{scope.targets?.map((target) => `${target.miniAppKey}${!scope.version && target.differs ? '（存在差异）' : ''}`).join('、')}。可在剧目列表的“编辑剧名与简介”查看同步结果及重试。</p>{needsConfirmation && <label className="material-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />确认统一以上小程序的文案</label>}</div>}

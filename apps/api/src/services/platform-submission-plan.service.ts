@@ -34,7 +34,7 @@ function planPayload(value: unknown) {
   };
 }
 
-export async function readApprovedEpisodeSubmissionPlan(db: Db, albumId: string) {
+export async function readRejectedEpisodeExclusionPlan(db: Db, albumId: string) {
   const report = await readRejectedEpisodeReplacements(db, albumId);
   const album = await db.album.findUnique({
     where: { id: albumId },
@@ -73,15 +73,9 @@ export async function readApprovedEpisodeSubmissionPlan(db: Db, albumId: string)
         title: local.title, reason: rejected?.reason ?? '当前审核版本已驳回' });
       continue;
     }
-    if (!['2', 'PASSED', 'APPROVED'].includes(String(episode.reviewStatus ?? ''))) {
-      excluded.push({ id: episode.id, localEpisodeNo: episode.episodeNo, sourcePlatformSeq: episode.platformSeq,
-        title: local.title, reason: '当前审核版本未确认通过' });
-      errors.push(`TikTok 尚未确认第 ${episode.episodeNo} 集通过`);
-      continue;
-    }
     if (!episode.reviewedByteplusVid || local.byteplusVid !== episode.reviewedByteplusVid ||
         local.byteplusUploadStatus !== 'READY' || local.tiktokVideoStatus !== 'READY') {
-      errors.push(`第 ${episode.episodeNo} 集的本地 VID 与通过审核版本不一致，或媒资尚未就绪`);
+      errors.push(`第 ${episode.episodeNo} 集的 VID 与当前平台版本不一致，或媒资尚未就绪`);
       continue;
     }
     if (!(local.coverAsset?.providerImageId || album.coverAsset?.providerImageId)) {
@@ -92,7 +86,7 @@ export async function readApprovedEpisodeSubmissionPlan(db: Db, albumId: string)
       platformSeq: included.length + 1, title: local.title, byteplusVid: local.byteplusVid });
   }
 
-  if (!included.length) errors.push('当前审核版本没有可提交的已通过分集');
+  if (!included.length) errors.push('排除已驳回分集后没有可提交的分集');
   if (report.reviewedEpisodes.length !== report.versionEpisodeCount) {
     errors.push('对账结果与本地分集无法完整对应，请重新执行平台对账');
   }
@@ -119,8 +113,8 @@ export async function readApprovedEpisodeSubmissionPlan(db: Db, albumId: string)
   };
 }
 
-export async function enqueueApprovedEpisodeSubmissionPlan(db: Db, albumId: string, reconciliationJobId: string, createdByAdminUserId?: string) {
-  const preview = await readApprovedEpisodeSubmissionPlan(db, albumId);
+export async function enqueueRejectedEpisodeExclusionPlan(db: Db, albumId: string, reconciliationJobId: string, createdByAdminUserId?: string) {
+  const preview = await readRejectedEpisodeExclusionPlan(db, albumId);
   if (preview.reconciliationJobId !== reconciliationJobId) throw conflict('审核对账结果已变化，请刷新计划预览后再提交。');
   if (!preview.canSubmit || !preview.sourceVersion || !preview.reconciliationJobId) {
     throw conflict(preview.message ?? '当前审核结果不能生成提交计划。');
