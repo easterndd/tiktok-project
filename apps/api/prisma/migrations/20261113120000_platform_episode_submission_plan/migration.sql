@@ -1,4 +1,4 @@
-ALTER TABLE "Episode" ADD COLUMN "platformSeq" INTEGER;
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "platformSeq" INTEGER;
 
 CREATE TABLE "PlatformEpisodePlan" (
   "id" TEXT NOT NULL,
