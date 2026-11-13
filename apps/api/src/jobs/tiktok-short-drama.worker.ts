@@ -252,6 +252,7 @@ export async function startUploadWorker() {
       try {
         if (context.service instanceof BytePlusVodService) await processLocalUploadJobs(context.prisma, sharedPrisma, context.service, context.env, {
           concurrency: 2,
+          replacementEnabled: ['bloomreel', 'riftsaga'].includes(context.env.MINI_APP_KEY),
           log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
         });
         await processJobs(context.prisma, context.service, {

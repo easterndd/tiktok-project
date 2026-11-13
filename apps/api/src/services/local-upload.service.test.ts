@@ -108,6 +108,19 @@ function rejectedReplacementDatabase(filePath: string | null) {
 }
 
 describe('local upload recovery', () => {
+  it('only selects replacement columns for apps with the replacement migration', async () => {
+    const queries: any[] = [];
+    const prisma = { uploadJob: { findMany: async (query: any) => { queries.push(query); return []; } } } as any;
+    const service = {} as BytePlusVodService;
+    await processLocalUploadJobs(prisma, prisma, service, env, { replacementEnabled: false });
+    await processLocalUploadJobs(prisma, prisma, service, env, { replacementEnabled: true });
+    assert.equal(queries[0].select.replacesByteplusVid, undefined);
+    assert.equal(queries[0].select.episode.select.platformSeq, undefined);
+    assert.equal(queries[0].select.episode.select.album.select.title, true);
+    assert.equal(queries[1].select.replacesByteplusVid, true);
+    assert.equal(queries[1].select.episode.select.platformSeq, undefined);
+  });
+
   it('keeps the rejected episode old VID until the new video is playable, then preserves its platform episode ID', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'quickreels-replacement-'));
     try {
