@@ -14,6 +14,8 @@ type AlbumOption = { id: string; title: string; sharedPlayback?: boolean; review
 type UploadJob = { id: string; episodeId: string; sourceName?: string | null; status: string; providerJobId?: string | null; replacesByteplusVid?: string | null; localFilePath?: string | null; errorMessage?: string | null; nextAttemptAt?: string | null; leaseExpiresAt?: string | null };
 type RejectedEpisode = { id: string; episodeNo: number; reviewedByteplusVid: string; currentByteplusVid: string | null; reason: string; canStartReplacement: boolean };
 type RejectedEpisodeReport = { version: number | null; items: RejectedEpisode[]; message: string | null };
+type SubmissionPlanEpisode = { id: string; localEpisodeNo: number; sourcePlatformSeq: number; platformSeq: number; title: string; byteplusVid: string };
+type SubmissionPlan = { sourceVersion: number | null; reconciliationJobId: string | null; canSubmit: boolean; status?: string; message: string | null; included: SubmissionPlanEpisode[]; excluded: Array<{ id: string; localEpisodeNo: number; sourcePlatformSeq: number; title: string; reason: string }>; syncJob?: { id: string; status: string } | null };
 type UploadVideo = (episodeId: string, file: File, onProgress: (progress: UploadProgress) => void, mode?: 'replace') => Promise<{ job: UploadJob }>;
 
 function useCoverPreview(file: File | null, savedUrl?: string | null) {
@@ -171,7 +173,7 @@ function EpisodeMaterials({ episode, media, job: latestJob, reviewFailure, api, 
   </form>;
 }
 
-function DramaMaterialEditor({ drama, report, api, media, jobs, uploadVideoFile, onJobChanged, onSaved }: { drama: Drama; report: RejectedEpisodeReport | null; api: Api; media: Media[]; jobs: UploadJob[]; uploadVideoFile: UploadVideo; onJobChanged: (job: UploadJob) => void; onSaved: () => Promise<void> }) {
+function DramaMaterialEditor({ drama, report, submissionPlan, setSubmissionPlan, api, media, jobs, uploadVideoFile, onJobChanged, onSaved }: { drama: Drama; report: RejectedEpisodeReport | null; submissionPlan: SubmissionPlan | null; setSubmissionPlan: (plan: SubmissionPlan) => void; api: Api; media: Media[]; jobs: UploadJob[]; uploadVideoFile: UploadVideo; onJobChanged: (job: UploadJob) => void; onSaved: () => Promise<void> }) {
   const [title, setTitle] = useState(drama.title);
   const [description, setDescription] = useState(drama.description ?? '');
   const [cover, setCover] = useState(drama.coverUrl);
@@ -182,10 +184,24 @@ function DramaMaterialEditor({ drama, report, api, media, jobs, uploadVideoFile,
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [submittingPlan, setSubmittingPlan] = useState(false);
   const locked = ['REVIEWING', '1'].includes(drama.reviewStatus ?? '');
   const [scope, setScope] = useState(drama.metadata);
   const [confirmed, setConfirmed] = useState(false);
   const needsConfirmation = scope?.canEdit !== false && scope?.shared && scope.version === 0 && scope.targets?.some((target) => target.differs);
+  async function syncApprovedPlan() {
+    if (!submissionPlan?.canSubmit || !submissionPlan.reconciliationJobId) return;
+    const confirmText = `将创建 TikTok 新版本：保留已通过的 ${submissionPlan.included.length} 集，排除驳回的 ${submissionPlan.excluded.length} 集，并把保留集重新编号为 1-${submissionPlan.included.length}。本地集数和解锁记录不变。继续吗？`;
+    if (!window.confirm(confirmText)) return;
+    setSubmittingPlan(true);
+    setError('');
+    try {
+      await api(`/admin/albums/${drama.id}/submission-plan/sync`, { method: 'POST', body: JSON.stringify({ reconciliationJobId: submissionPlan.reconciliationJobId }) });
+      const refreshed = await api<SubmissionPlan>(`/admin/albums/${drama.id}/submission-plan`);
+      setSubmissionPlan(refreshed);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '提交计划失败'); }
+    finally { setSubmittingPlan(false); }
+  }
   async function save(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -223,6 +239,15 @@ function DramaMaterialEditor({ drama, report, api, media, jobs, uploadVideoFile,
     {locked && <p className="material-message" role="status">当前版本审核中，暂不可编辑素材。</p>}
     {report?.items.length ? <p className="material-message">当前审核版本 {report.version} 被驳回：{report.items.map((item) => '第 ' + item.episodeNo + ' 集').join('、')}。只替换这些分集的视频，其他分集保持原 VID；全部修正并完成媒资登记后，同步新版本再送审。</p>
       : report?.message && ['REJECTED', '3', 'APPEAL_REJECTED', '7'].includes(drama.reviewStatus ?? '') ? <p className="material-message">{report.message}</p> : null}
+    {submissionPlan && (report?.items.length || ['REJECTED', '3', 'APPEAL_REJECTED', '7'].includes(drama.reviewStatus ?? '')) ? <section className="submission-plan" aria-label="排除驳回分集并重排平台序号">
+      <div className="submission-plan-heading"><strong>新版本提交计划</strong><span>审核版本 {submissionPlan.sourceVersion ?? '未知'} · 保留 {submissionPlan.included.length} 集 · 排除 {submissionPlan.excluded.length} 集</span></div>
+      {submissionPlan.included.length > 0 && <details><summary>查看新平台序号</summary><ol>{submissionPlan.included.map((episode) => <li key={episode.id}>本地第 {episode.localEpisodeNo} 集 → 平台第 {episode.platformSeq} 集：{episode.title}</li>)}</ol></details>}
+      {submissionPlan.excluded.length > 0 && <details><summary>查看排除分集</summary><ul>{submissionPlan.excluded.map((episode) => <li key={episode.id}>本地第 {episode.localEpisodeNo} 集：{episode.title} · {episode.reason}</li>)}</ul></details>}
+      <p className="material-message">排除的分集不会删除本地记录；新版本通过审核并切换上架后，它们才会从用户端剧集列表中移除。</p>
+      {submissionPlan.message && <p className="material-message" role="status">{submissionPlan.message}</p>}
+      {submissionPlan.syncJob && <p className="material-message" role="status">版本同步任务：{submissionPlan.syncJob.status} · {submissionPlan.syncJob.id}</p>}
+      <button className="primary" type="button" disabled={!submissionPlan.canSubmit || submittingPlan} onClick={() => void syncApprovedPlan()}><RefreshCw size={15} />{submittingPlan ? '提交中...' : '排除驳回集并同步新版本'}</button>
+    </section> : null}
     {scope?.canEdit === false && <p className="material-message" role="status">统一文案由主小程序 OWNER 管理，当前可编辑本应用封面。</p>}
     {scope?.shared && <div className="material-message"><p>剧名、简介及多语言文案将同步到：{scope.targets?.map((target) => `${target.miniAppKey}${!scope.version && target.differs ? '（存在差异）' : ''}`).join('、')}。可在剧目列表的“编辑剧名与简介”查看同步结果及重试。</p>{needsConfirmation && <label className="material-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />确认统一以上小程序的文案</label>}</div>}
     <form className="material-album" onSubmit={save}>
@@ -244,12 +269,13 @@ function DramaMaterialEditor({ drama, report, api, media, jobs, uploadVideoFile,
   </>;
 }
 
-export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection, enableRejectedReplacement = false }: { albums: AlbumOption[]; api: Api; uploadVideo: UploadVideo; onSaved: () => Promise<void>; selection?: { albumId: string; request: number } | null; enableRejectedReplacement?: boolean }) {
+export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection, enableRejectedReplacement = false, enableSubmissionPlan = false }: { albums: AlbumOption[]; api: Api; uploadVideo: UploadVideo; onSaved: () => Promise<void>; selection?: { albumId: string; request: number } | null; enableRejectedReplacement?: boolean; enableSubmissionPlan?: boolean }) {
   const [albumId, setAlbumId] = useState('');
   const [drama, setDrama] = useState<Drama | null>(null);
   const [media, setMedia] = useState<Media[]>([]);
   const [jobs, setJobs] = useState<UploadJob[]>([]);
   const [report, setReport] = useState<RejectedEpisodeReport | null>(null);
+  const [submissionPlan, setSubmissionPlan] = useState<SubmissionPlan | null>(null);
   const jobsRef = useRef<UploadJob[]>([]);
   const activeUploads = jobs.some((job) => job.status === 'PENDING' || job.status === 'PROCESSING');
   const [error, setError] = useState('');
@@ -265,6 +291,7 @@ export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection, e
     let cancelled = false;
     setDrama(null);
     setReport(null);
+    setSubmissionPlan(null);
     jobsRef.current = [];
     setJobs([]);
     setError('');
@@ -272,11 +299,13 @@ export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection, e
     setLoading(true);
     Promise.all([api<Drama>(`/admin/albums/${albumId}`), api<EditableAlbumMetadata>(`/admin/albums/${albumId}/display-metadata`),
       api<{ items: UploadJob[] }>(`/admin/upload-jobs?albumId=${encodeURIComponent(albumId)}`),
-      enableRejectedReplacement ? api<RejectedEpisodeReport>(`/admin/albums/${albumId}/rejected-episodes`) : Promise.resolve(null)]).then(([result, metadata, uploads, rejected]) => {
+      enableRejectedReplacement ? api<RejectedEpisodeReport>(`/admin/albums/${albumId}/rejected-episodes`) : Promise.resolve(null),
+      enableSubmissionPlan ? api<SubmissionPlan>(`/admin/albums/${albumId}/submission-plan`) : Promise.resolve(null)]).then(([result, metadata, uploads, rejected, plan]) => {
       if (!cancelled) setDrama({ ...result, title: metadata.title, description: metadata.description, metadata,
         translations: (metadata.translations ?? []).map((item) => ({ ...item, coverUrl: result.translations?.find((local) => local.locale === item.locale)?.coverUrl })) });
       if (!cancelled) { jobsRef.current = uploads.items; setJobs(uploads.items); }
       if (!cancelled) setReport(rejected);
+      if (!cancelled) setSubmissionPlan(plan);
     }).catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : '加载失败'); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [albumId, retry, api, enableRejectedReplacement]);
@@ -296,9 +325,11 @@ export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection, e
         if (completed) {
           const latest = await api<Drama>(`/admin/albums/${albumId}`);
           const rejected = enableRejectedReplacement ? await api<RejectedEpisodeReport>(`/admin/albums/${albumId}/rejected-episodes`) : null;
+          const plan = enableSubmissionPlan ? await api<SubmissionPlan>(`/admin/albums/${albumId}/submission-plan`) : null;
           if (cancelled) return;
           setDrama((current) => current?.id === albumId ? { ...current, episodes: latest.episodes } : current);
           setReport(rejected);
+          setSubmissionPlan(plan);
         }
         jobsRef.current = uploads.items;
         setJobs(uploads.items);
@@ -309,7 +340,7 @@ export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection, e
     const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
-  }, [albumId, api, activeUploads, enableRejectedReplacement]);
+  }, [albumId, api, activeUploads, enableRejectedReplacement, enableSubmissionPlan]);
   async function loadMedia() {
     setLoadingMedia(true);
     setError('');
@@ -329,7 +360,7 @@ export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection, e
     <label className="material-picker">剧目<select value={albumId} onChange={(event) => { if (!drama || window.confirm('切换剧目将关闭当前编辑，未保存的修改会丢失。继续吗？')) setAlbumId(event.target.value); }}><option value="">请选择剧目</option>{albums.filter((item) => !item.sharedPlayback).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
     {loading && <p role="status">正在加载剧目...</p>}
     {error && <div role="alert" className="material-message"><p className="form-error">{error}</p><button className="secondary" type="button" onClick={() => setRetry((value) => value + 1)}><RefreshCw size={15} />重新加载</button></div>}
-    {drama && <DramaMaterialEditor key={`${drama.id}:${retry}`} drama={{ ...drama, reviewStatus: albums.find((item) => item.id === drama.id)?.reviewStatus ?? drama.reviewStatus }} report={report}
+    {drama && <DramaMaterialEditor key={`${drama.id}:${retry}`} drama={{ ...drama, reviewStatus: albums.find((item) => item.id === drama.id)?.reviewStatus ?? drama.reviewStatus }} report={report} submissionPlan={submissionPlan} setSubmissionPlan={setSubmissionPlan}
       api={api} media={media} jobs={jobs} uploadVideoFile={uploadVideo} onJobChanged={(job) => { const next = [job, ...jobsRef.current.filter((item) => item.id !== job.id)]; jobsRef.current = next; setJobs(next); }} onSaved={onSaved} />}
   </section>;
 }

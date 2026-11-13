@@ -125,6 +125,7 @@ async function loadHomeProgress(app: FastifyInstance, request: FastifyRequest, u
         select: {
           albumId: true,
           episodeNo: true,
+          platformSeq: true,
           album: {
             select: {
               regions: true,
@@ -148,7 +149,7 @@ function continueWatchingBlock(progress: HomeProgress, country: string | null, l
     items: progress.filter((item) => isAlbumVisibleInCountry(item.episode.album.regions, country)).map((item) => ({
       albumId: item.episode.albumId,
       episodeId: item.episodeId,
-      episodeNo: item.episode.episodeNo,
+      episodeNo: item.episode.platformSeq ?? item.episode.episodeNo,
       title: translatedText(item.episode.album.translations, locale, 'title') ?? item.episode.album.title,
       coverUrl: coverThumbnailUrl(translatedText(item.episode.album.translations, locale, 'coverUrl') ?? item.episode.album.coverUrl),
       progress: item.durationMs ? Math.min(item.positionMs / item.durationMs, 1) : 0,

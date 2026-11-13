@@ -264,6 +264,7 @@ export async function startUploadWorker() {
           await processPlatformSyncJobs(context.prisma as any, context.platformApi, {
             maxRetries: context.env.UPLOAD_MAX_RETRIES,
             playability: { service: context.service, spaceName: context.env.BYTEPLUS_SPACE_NAME },
+            platformEpisodePlanEnabled: String(context.env.MINI_APP_KEY) === 'riftsaga',
             log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
           });
         }

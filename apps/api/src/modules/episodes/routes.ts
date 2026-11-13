@@ -52,7 +52,7 @@ async function createOrResumeRewardSession(app: FastifyInstance, userId: string,
   const now = new Date();
   const episode = await app.prisma.episode.findFirst({
     where: { id: episodeId, status: 'ONLINE', album: publicAlbumWhere(app.config) },
-    select: { id: true, isFree: true, episodeNo: true, album: { select: { accessConfig: true, regions: true } } }
+    select: { id: true, isFree: true, episodeNo: true, platformSeq: true, album: { select: { accessConfig: true, regions: true } } }
   });
   if (!episode || !isAlbumVisibleInCountry(episode.album.regions, country)) return { missing: true };
   if (isEpisodeFree(episode, episode.album.accessConfig)) return { access: 'PLAYABLE' };
@@ -125,7 +125,7 @@ async function completeRewardSession(app: FastifyInstance, userId: string, episo
     const now = new Date();
     const episode = await tx.episode.findFirst({
       where: { id: episodeId, status: 'ONLINE', album: publicAlbumWhere(app.config) },
-      select: { id: true, isFree: true, episodeNo: true, album: { select: { accessConfig: true, regions: true } } }
+      select: { id: true, isFree: true, episodeNo: true, platformSeq: true, album: { select: { accessConfig: true, regions: true } } }
     });
     if (!episode || !isAlbumVisibleInCountry(episode.album.regions, country)) return { missing: true as const };
     if (isEpisodeFree(episode, episode.album.accessConfig)) return { access: 'PLAYABLE' as const, shouldContinue: false as const };
@@ -215,7 +215,7 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
         status: 'ONLINE',
         album: { tiktokAlbumId: parsed.data.album_id, ...publicAlbumWhere(app.config) }
       },
-      select: { id: true, albumId: true, episodeNo: true, isFree: true, album: { select: { accessConfig: true, regions: true } } }
+      select: { id: true, albumId: true, episodeNo: true, platformSeq: true, isFree: true, album: { select: { accessConfig: true, regions: true } } }
     });
     if (!episode || !isEpisodeFree(episode, episode.album.accessConfig)
       || !isAlbumVisibleInCountry(episode.album.regions, country)) return { status: 'INVALID' as const };
@@ -314,7 +314,7 @@ export async function registerEpisodeRoutes(app: FastifyInstance) {
       playbackMode: localPlaybackUrl ? 'LOCAL' : 'BYTEPLUS',
       albumId: episode.album.tiktokAlbumId ?? `local-${episode.albumId}`,
       localEpisodeId: episode.id,
-      episodeNo: episode.episodeNo,
+      episodeNo: episode.platformSeq ?? episode.episodeNo,
       episodeId: episode.tiktokEpisodeId ?? `local-${episode.id}`,
       vid: episode.byteplusVid ?? `local-${episode.id}`,
       playAuthToken,

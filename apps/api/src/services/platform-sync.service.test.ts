@@ -656,6 +656,49 @@ test('reconciliation opens the added episode after the new online version is con
   assert.deepEqual(episodeUpdates[1].where.id.in, ['episode-1', 'episode-2', 'episode-3', 'episode-4']);
 });
 
+test('publishing a compressed submission plan activates only included local episodes with platform numbering', async () => {
+  const episodeUpdates: Record<string, any>[] = [];
+  const versionJob = {
+    id: 'version-3', kind: 'ALBUM_VERSION', status: 'SUCCEEDED',
+    snapshotJson: { episodes: [
+      { localEpisodeId: 'local-1', seq: 1, byteplus_vid: 'vid-1' },
+      { localEpisodeId: 'local-17', seq: 2, byteplus_vid: 'vid-17' }
+    ] },
+    providerResponse: { version: 3, episode_id_map: { 'seq:1': 'platform-1', 'seq:2': 'platform-17' } }
+  };
+  const job = { id: 'reconcile-3', kind: 'RECONCILE', status: 'PENDING', attemptCount: 0, albumId: 'album-1' };
+  const prisma: any = {
+    platformSyncJob: {
+      findMany: async () => [job], updateMany: async () => ({ count: 1 }), update: async (input: any) => input,
+      findFirst: async () => versionJob
+    },
+    platformEpisodePlan: { updateMany: async () => ({ count: 0 }) },
+    album: {
+      findUnique: async () => ({ id: 'album-1', tiktokAlbumId: 'platform-album', tiktokVersion: 3, onlineVersion: 3, platformPublishedVersion: 2 }),
+      update: async (input: any) => input
+    },
+    episode: {
+      findMany: async () => [
+        { id: 'local-1', episodeNo: 1, byteplusVid: 'vid-1', tiktokEpisodeId: 'platform-1' },
+        { id: 'local-17', episodeNo: 17, byteplusVid: 'vid-17', tiktokEpisodeId: 'platform-17' }
+      ],
+      updateMany: async (input: any) => { episodeUpdates.push(input); return { count: 1 }; }
+    },
+    $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(prisma)
+  };
+  const api = { queryAlbum: async () => ({ requestId: 'reconcile-req', data: {
+    current_version: 3, online_version: 3, publish_status: 1, review_status: 2,
+    episode_info_list: [
+      { episode_id: 'platform-1', seq: 1, byteplus_vid: 'vid-1' },
+      { episode_id: 'platform-17', seq: 2, byteplus_vid: 'vid-17' }
+    ]
+  } }) };
+  await processPlatformSyncJobs(prisma, api as any, { platformEpisodePlanEnabled: true });
+  assert.deepEqual(episodeUpdates.find((input) => input.data.status === 'ONLINE')?.where.id.in, ['local-1', 'local-17']);
+  assert.ok(episodeUpdates.some((input) => input.where.id === 'local-1' && input.data.platformSeq === 1));
+  assert.ok(episodeUpdates.some((input) => input.where.id === 'local-17' && input.data.platformSeq === 2));
+});
+
 test('uncertain review result is not replayed automatically', async () => {
   const updates: Record<string, any>[] = [];
   const job = { id: 'review-2', kind: 'REVIEW', status: 'PENDING', attemptCount: 0, albumId: 'album-1', snapshotJson: { platformAlbumId: 'platform-1', version: 2 } };
