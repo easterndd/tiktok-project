@@ -15,7 +15,7 @@ function fixture() {
     coverAsset: { findMany: async () => [{ providerImageId: 'cover-id', publicUrl: 'https://example.com/online.jpg' }] },
     platformSyncJob: { findFirst: async () => ({ snapshotJson: { albumInfo: { title: 'Online title', desp: 'Online description', language: 'en', year: 2026, drama_type: 2, tag_list: [1], cover_list: ['cover-id'] }, episodes: [{ localEpisodeId: 'source-episode', seq: 1, title: 'Episode 1', byteplus_vid: 'online-vid', cover_list: ['cover-id'] }] }, providerResponse: { episode_id_map: { 'seq:1': 'online-episode' } } }) }
   };
-  const state: any = { album: null, sharedEpisodes: [], auths: new Map(), ops: [], media: new Map(), grantCalls: 0, targetAlbum: null, targetEpisodes: [], sourceAlbumQueryArgs: null, targetEpisodeQueryArgs: null };
+  const state: any = { album: null, sharedEpisodes: [], auths: new Map(), ops: [], media: new Map(), grantCalls: 0, targetAlbum: null, targetEpisodes: [], sourceAlbumQueryArgs: null, targetEpisodeQueryArgs: null, targetEpisodeWriteArgs: [] };
   const fullAlbum = () => ({ ...state.album, authorizations: [...state.auths.values()], episodes: state.sharedEpisodes.map((entry: any) => ({ ...entry, media: [...state.media.values()].find((media: any) => media.id === entry.sharedMediaId) })) });
   const sharedDb: any = {
     sharedMediaAsset: {
@@ -64,8 +64,8 @@ function fixture() {
     episode: {
       findFirst: async () => null,
       findMany: async (args: any) => { state.targetEpisodeQueryArgs = args; return state.targetEpisodes.map((entry: any) => ({ ...entry })); },
-      create: async ({ data }: any) => { const item = { id: `target-episode-${data.episodeNo}`, ...data }; state.targetEpisodes.push(item); return item; },
-      update: async ({ where, data }: any) => { const item = state.targetEpisodes.find((entry: any) => entry.id === where.id); Object.assign(item, data); return item; },
+      create: async (args: any) => { state.targetEpisodeWriteArgs.push(args); const item = { id: `target-episode-${args.data.episodeNo}`, ...args.data }; state.targetEpisodes.push(item); return { id: item.id }; },
+      update: async (args: any) => { state.targetEpisodeWriteArgs.push(args); const item = state.targetEpisodes.find((entry: any) => entry.id === args.where.id); Object.assign(item, args.data); return { id: item.id }; },
       updateMany: async ({ data }: any) => { state.targetEpisodes.forEach((entry: any) => Object.assign(entry, data)); return { count: state.targetEpisodes.length }; }
     }
   };
@@ -143,11 +143,14 @@ test('reconciliation preserves target-local display metadata after initial share
   };
   Object.assign(f.state.targetAlbum, localMetadata);
   f.state.ops.push({ id: 'reconcile-op', kind: 'RECONCILE_ALBUM', sharedAlbumId: 'shared-album', status: 'PENDING', attemptCount: 0 });
+  f.state.targetEpisodeWriteArgs = [];
 
   await f.run();
 
   assert.equal(f.state.targetEpisodeQueryArgs.select.platformSeq, undefined);
   assert.equal(f.state.targetEpisodeQueryArgs.select.byteplusVid, true);
+  assert.ok(f.state.targetEpisodeWriteArgs.length > 0);
+  assert.ok(f.state.targetEpisodeWriteArgs.every((args: any) => args.select?.id === true && Object.keys(args.select).length === 1));
   for (const [field, value] of Object.entries(localMetadata)) assert.deepEqual(f.state.targetAlbum[field], value);
   assert.equal(f.state.targetAlbum.tiktokAlbumId, 'platform-1');
   assert.equal(f.state.targetAlbum.tiktokVersion, 1);

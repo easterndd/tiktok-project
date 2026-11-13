@@ -384,8 +384,8 @@ export async function projectSharedAlbumToLocal(sharedAlbum: any, authorization:
       };
       if (localEpisode) {
         if (localEpisode.byteplusVid && localEpisode.byteplusVid !== data.byteplusVid && localAlbum.tiktokAlbumId !== sharedAlbum.tiktokAlbumId) throw conflict(`第 ${sharedEpisode.episodeNo} 集已有不同 VID，不能覆盖。`);
-        await tx.episode.update({ where: { id: localEpisode.id }, data });
-      } else await tx.episode.create({ data: { ...data, albumId: authorization.targetLocalAlbumId, episodeNo: sharedEpisode.episodeNo, sortOrder: sharedEpisode.episodeNo, title: sharedEpisode.title, coverUrl: sharedEpisode.media.coverUrl, durationMs: sharedEpisode.media.durationMs } });
+        await tx.episode.update({ where: { id: localEpisode.id }, data, select: { id: true } });
+      } else await tx.episode.create({ data: { ...data, albumId: authorization.targetLocalAlbumId, episodeNo: sharedEpisode.episodeNo, sortOrder: sharedEpisode.episodeNo, title: sharedEpisode.title, coverUrl: sharedEpisode.media.coverUrl, durationMs: sharedEpisode.media.durationMs }, select: { id: true } });
     }
     await tx.album.update({
       where: { id: authorization.targetLocalAlbumId },
