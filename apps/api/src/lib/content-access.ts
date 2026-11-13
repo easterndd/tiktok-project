@@ -45,6 +45,6 @@ export function readMiniAppAccessConfig(value: unknown, env: Env): AccessConfig 
   return result;
 }
 
-export function isEpisodeFree(episode: { isFree: boolean; episodeNo: number }, accessConfig: unknown) {
-  return episode.isFree || episode.episodeNo <= readAccessConfig(accessConfig).freeEpisodeCount;
+export function isEpisodeFree(episode: { isFree: boolean; episodeNo: number; platformSeq?: number | null }, accessConfig: unknown) {
+  return episode.isFree || (episode.platformSeq ?? episode.episodeNo) <= readAccessConfig(accessConfig).freeEpisodeCount;
 }

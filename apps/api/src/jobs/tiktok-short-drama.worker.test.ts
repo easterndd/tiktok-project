@@ -26,13 +26,17 @@ function createWorkerPrisma() {
       createdAt: new Date('2026-09-10T00:00:00.000Z'),
       episode: { title: 'Episode 1', status: 'DRAFT', coverAsset: null }
     },
-    episode: { status: 'DRAFT', byteplusVid: null }
+    episode: { status: 'DRAFT', byteplusVid: null },
+    findManyArgs: null
   };
   const prisma: any = {
     uploadJob: {
-      findMany: async (args: { where?: { sourceType?: string } } = {}) => args.where?.sourceType === 'URL' && state.job.sourceType !== 'URL'
-        ? []
-        : state.job.status === 'FAILED' || state.job.status === 'SUCCEEDED' ? [] : [structuredClone(state.job)],
+      findMany: async (args: any = {}) => {
+        state.findManyArgs = args;
+        return args.where?.sourceType === 'URL' && state.job.sourceType !== 'URL'
+          ? []
+          : state.job.status === 'FAILED' || state.job.status === 'SUCCEEDED' ? [] : [structuredClone(state.job)];
+      },
       update: async (args: { data: Record<string, unknown> }) => { Object.assign(state.job, args.data); return state.job; }
     },
     episode: {
@@ -55,6 +59,9 @@ describe('upload worker', () => {
       getPlayAuthToken: async () => 'unused'
     };
     await processJobs(prisma, service, { maxRetries: 2, now: () => new Date('2026-09-10T00:00:00.000Z') }, env);
+    assert.equal(state.findManyArgs.select.sourceExpiresAt, true);
+    assert.equal(state.findManyArgs.select.replacesByteplusVid, undefined);
+    assert.equal(state.findManyArgs.select.localFilePath, undefined);
     assert.equal(state.job.status, 'PROCESSING');
     assert.equal(state.job.providerJobId, 'provider-1');
     await processJobs(prisma, service, { maxRetries: 2, now: () => new Date('2026-09-10T00:01:00.000Z') }, env);

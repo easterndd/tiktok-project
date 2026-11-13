@@ -184,6 +184,7 @@ function DramaMaterialEditor({ drama, report, plan, api, media, jobs, uploadVide
   const [planBusy, setPlanBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [submittingPlan, setSubmittingPlan] = useState(false);
   const locked = ['REVIEWING', '1'].includes(drama.reviewStatus ?? '');
   const [scope, setScope] = useState(drama.metadata);
   const [confirmed, setConfirmed] = useState(false);
@@ -269,7 +270,7 @@ function DramaMaterialEditor({ drama, report, plan, api, media, jobs, uploadVide
   </>;
 }
 
-export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection }: { albums: AlbumOption[]; api: Api; uploadVideo: UploadVideo; onSaved: () => Promise<void>; selection?: { albumId: string; request: number } | null }) {
+export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection, enableRejectedReplacement = false, enableSubmissionPlan = false }: { albums: AlbumOption[]; api: Api; uploadVideo: UploadVideo; onSaved: () => Promise<void>; selection?: { albumId: string; request: number } | null; enableRejectedReplacement?: boolean; enableSubmissionPlan?: boolean }) {
   const [albumId, setAlbumId] = useState('');
   const [drama, setDrama] = useState<Drama | null>(null);
   const [media, setMedia] = useState<Media[]>([]);
@@ -308,7 +309,7 @@ export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection }:
       if (!cancelled) setSubmissionPlan(plan);
     }).catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : '加载失败'); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [albumId, retry, api]);
+  }, [albumId, retry, api, enableRejectedReplacement]);
   useEffect(() => {
     if (!albumId) { jobsRef.current = []; setJobs([]); return; }
     if (!activeUploads) return;
@@ -338,7 +339,7 @@ export function DramaMaterials({ albums, api, uploadVideo, onSaved, selection }:
     const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
-  }, [albumId, api, activeUploads]);
+  }, [albumId, api, activeUploads, enableRejectedReplacement, enableSubmissionPlan]);
   async function loadMedia() {
     setLoadingMedia(true);
     setError('');

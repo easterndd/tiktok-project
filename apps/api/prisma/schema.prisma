@@ -41,6 +41,7 @@ enum UploadStatus {
 enum UploadSourceType {
   URL
   FILE
+  REPLACEMENT
 }
 
 enum CoverAssetStatus {
@@ -274,6 +275,7 @@ model Album {
   shareEvents              ShareEvent[]
   adRevenues               AdRevenue[]
   platformSyncJobs         PlatformSyncJob[]
+  platformEpisodePlans     PlatformEpisodePlan[]
   createdAt                DateTime           @default(now())
   updatedAt                DateTime           @updatedAt
 
@@ -409,6 +411,24 @@ model PlatformSyncJob {
   @@index([status, nextAttemptAt])
   @@index([kind, targetId, createdAt])
   @@index([albumId, createdAt])
+}
+
+model PlatformEpisodePlan {
+  id                        String   @id @default(cuid())
+  albumId                   String
+  sourceVersion             Int
+  sourceReconciliationJobId String
+  status                    String   @default("DRAFT")
+  planJson                  Json
+  syncJobId                 String?  @unique
+  platformVersion           Int?
+  createdByAdminUserId       String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+  album                     Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
+
+  @@unique([albumId, sourceVersion, sourceReconciliationJobId])
+  @@index([albumId, status])
 }
 
 model SharedMediaAsset {

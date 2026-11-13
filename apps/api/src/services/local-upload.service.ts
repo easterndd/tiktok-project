@@ -51,6 +51,22 @@ export async function assertMediaScope(sharedPrisma: Db, env: Env, media: BytePl
   if (!scopes.length && !owner) throw conflict('此 VID 缺少可验证的小程序归属，请在当前小程序重新上传。');
 }
 
+function localUploadJobSelect(replacementEnabled: boolean): Prisma.UploadJobSelect {
+  return {
+    id: true, episodeId: true, providerJobId: true, ...(replacementEnabled ? { replacesByteplusVid: true } : {}),
+    sourceUrl: true, sourceType: true, sourceName: true, localFilePath: true, uploadScope: true,
+    leaseExpiresAt: true, leaseToken: true, remoteStartedAt: true, sourceExpiresAt: true,
+    status: true, errorMessage: true, retryCount: true, startedAt: true, nextAttemptAt: true,
+    completedAt: true, createdAt: true,
+    episode: { select: {
+      id: true, albumId: true, episodeNo: true, title: true, status: true,
+      byteplusVid: true, byteplusUploadStatus: true,
+      album: { select: { title: true } },
+      coverAsset: { select: { publicUrl: true, status: true } }
+    } }
+  };
+}
+
 export async function findUploadMedia(service: BytePlusVodService, env: Env, job: { id: string; uploadScope: string | null; providerJobId: string | null }) {
   if (job.uploadScope && job.uploadScope !== uploadScope(env)) throw conflict('上传任务的小程序或 Client Key 已改变，不能自动关联旧作用域的媒资。');
   if (job.providerJobId) {
@@ -79,10 +95,10 @@ export async function findUploadMedia(service: BytePlusVodService, env: Env, job
   return unique[0] ?? null;
 }
 
-export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, service: BytePlusVodService, env: Env, options: { jobId?: string; concurrency?: 1 | 2; now?: () => Date; maxRetries?: number; log?: (message: string, details?: Record<string, unknown>) => void } = {}) {
+export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, service: BytePlusVodService, env: Env, options: { jobId?: string; sourceType?: 'FILE' | 'REPLACEMENT'; replacementEnabled?: boolean; concurrency?: 1 | 2; now?: () => Date; maxRetries?: number; log?: (message: string, details?: Record<string, unknown>) => void } = {}) {
   const now = options.now ?? (() => new Date());
   const jobs = await prisma.uploadJob.findMany({
-    where: { ...(options.jobId ? { id: options.jobId } : {}), sourceType: 'FILE', status: { in: ['PENDING', 'PROCESSING'] },
+    where: { ...(options.jobId ? { id: options.jobId } : {}), sourceType: options.sourceType ?? 'FILE', status: { in: ['PENDING', 'PROCESSING'] },
       AND: [
         { OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now() } }] },
         { OR: [{ leaseExpiresAt: { lte: now() } }, { leaseExpiresAt: null, status: 'PENDING' },
@@ -90,8 +106,8 @@ export async function processLocalUploadJobs(prisma: Db, sharedPrisma: Db, servi
           { leaseExpiresAt: null, status: 'PROCESSING', startedAt: { lte: new Date(now().getTime() - 10 * 60_000) } }] }
       ] },
     orderBy: { createdAt: 'asc' }, take: 5,
-    include: { episode: { include: { album: true, coverAsset: true } } }
-  });
+    select: localUploadJobSelect(options.replacementEnabled === true)
+  }) as any[];
   const processJob = async (job: typeof jobs[number]) => {
     const leaseToken = randomUUID();
     const remoteStartedAt = !job.providerJobId && isBytePlusTransferFailure(job.errorMessage ?? '') ? null : job.remoteStartedAt;

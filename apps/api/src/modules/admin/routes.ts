@@ -1686,7 +1686,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       include: { episode: { include: { coverAsset: true, album: true } } }
     });
     if (!job) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Upload job not found.', requestId: request.id } });
-    if (job.sourceType !== 'FILE' || job.status !== 'PROCESSING') {
+    if (!['FILE', 'REPLACEMENT'].includes(job.sourceType) || job.status !== 'PROCESSING') {
       return reply.code(409).send({ error: { code: 'CONFLICT', message: '只有待对账的本地上传任务可以对账。', requestId: request.id } });
     }
     if (!input.byteplusVid) {
@@ -1700,7 +1700,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       // current batch. The same database lease prevents duplicate transfers.
       setImmediate(() => {
         void processLocalUploadJobs(app.prisma, app.sharedPrisma, new BytePlusVodService(app.config), app.config, {
-          jobId: job.id,
+          jobId: job.id, sourceType: job.sourceType === 'REPLACEMENT' ? 'REPLACEMENT' : 'FILE',
           log: (message, details) => app.log.warn({ ...details, miniAppKey: app.config.MINI_APP_KEY }, message)
         }).catch((error) => app.log.error({ err: error, jobId: job.id }, 'Manual upload recovery failed.'));
       });
@@ -1800,7 +1800,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const { jobId } = jobParams.parse(request.params);
     const job = await app.prisma.uploadJob.findUnique({ where: { id: jobId } });
     if (!job) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Upload job not found.', requestId: request.id } });
-    if (job.sourceType === 'FILE' && (!job.localFilePath || job.uploadScope !== uploadScope(app.config))) {
+    if (['FILE', 'REPLACEMENT'].includes(job.sourceType) && (!job.localFilePath || job.uploadScope !== uploadScope(app.config))) {
       return reply.code(409).send({ error: { code: 'CONFLICT', message: '本地上传任务需要重新选择视频文件后再试。', requestId: request.id } });
     }
     if (job.status !== 'FAILED') {

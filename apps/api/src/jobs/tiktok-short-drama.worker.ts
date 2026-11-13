@@ -38,7 +38,21 @@ type WorkerOptions = {
   log?: (message: string, details?: Record<string, unknown>) => void;
 };
 
-type JobWithEpisode = UploadJob & {
+type JobWithEpisode = Pick<
+  UploadJob,
+  | 'id'
+  | 'episodeId'
+  | 'providerJobId'
+  | 'sourceUrl'
+  | 'sourceExpiresAt'
+  | 'status'
+  | 'errorMessage'
+  | 'retryCount'
+  | 'startedAt'
+  | 'nextAttemptAt'
+  | 'completedAt'
+  | 'createdAt'
+> & {
   episode: {
     title: string;
     status: string;
@@ -62,7 +76,7 @@ function isRetryable(error: unknown) {
 
 async function markFailure(
   prisma: PrismaClient,
-  job: UploadJob,
+  job: Pick<UploadJob, 'id' | 'episodeId' | 'providerJobId' | 'retryCount'>,
   message: string,
   retryable: boolean,
   options: Required<Pick<WorkerOptions, 'maxRetries' | 'now'>> & Pick<WorkerOptions, 'log'>
@@ -235,7 +249,21 @@ export async function processJobs(
     },
     take: 20,
     orderBy: { createdAt: 'asc' },
-    include: { episode: { select: { title: true, status: true, coverAsset: { select: { publicUrl: true, status: true } } } } }
+    select: {
+      id: true,
+      episodeId: true,
+      providerJobId: true,
+      sourceUrl: true,
+      sourceExpiresAt: true,
+      status: true,
+      errorMessage: true,
+      retryCount: true,
+      startedAt: true,
+      nextAttemptAt: true,
+      completedAt: true,
+      createdAt: true,
+      episode: { select: { title: true, status: true, coverAsset: { select: { publicUrl: true, status: true } } } }
+    }
   });
   for (const job of jobs) {
     await processJob(prisma, job, service, env, { maxRetries, now, log: workerOptions.log });
