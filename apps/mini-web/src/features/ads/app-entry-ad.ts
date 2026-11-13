@@ -97,7 +97,7 @@ async function startAppEntryAdSessionInternal(launchRef?: string): Promise<AppEn
       releaseId: getMiniReleaseId(),
       ...(isV006DualRelease() ? { launchRef: launchRef ?? getMiniLaunchRef() } : { adId: getMiniLaunchAdId() }),
       platform: getAdPlatform(),
-      ...(isV006DualRelease() ? { entryFlowVersion: 2 } : {})
+      ...(isV006DualRelease() ? { entryFlowVersion: 2, launchAttributionVersion: 1 } : {})
     });
     if (isV006DualRelease() && import.meta.env?.VITE_ENTRY_COMPAT_MODE === 'true'
       && session.required && session.mode === 'REWARDED_GATED') {

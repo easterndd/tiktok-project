@@ -14,7 +14,7 @@ const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
 const policyCacheTtlMs = 5_000;
 const releaseIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).default('default');
-const startInput = z.object({ launchId: z.string().uuid(), launchRef: z.string().uuid().optional(), releaseId: releaseIdSchema, adId: z.string().trim().max(128).nullable().optional(), platform: z.enum(['ios', 'android', 'unknown']).optional(), entryFlowVersion: z.literal(2).optional() });
+const startInput = z.object({ launchId: z.string().uuid(), launchRef: z.string().uuid().optional(), launchAttributionVersion: z.literal(1).optional(), releaseId: releaseIdSchema, adId: z.string().trim().max(128).nullable().optional(), platform: z.enum(['ios', 'android', 'unknown']).optional(), entryFlowVersion: z.literal(2).optional() });
 const completionInput = z.object({ clientEventId: z.string().uuid(), isEnded: z.boolean() });
 const shownInput = z.object({ clientEventId: z.string().uuid(), adIndex: z.number().int().positive(), placementId: z.string().trim().min(1).max(128).optional() });
 const sessionParams = z.object({ sessionId: z.string().min(1).max(128) });
@@ -200,14 +200,15 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     preHandler: requireUser,
     config: { rateLimit: { max: 20, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request) => {
-    const { launchId, launchRef, releaseId, adId, platform = 'unknown', entryFlowVersion } = startInput.parse(request.body);
+    const { launchId, launchRef, launchAttributionVersion, releaseId, adId, platform = 'unknown', entryFlowVersion } = startInput.parse(request.body);
     queueSharedIpVisit(app.sharedPrisma, {
       ipAddress: request.ip, miniAppKey: app.config.MINI_APP_KEY, userId: request.user.sub, clientSessionId: launchId,
       countryCode: requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress),
       secret: app.rootConfig.JWT_SECRET
     }, (error) => request.log.warn({ err: error }, 'Shared IP visit could not be recorded'));
-    return singleFlight(app, `entry-session:${request.user.sub}:${request.ip}:${releaseId}:${launchId}:${JSON.stringify(adId)}`, async () => {
+    return singleFlight(app, `entry-session:${request.user.sub}:${request.ip}:${releaseId}:${launchId}:${JSON.stringify([adId, launchRef, launchAttributionVersion, entryFlowVersion, platform])}`, async () => {
     const isDualV006 = supportsV006DualApp(app.config.MINI_APP_KEY) && isV006DualRelease(releaseId);
+    const usesLaunchAttribution = isDualV006 && (launchAttributionVersion === 1 || Boolean(launchRef));
     let launchRecord: Awaited<ReturnType<typeof app.prisma.miniAppLaunch.findUnique>> | null = null;
     let decision: { id: string; decision: string; reason: string } | null = isDualV006 && launchRef
       ? await app.prisma.miniAppEntryAdDecision.findUnique({ where: { launchRef } }) : null;
@@ -230,7 +231,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       const response = sessionResponse(session, fallback, responseFlowVersion);
       return decision ? { ...response, decisionId: decision.id, decision: decision.decision as 'SHOW' | 'SUPPRESS', decisionReason: decision.reason, launchRef } : response;
     };
-    if (isDualV006) {
+    if (usesLaunchAttribution) {
       if (!launchRef) return { required: false as const, decision: 'SUPPRESS' as const, decisionReason: 'ATTRIBUTION_UNAVAILABLE' };
       launchRecord = await app.prisma.miniAppLaunch.findUnique({ where: { launchRef } });
       if (!launchRecord || launchRecord.userId !== request.user.sub || launchRecord.launchId !== launchId || launchRecord.releaseId !== releaseId || launchRecord.miniAppKey !== app.config.MINI_APP_KEY) {

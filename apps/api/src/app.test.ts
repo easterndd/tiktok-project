@@ -1980,6 +1980,15 @@ describe('QuicK ReeLS API', () => {
       payload: { releaseId, enabled: true, mode: 'REWARDED_GATED', placementId: 'ad7690454033278421044', requiredCount: 2, countMode: 'SHOWN', onUnavailable: 'ALLOW' } });
     assert.equal(policy.statusCode, 200);
     const naturalLaunchId = '11111111-1111-4111-8111-111111111111';
+    const legacyEntry = await app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers: userHeaders,
+      payload: { launchId: '33333333-3333-4333-8333-333333333333', releaseId, entryFlowVersion: 2 } });
+    assert.equal(legacyEntry.statusCode, 200);
+    assert.equal(legacyEntry.json().required, true);
+    const missingReference = await app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers: userHeaders,
+      payload: { launchId: '44444444-4444-4444-8444-444444444444', releaseId, entryFlowVersion: 2, launchAttributionVersion: 1 } });
+    assert.equal(missingReference.statusCode, 200);
+    assert.equal(missingReference.json().required, false);
+    assert.equal(missingReference.json().decisionReason, 'ATTRIBUTION_UNAVAILABLE');
     const naturalContext = await app.inject({ method: 'POST', url: `${base}/auth/launch-context`, headers: userHeaders,
       payload: { launchId: naturalLaunchId, entryId: naturalLaunchId, releaseId, rawUrl: 'https://example.test/?ttoclid=preview' } });
     assert.equal(naturalContext.statusCode, 200);
