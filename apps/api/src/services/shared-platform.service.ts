@@ -362,7 +362,11 @@ export async function projectSharedAlbumToLocal(sharedAlbum: any, authorization:
   if (!localAlbum) throw conflict(`目标小程序剧目不存在：${authorization.targetLocalAlbumId}`);
   if (localAlbum.tiktokAlbumId && localAlbum.tiktokAlbumId !== sharedAlbum.tiktokAlbumId) throw conflict('目标剧目已绑定其他 TikTok 剧目，不会覆盖。');
   await (localPrisma.$transaction as any)(async (tx: Db) => {
-    const localEpisodes = await tx.episode.findMany({ where: { albumId: authorization.targetLocalAlbumId }, orderBy: { episodeNo: 'asc' } });
+    const localEpisodes = await tx.episode.findMany({
+      where: { albumId: authorization.targetLocalAlbumId },
+      orderBy: { episodeNo: 'asc' },
+      select: { id: true, episodeNo: true, byteplusVid: true }
+    });
     const sharedEpisodes = [...sharedAlbum.episodes].sort((left: any, right: any) => left.episodeNo - right.episodeNo);
     if (!sharedEpisodes.length) throw conflict('主剧目分集快照为空，不能完成播放映射。');
     await tx.episode.updateMany({ where: { albumId: authorization.targetLocalAlbumId }, data: { status: 'OFFLINE', tiktokEpisodeId: null, byteplusVid: null } });

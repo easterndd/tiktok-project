@@ -15,7 +15,21 @@ const numeric = (value: unknown) => Number.isSafeInteger(Number(value)) && Numbe
 export const playbackAlbumId = (sourceApp: string, sourceId: string) => `shared_${createHash('sha256').update(`${sourceApp}:${sourceId}`).digest('hex').slice(0, 24)}`;
 
 export async function verifyPlaybackSource(db: Db, api: TikTokShortDramaApiService, sourceId: string) {
-  const local = await db.album.findUnique({ where: { id: sourceId }, include: { episodes: true } });
+  const local = await db.album.findUnique({
+    where: { id: sourceId },
+    select: {
+      id: true,
+      tiktokAlbumId: true,
+      tiktokVersion: true,
+      onlineVersion: true,
+      platformPublishedAt: true,
+      reviewStatus: true,
+      publishStatus: true,
+      regions: true,
+      accessConfig: true,
+      episodes: { select: { id: true, episodeNo: true, byteplusVid: true, byteplusCoverUrl: true, durationMs: true, isFree: true } }
+    }
+  });
   if (!local?.tiktokAlbumId) throw conflict('源剧目尚未同步到 TikTok。');
   const queried = await api.queryAlbum({ albumId: local.tiktokAlbumId });
   const latest = record(queried.data);
