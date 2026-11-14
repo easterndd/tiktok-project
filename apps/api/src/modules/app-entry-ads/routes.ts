@@ -119,11 +119,11 @@ export async function readAppEntryAdPolicy(app: FastifyInstance, releaseId = 'de
   return (await readAppEntryAdPolicyRecord(app, releaseId)).policy;
 }
 
-export async function observeAppEntryAdRelease(app: FastifyInstance, releaseId: string) {
+export async function observeAppEntryAdRelease(app: FastifyInstance, releaseId: string, markSeen = true) {
   const { policy, saved } = await readAppEntryAdPolicyRecord(app, releaseId);
   if (!saved && (releaseId === 'default' || releaseId.startsWith(`${app.config.MINI_APP_KEY}-`))) {
     try {
-      const created = await app.prisma.appEntryAdPolicy.create({ data: { ...disabledPolicy(app, releaseId), firstSeenAt: new Date() } });
+      const created = await app.prisma.appEntryAdPolicy.create({ data: { ...disabledPolicy(app, releaseId), ...(markSeen ? { firstSeenAt: new Date() } : {}) } });
       setPolicyCache(app, releaseId, created, created);
       return created;
     } catch (error) {
@@ -132,7 +132,7 @@ export async function observeAppEntryAdRelease(app: FastifyInstance, releaseId: 
       return readAppEntryAdPolicy(app, releaseId);
     }
   }
-  if (saved && !saved.firstSeenAt) {
+  if (markSeen && saved && !saved.firstSeenAt) {
     await app.prisma.appEntryAdPolicy.updateMany({ where: { releaseId, firstSeenAt: null }, data: { firstSeenAt: new Date() } });
     invalidateAppEntryAdPolicyCache(app, releaseId);
   }

@@ -6,6 +6,7 @@ import type { MiniAppKey } from '../config/mini-apps';
 const rawIpRetentionMs = 30 * 86_400_000;
 const sharedIpVisitAggregationWindowMs = 15 * 60_000;
 type SharedIpDb = Pick<PrismaClient, '$queryRaw' | '$executeRaw'>;
+type ReviewReleaseDb = SharedIpDb & Pick<PrismaClient, 'miniAppCodeRelease'>;
 const maxPendingSharedIpVisits = 1_024;
 const maxConcurrentSharedIpVisits = 2;
 const sharedIpVisitOverflowLogInterval = 1_000;
@@ -13,6 +14,16 @@ const completedSharedIpVisitTtlMs = sharedIpVisitAggregationWindowMs;
 const maxCompletedSharedIpVisitKeys = 50_000;
 const entryAdIpExemptionTtlMs = 5_000;
 const maxEntryAdIpExemptionKeys = 10_000;
+// A release keeps its portal status for hours or days; a short cache keeps the
+// launch path from reading the shared release table on every session.
+const reviewReleaseStatusTtlMs = 30_000;
+const maxReviewReleaseStatusKeys = 500;
+// Reviewers reload a preview many times in a row. Remember the last automatic
+// write per release/IP so a reload burst does not turn into a write burst.
+const reviewReleaseExemptionTtlMs = 10 * 60_000;
+const maxReviewReleaseExemptionKeys = 20_000;
+const reviewReleasePortalStatus = 'IN_REVIEW';
+const reviewReleaseExemptionActor = 'system:review-release';
 type SharedIpVisitJob = {
   db: PrismaClient;
   input: Parameters<typeof recordSharedIpVisit>[1];
@@ -24,6 +35,8 @@ const pendingSharedIpVisits: SharedIpVisitJob[] = [];
 const pendingSharedIpVisitKeys = new Set<string>();
 const completedSharedIpVisitKeys = new WeakMap<object, Map<string, number>>();
 const entryAdIpExemptionCache = new WeakMap<object, Map<string, { exempt: boolean; expiresAt: number }>>();
+const reviewReleaseStatusCache = new WeakMap<object, Map<string, { inReview: boolean; expiresAt: number }>>();
+const automaticReviewExemptions = new Map<string, number>();
 const sharedIpVisitDrainWaiters: Array<() => void> = [];
 let activeSharedIpVisits = 0;
 let droppedSharedIpVisits = 0;
@@ -258,6 +271,87 @@ export async function setEntryAdIpExemption(db: SharedIpDb, ip: string, note: st
     RETURNING "ipAddress", "note", "createdAt", "updatedAt", "updatedBy"`;
   clearEntryAdIpExemptionCache(db, ip);
   return rows[0];
+}
+
+/**
+ * Adds an exemption without touching an existing row, so an OWNER note or an
+ * earlier manual exemption always wins over an automatic one.
+ */
+export async function ensureEntryAdIpExemption(db: SharedIpDb, ip: string, note: string, updatedBy: string) {
+  const rows = await db.$queryRaw<Array<{ ipAddress: string }>>`
+    INSERT INTO "SharedEntryAdIpExemption" ("ipAddress", "note", "updatedBy") VALUES (${ip}, ${note}, ${updatedBy})
+    ON CONFLICT ("ipAddress") DO NOTHING
+    RETURNING "ipAddress"`;
+  if (rows.length > 0) clearEntryAdIpExemptionCache(db, ip);
+  return rows.length > 0;
+}
+
+function reviewStatusCacheFor(db: SharedIpDb) {
+  let cache = reviewReleaseStatusCache.get(db);
+  if (!cache) {
+    cache = new Map();
+    reviewReleaseStatusCache.set(db, cache);
+  }
+  return cache;
+}
+
+/** Drops cached portal status so an admin status change applies immediately. */
+export function invalidateReviewReleaseStatusCache(db: SharedIpDb, miniAppKey?: string) {
+  const cache = reviewReleaseStatusCache.get(db);
+  if (!cache) return;
+  if (!miniAppKey) {
+    cache.clear();
+    return;
+  }
+  const prefix = `${miniAppKey}:`;
+  for (const key of [...cache.keys()]) if (key.startsWith(prefix)) cache.delete(key);
+}
+
+async function isReleaseInReview(db: ReviewReleaseDb, miniAppKey: string, releaseId: string) {
+  const cache = reviewStatusCacheFor(db);
+  const key = `${miniAppKey}:${releaseId}`;
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > now) return cached.inReview;
+  const release = await db.miniAppCodeRelease.findUnique({
+    where: { miniAppKey_releaseId: { miniAppKey, releaseId } },
+    select: { portalStatus: true }
+  });
+  const inReview = release?.portalStatus === reviewReleasePortalStatus;
+  cache.set(key, { inReview, expiresAt: now + reviewReleaseStatusTtlMs });
+  while (cache.size > maxReviewReleaseStatusKeys) {
+    const oldest = cache.keys().next().value;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
+  return inReview;
+}
+
+/**
+ * When a viewer opens a build that is still under portal review, exempt that
+ * viewer IP from the entry interstitial. The exemption is keyed by the shared
+ * `MiniAppCodeRelease` row (`miniAppKey` + `releaseId`) and is recorded with an
+ * `AUTO_REVIEW:` note so OWNERs can tell automatic rows from manual ones.
+ */
+export async function exemptIpForReviewRelease(input: { db: ReviewReleaseDb; miniAppKey: string; releaseId: string; ipAddress: string | null }) {
+  const ip = input.ipAddress ? normalizeIp(input.ipAddress) : null;
+  if (!ip) return false;
+  if (!await isReleaseInReview(input.db, input.miniAppKey, input.releaseId)) return false;
+  const key = `${input.miniAppKey}:${input.releaseId}:${ip}`;
+  const now = Date.now();
+  for (const [cachedKey, expiresAt] of automaticReviewExemptions) {
+    if (expiresAt > now) break;
+    automaticReviewExemptions.delete(cachedKey);
+  }
+  if ((automaticReviewExemptions.get(key) ?? 0) > now) return true;
+  await ensureEntryAdIpExemption(input.db, ip, `AUTO_REVIEW: ${input.miniAppKey}:${input.releaseId}`, reviewReleaseExemptionActor);
+  automaticReviewExemptions.set(key, now + reviewReleaseExemptionTtlMs);
+  while (automaticReviewExemptions.size > maxReviewReleaseExemptionKeys) {
+    const oldest = automaticReviewExemptions.keys().next().value;
+    if (!oldest) break;
+    automaticReviewExemptions.delete(oldest);
+  }
+  return true;
 }
 
 export async function removeEntryAdIpExemption(db: SharedIpDb, ip: string) {

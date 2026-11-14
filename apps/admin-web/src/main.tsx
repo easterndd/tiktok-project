@@ -320,6 +320,8 @@ function AdminApp() {
   const [entryAdReleaseId, setEntryAdReleaseId] = useState(() => localStorage.getItem(entryAdReleaseStorageKey) ?? 'default');
   const [entryAdVersions, setEntryAdVersions] = useState<AppEntryAdPolicyList['items']>([]);
   const [savingEntryAdRelease, setSavingEntryAdRelease] = useState(false);
+  const [newReleaseId, setNewReleaseId] = useState('');
+  const [registeringRelease, setRegisteringRelease] = useState(false);
   const [entryAdPlacementDefaults, setEntryAdPlacementDefaults] = useState<AppEntryAdPolicyList['placementDefaults']>({ INTERSTITIAL: '', REWARDED_GATED: '' });
   const [entryAdPolicy, setEntryAdPolicy] = useState<AppEntryAdPolicy>({ releaseId: 'default', enabled: false, exitRetentionEnabled: false, exitRetentionAdCount: 1, episodeInterstitialEnabled: true, episodeInterstitialInitialDelaySeconds: 30, episodeInterstitialIntervalSeconds: 60, episodeInterstitialMinIntervalSeconds: 180, episodeInterstitialMaxPerSession: 2, episodeInterstitialInitialSkipTransitions: 2, episodeInterstitialEveryTransitions: 3, episodeInterstitialRewardedCooldownSeconds: 60, mode: 'INTERSTITIAL', placementId: '', requiredCount: 1, countMode: 'COMPLETED', onUnavailable: 'ALLOW', version: 1 });
   const [adPlacementPairs, setAdPlacementPairs] = useState<AdPlacementPair[]>([]);
@@ -1089,6 +1091,25 @@ function AdminApp() {
       setMessage(error instanceof Error ? `广告位配对删除失败：${error.message}` : '广告位配对删除失败');
     }
   };
+  const registerEntryAdRelease = async () => {
+    const releaseId = newReleaseId.trim();
+    if (!releaseId) return;
+    setRegisteringRelease(true);
+    try {
+      const result = await api<{ release: { portalVersion: string | null; portalStatus: PortalStatus }; policy: AppEntryAdPolicy }>(
+        '/admin/app-entry-ad-releases', { method: 'POST', body: JSON.stringify({ releaseId, portalVersion: null, portalStatus: 'UNKNOWN' }) }
+      );
+      const item: AppEntryAdRelease = { ...result.policy, ...result.release, firstSeenAt: null };
+      setEntryAdVersions((items) => [item, ...items.filter((existing) => existing.releaseId !== releaseId)]);
+      setEntryAdPolicy(item);
+      setEntryAdReleaseId(releaseId);
+      localStorage.setItem(entryAdReleaseStorageKey, releaseId);
+      setNewReleaseId('');
+      setMessage('构建包已登记，可以填写 Portal 版本和状态。');
+    } catch (error) {
+      setMessage(error instanceof Error ? `登记构建包失败：${error.message}` : '登记构建包失败');
+    } finally { setRegisteringRelease(false); }
+  };
   const saveEntryAdRelease = async () => {
     const release = entryAdVersions.find((item) => item.releaseId === entryAdReleaseId);
     if (!release) return;
@@ -1435,6 +1456,7 @@ function AdminApp() {
       </Panel>}
       {tab === 'ads' && !resourceStatus.ads?.loaded && !resourceStatus.ads?.error && <p className="load-placeholder">正在加载广告版本与策略...</p>}
       {tab === 'ads' && resourceStatus.ads?.loaded && <Panel title="进入广告策略" description={`当前小程序：${miniAppNames[activeApp]}`}><form className="policy-form" onSubmit={saveEntryAdPolicy}>
+         <div className="form-grid"><label>提前登记构建包 ID<input value={newReleaseId} onChange={(event) => setNewReleaseId(event.target.value)} placeholder={`${activeApp}-...`} maxLength={64} /></label><button type="button" className="secondary" disabled={registeringRelease || !newReleaseId.trim()} onClick={() => void registerEntryAdRelease()}>{registeringRelease ? '登记中...' : '登记构建包'}</button></div>
          <label>构建包标识<select value={entryAdReleaseId} onChange={(event) => { const releaseId = event.target.value; const release = entryAdVersions.find((item) => item.releaseId === releaseId); setEntryAdReleaseId(releaseId); if (release) setEntryAdPolicy(release); localStorage.setItem(entryAdReleaseStorageKey, releaseId); }}>{entryAdVersions.map((item) => <option key={item.releaseId} value={item.releaseId}>{item.releaseId === 'default' ? 'default（旧版包）' : item.releaseId} · {item.enabled ? '广告已启用' : '广告未启用'}</option>)}</select></label>
         <p className="form-help">首次上报：{selectedEntryAdRelease?.firstSeenAt ? new Date(selectedEntryAdRelease.firstSeenAt).toLocaleString('zh-CN') : '尚未收到该包上报'}。同一构建包审核通过后继续使用同一标识和策略。</p><details><summary>Portal 人工备注（非平台自动识别）</summary><div className="form-grid"><label>Portal 版本号<input value={selectedEntryAdRelease?.portalVersion ?? ''} maxLength={32} placeholder="例如 Version 2" onChange={(event) => setEntryAdVersions((items) => items.map((item) => item.releaseId === entryAdReleaseId ? { ...item, portalVersion: event.target.value } : item))} /></label><label>Portal 状态（手动核对）<select value={selectedEntryAdRelease?.portalStatus ?? 'UNKNOWN'} onChange={(event) => setEntryAdVersions((items) => items.map((item) => item.releaseId === entryAdReleaseId ? { ...item, portalStatus: event.target.value as PortalStatus } : item))}>{Object.entries(portalStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
         <button className="secondary" type="button" disabled={!selectedEntryAdRelease || savingEntryAdRelease} onClick={() => void saveEntryAdRelease()}><Save size={17} />{savingEntryAdRelease ? '保存中...' : '保存 Portal 版本状态'}</button></details>

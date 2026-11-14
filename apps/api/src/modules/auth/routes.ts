@@ -6,7 +6,7 @@ import { requestCountry } from '../../lib/content-visibility';
 import { requireUser } from '../../plugins/auth';
 import { addDatabaseDuration } from '../../lib/request-performance';
 import { singleFlight } from '../../lib/single-flight';
-import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
+import { exemptIpForReviewRelease, isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { observeAppEntryAdRelease } from '../app-entry-ads/routes';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 
@@ -233,6 +233,20 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     let user = await app.prisma.user.findUniqueOrThrow({ where: { id: request.user.sub }, select: { id: true, mergedIntoUserId: true, appEntryAdExempt: true } });
     if (user.mergedIntoUserId) user = await app.prisma.user.findUniqueOrThrow({ where: { id: user.mergedIntoUserId }, select: { id: true, mergedIntoUserId: true, appEntryAdExempt: true } });
     const saved = await saveLaunchContext(app, request, user.id, context);
+    if (context.releaseId) {
+      try {
+        const reviewExemptionStartedAt = performance.now();
+        await exemptIpForReviewRelease({
+          db: app.sharedPrisma,
+          miniAppKey: app.config.MINI_APP_KEY,
+          releaseId: context.releaseId,
+          ipAddress: request.ip
+        });
+        addDatabaseDuration(request, performance.now() - reviewExemptionStartedAt);
+      } catch (error) {
+        request.log.warn({ err: error }, 'Review release IP exemption could not be applied');
+      }
+    }
     const localEntryAd = context.localEntryAd === true && localEntryAdMiniApps.has(app.config.MINI_APP_KEY);
     if (!localEntryAd) return { saved };
 

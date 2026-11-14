@@ -18,7 +18,7 @@ import { BytePlusVodService } from '../../services/byteplus-vod.service';
 import { assertMediaScope, localUploadDirectory, matchesUploadTags, processLocalUploadJobs, uploadScope, uploadTags } from '../../services/local-upload.service';
 import { LocalObjectStorageService } from '../../services/object-storage.service';
 import { defaultUiComponents } from '../ui/routes';
-import { invalidateAppEntryAdPolicyCache, readAppEntryAdPolicy } from '../app-entry-ads/routes';
+import { invalidateAppEntryAdPolicyCache, observeAppEntryAdRelease, readAppEntryAdPolicy } from '../app-entry-ads/routes';
 import {
   enqueueAlbumAction,
   enqueueAlbumVersionSync,
@@ -35,7 +35,7 @@ import { authorizeSharedPlayback, sharedPlaybackStatus } from '../../services/sh
 import { assertSameMiniAppOrganization, miniAppAdConfig, miniAppKeys, sameMiniAppOrganization, type MiniAppKey } from '../../config/mini-apps';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { assertDisplayMetadataOwner, carryBaseTextChanges, displayMetadataInput, findDisplayMetadataAlbum, readDisplayMetadata, retryDisplayMetadata, saveLocalDisplayMetadata, saveSharedDisplayMetadata } from '../../services/display-metadata.service';
-import { listEntryAdIpExemptions, listSharedIpVisits, listSharedIps, listViewerIdsForIp, normalizeIp, recentViewerIps, removeEntryAdIpExemption, setEntryAdIpExemption, setEntryAdIpExemptions } from '../../services/shared-ip.service';
+import { invalidateReviewReleaseStatusCache, listEntryAdIpExemptions, listSharedIpVisits, listSharedIps, listViewerIdsForIp, normalizeIp, recentViewerIps, removeEntryAdIpExemption, setEntryAdIpExemption, setEntryAdIpExemptions } from '../../services/shared-ip.service';
 import { campaignEntryApps, normalizeCampaignEntryBase } from '../../lib/campaign-entry';
 import { TikTokShortDramaApiService } from '../../services/tiktok-short-drama-api.service';
 import { assertV006PlacementPair, invalidateAdPlacementPolicyCache, isV006Release } from '../ads/ad-placement-policy';
@@ -812,6 +812,35 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       placementDefaults: { INTERSTITIAL: placements.appEntryPlacementId, REWARDED_GATED: placements.rewardedPlacementId }
     };
   });
+  // Register an immutable build identifier before the first preview visit.
+  app.post('/admin/app-entry-ad-releases', { preHandler: requirePermission('ads.write') }, async (request, reply) => {
+    const input = codeReleaseInput.extend({ releaseId: codeReleaseParams.shape.releaseId }).parse(request.body);
+    const { releaseId, portalStatus, portalVersion } = input;
+    if (releaseId === 'default' || !releaseId.startsWith(`${app.config.MINI_APP_KEY}-`)) {
+      return reply.code(400).send({ error: { code: 'INVALID_RELEASE_ID', message: '构建标识必须使用当前小程序前缀，且不能是 default。', requestId: request.id } });
+    }
+    const existing = await app.sharedPrisma.miniAppCodeRelease.findUnique({
+      where: { miniAppKey_releaseId: { miniAppKey: app.config.MINI_APP_KEY, releaseId } }
+    });
+    if (existing) return reply.code(409).send({ error: { code: 'RELEASE_ALREADY_REGISTERED', message: '该构建版本已登记，请在版本列表修改状态。', requestId: request.id } });
+    // The policy lives in the app database, while release metadata lives in the shared database.
+    // Creating a disabled policy first is safe to retry if the metadata write fails.
+    const policy = await observeAppEntryAdRelease(app, releaseId, false);
+    let release;
+    try {
+      release = await app.sharedPrisma.miniAppCodeRelease.create({
+        data: { miniAppKey: app.config.MINI_APP_KEY, releaseId, portalStatus, portalVersion, updatedBy: request.user.sub }
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        return reply.code(409).send({ error: { code: 'RELEASE_ALREADY_REGISTERED', message: '该构建版本已登记，请在版本列表修改状态。', requestId: request.id } });
+      }
+      throw error;
+    }
+    await audit(app, request.user.sub, 'CREATE', 'MiniAppCodeRelease', `${app.config.MINI_APP_KEY}:${releaseId}`, { portalStatus, portalVersion });
+    invalidateReviewReleaseStatusCache(app.sharedPrisma, app.config.MINI_APP_KEY);
+    return { release, policy };
+  });
   app.patch('/admin/app-entry-ad-releases/:releaseId', { preHandler: requireAdmin }, async (request) => {
     const { releaseId } = codeReleaseParams.parse(request.params);
     const input = codeReleaseInput.parse(request.body);
@@ -824,6 +853,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       update: { ...input, updatedBy: request.user.sub }
     });
     await audit(app, request.user.sub, 'UPDATE', 'MiniAppCodeRelease', `${app.config.MINI_APP_KEY}:${releaseId}`, input);
+    invalidateReviewReleaseStatusCache(app.sharedPrisma, app.config.MINI_APP_KEY);
     return release;
   });
   app.get('/admin/mini-entry-links', { preHandler: requirePermission('ads.read') }, async () => {

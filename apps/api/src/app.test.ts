@@ -121,6 +121,8 @@ async function createPrismaStub() {
   const prisma: any = {
     _state: state,
     miniAppCodeRelease: {
+      findUnique: async ({ where }: any) => state.codeReleases.get(`${where.miniAppKey_releaseId.miniAppKey}:${where.miniAppKey_releaseId.releaseId}`) ?? null,
+      create: async ({ data }: any) => { const key = `${data.miniAppKey}:${data.releaseId}`; const row = { ...data }; state.codeReleases.set(key, row); return row; },
       findMany: async ({ where }: any) => [...state.codeReleases.values()].filter((item) => item.miniAppKey === where.miniAppKey),
       upsert: async ({ where, create, update }: any) => {
         const key = `${where.miniAppKey_releaseId.miniAppKey}:${where.miniAppKey_releaseId.releaseId}`;
@@ -471,6 +473,7 @@ async function createPrismaStub() {
       if (sql.includes('SELECT EXISTS(SELECT 1 FROM "SharedEntryAdIpExemption"')) return [{ exempt: state.sharedExemptions.has(values[0]) }];
       if (sql.includes('INSERT INTO "SharedEntryAdIpExemption"')) {
         const [ipAddress, note, updatedBy] = values;
+        if (sql.includes('ON CONFLICT ("ipAddress") DO NOTHING') && state.sharedExemptions.has(ipAddress)) return [];
         const item = { ...(state.sharedExemptions.get(ipAddress) ?? { ipAddress, createdAt: new Date() }), note, updatedBy, updatedAt: new Date() };
         state.sharedExemptions.set(ipAddress, item); return [item];
       }
@@ -1863,6 +1866,31 @@ describe('QuicK ReeLS API', () => {
     assert.equal(releasedLaunch.json().required, false);
   });
 
+  it('registers a build before first launch without changing its ad policy or overwriting existing state', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const payload = { releaseId: 'main-prelaunch-v1', portalStatus: 'IN_REVIEW', portalVersion: 'Version 1' };
+    const denied = await app.inject({ method: 'POST', url: '/api/v1/admin/app-entry-ad-releases', payload });
+    assert.equal(denied.statusCode, 401);
+    const wrongApp = await app.inject({ method: 'POST', url: '/api/v1/admin/app-entry-ad-releases', headers: adminHeaders, payload: { ...payload, releaseId: 'another-v1' } });
+    assert.equal(wrongApp.statusCode, 400);
+    const registered = await app.inject({ method: 'POST', url: '/api/v1/admin/app-entry-ad-releases', headers: adminHeaders, payload });
+    assert.equal(registered.statusCode, 200);
+    assert.equal(registered.json().policy.enabled, false);
+    assert.equal(registered.json().policy.firstSeenAt ?? null, null);
+    const duplicate = await app.inject({ method: 'POST', url: '/api/v1/admin/app-entry-ad-releases', headers: adminHeaders, payload: { ...payload, portalStatus: 'RELEASED' } });
+    assert.equal(duplicate.statusCode, 409);
+    const list = await app.inject({ url: '/api/v1/admin/app-entry-ad-policies', headers: adminHeaders });
+    const release = list.json().items.find((item: any) => item.releaseId === payload.releaseId);
+    assert.equal(release.portalStatus, 'IN_REVIEW');
+    assert.equal(release.firstSeenAt ?? null, null);
+    const { observeAppEntryAdRelease } = await import('./modules/app-entry-ads/routes');
+    await observeAppEntryAdRelease(app, payload.releaseId);
+    const visited = await app.inject({ url: '/api/v1/admin/app-entry-ad-policies', headers: adminHeaders });
+    assert.ok(visited.json().items.find((item: any) => item.releaseId === payload.releaseId).firstSeenAt);
+  });
+
   it('stores Portal status separately from each code version ad policy', async () => {
     const app = await createTestApp();
     apps.push(app);
@@ -1881,6 +1909,50 @@ describe('QuicK ReeLS API', () => {
     const missing = await app.inject({ method: 'PATCH', url: '/api/v1/admin/app-entry-ad-releases/main-missing', headers: adminHeaders,
       payload: { portalVersion: 'Version 8', portalStatus: 'RELEASED' } });
     assert.equal(missing.statusCode, 404);
+  });
+
+  it('auto exempts viewer IPs from entry ads while the opened release is under review', async () => {
+    const app = await createTestApp();
+    apps.push(app);
+    const adminHeaders = { authorization: `Bearer ${await token(app, 'admin')}` };
+    const viewerHeaders = { authorization: `Bearer ${await token(app, 'user')}` };
+    const releaseId = 'main-review-auto-v1';
+    const registered = await app.inject({ method: 'POST', url: '/api/v1/admin/app-entry-ad-releases', headers: adminHeaders,
+      payload: { releaseId, portalStatus: 'IN_REVIEW', portalVersion: 'Version 9' } });
+    assert.equal(registered.statusCode, 200, registered.body);
+    const policy = await app.inject({ method: 'PUT', url: '/api/v1/admin/app-entry-ad-policy', headers: adminHeaders,
+      payload: { releaseId, enabled: true, mode: 'INTERSTITIAL', placementId: 'entry-review', requiredCount: 1, onUnavailable: 'ALLOW' } });
+    assert.equal(policy.statusCode, 200, policy.body);
+    const exemptions = (app.sharedPrisma as any)._state.sharedExemptions;
+
+    const reviewIp = '198.51.100.61';
+    const launch = await app.inject({ method: 'POST', url: '/api/v1/auth/launch-context', headers: viewerHeaders, remoteAddress: reviewIp,
+      payload: { entryId: 'review-launch-0001', releaseId } });
+    assert.equal(launch.statusCode, 200, launch.body);
+    assert.equal(exemptions.get(reviewIp).note, `AUTO_REVIEW: main:${releaseId}`);
+    assert.equal(exemptions.get(reviewIp).updatedBy, 'system:review-release');
+    const entry = await app.inject({ method: 'POST', url: '/api/v1/app-entry-ad-sessions', headers: viewerHeaders, remoteAddress: reviewIp,
+      payload: { launchId: '3a9d1f6a-2f3c-4a02-9b39-4c5c95f38e21', releaseId } });
+    assert.equal(entry.statusCode, 200, entry.body);
+    assert.deepEqual(entry.json(), { required: false });
+
+    const manualIp = '198.51.100.63';
+    const manual = await app.inject({ method: 'PUT', url: '/api/v1/admin/shared/entry-ad-ip-exemptions', headers: adminHeaders,
+      payload: { ipAddress: manualIp, note: 'manual office' } });
+    assert.equal(manual.statusCode, 200, manual.body);
+    await app.inject({ method: 'POST', url: '/api/v1/auth/launch-context', headers: viewerHeaders, remoteAddress: manualIp,
+      payload: { entryId: 'review-launch-0003', releaseId } });
+    assert.equal(exemptions.get(manualIp).note, 'manual office');
+    assert.equal(exemptions.get(manualIp).updatedBy, 'admin-1');
+
+    const releasedId = 'main-released-auto-v1';
+    const released = await app.inject({ method: 'POST', url: '/api/v1/admin/app-entry-ad-releases', headers: adminHeaders,
+      payload: { releaseId: releasedId, portalStatus: 'RELEASED', portalVersion: 'Version 10' } });
+    assert.equal(released.statusCode, 200, released.body);
+    const releasedIp = '198.51.100.62';
+    await app.inject({ method: 'POST', url: '/api/v1/auth/launch-context', headers: viewerHeaders, remoteAddress: releasedIp,
+      payload: { entryId: 'review-launch-0002', releaseId: releasedId } });
+    assert.equal(exemptions.has(releasedIp), false);
   });
 
   it('replays the current entry ad on an early close in completed mode', async () => {

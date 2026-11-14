@@ -8,6 +8,9 @@ IP 汇总表和入场强弹豁免表位于共享平台数据库，不属于任�
 - `SharedIpVisit` 保存跨小程序的访问历史。
 - `SharedEntryAdIpExemption` 单独保存需要跳过入场强弹的 IP。
 - 配置豁免的 IP 在所有小程序跳过入场强弹检查，剧集解锁广告照常执行。
+- 审核包自动豁免：用户启动时若 `MiniAppCodeRelease` 中当前 `miniAppKey` + `releaseId` 的 `portalStatus` 为 `IN_REVIEW`，服务端会把该次请求的客户端 IP 写入 `SharedEntryAdIpExemption`，备注为 `AUTO_REVIEW: <miniAppKey>:<releaseId>`，`updatedBy` 为 `system:review-release`。写入使用 `ON CONFLICT DO NOTHING`，不会覆盖后台手工配置的备注和操作人。
+- 审核状态按 30 秒缓存，后台在“广告配置”页修改版本状态后会立即失效；同一 IP + 版本 10 分钟内只写一次，避免重复启动造成写放大。
+- 自动豁免行在审核结束后不会自动删除，需要在后台“广告配置”页按备注 `AUTO_REVIEW:` 筛出后手动移除，否则这些 IP 会持续跳过入场强弹。
 - 累计访问达到 3 次的 IP 原文及访问历史持续保留。
 - 少于 3 次且未豁免的 IP，在最后访问满 30 天后清除原始 IP 和过期访问明细；匿名化汇总行仍保留。
 - 豁免 IP 持续保存，直到 OWNER 在后台移除豁免。
@@ -36,3 +39,4 @@ psql "$SHARED_PLATFORM_DATABASE_URL" -v ON_ERROR_STOP=1 \
 3. 部署并重启 API、worker 和管理后台。
 4. 在后台添加测试 IP 豁免，确认“广告配置”页能显示豁免记录。
 5. 用该 IP 访问任一小程序，确认入场强弹跳过；再确认剧集解锁广告仍按原策略运行。
+6. 把一个测试版本 `releaseId` 的状态改为 `In review`，用该版本启动小程序，确认“广告配置”页出现备注为 `AUTO_REVIEW: <miniAppKey>:<releaseId>` 的豁免记录；改回 `Released` 后新的启动不再写入。
