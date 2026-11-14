@@ -41,6 +41,10 @@ export function isV006DualRelease(releaseId = releaseIdFromEnv()) {
   return /(?:^|-)v006-dual(?:-|$)/i.test(releaseId);
 }
 
+export function isLaunchAttributionRelease(releaseId = releaseIdFromEnv()) {
+  return isV006DualRelease(releaseId) || /(?:^|-)attr1(?:-|$)/i.test(releaseId);
+}
+
 export function getDefaultAdLoadMode(_platform = getAdPlatform(), _releaseId = releaseIdFromEnv()): AdLoadMode {
   return 'EXPLICIT_LOAD';
 }

@@ -9,6 +9,7 @@ import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { requestCountry } from '../../lib/content-visibility';
 import { isV006DualRelease, isV006Release, resolveAdPlacementPolicy, sessionAllowedPlacementIds, supportsV006DualApp, type AdClientPlatform } from '../ads/ad-placement-policy';
+import { supportsLaunchAttribution } from './launch-attribution-policy';
 
 const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
@@ -207,14 +208,14 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       secret: app.rootConfig.JWT_SECRET
     }, (error) => request.log.warn({ err: error }, 'Shared IP visit could not be recorded'));
     return singleFlight(app, `entry-session:${request.user.sub}:${request.ip}:${releaseId}:${launchId}:${JSON.stringify([adId, launchRef, launchAttributionVersion, entryFlowVersion, platform])}`, async () => {
-    const isDualV006 = supportsV006DualApp(app.config.MINI_APP_KEY) && isV006DualRelease(releaseId);
-    const usesLaunchAttribution = isDualV006 && (launchAttributionVersion === 1 || Boolean(launchRef));
+    const attributionRelease = supportsLaunchAttribution(app.config.MINI_APP_KEY, releaseId);
+    const usesLaunchAttribution = attributionRelease && (!isV006DualRelease(releaseId) || launchAttributionVersion === 1 || Boolean(launchRef));
     let launchRecord: Awaited<ReturnType<typeof app.prisma.miniAppLaunch.findUnique>> | null = null;
-    let decision: { id: string; decision: string; reason: string } | null = isDualV006 && launchRef
+    let decision: { id: string; decision: string; reason: string } | null = attributionRelease && launchRef
       ? await app.prisma.miniAppEntryAdDecision.findUnique({ where: { launchRef } }) : null;
     let responseFlowVersion: number | undefined;
     const saveDecision = async (input: { attributionStatus: string; decision: 'SHOW' | 'SUPPRESS'; reason: string; policyVersion?: number; requiredCount?: number; countMode?: string; sessionId?: string }) => {
-      if (!isDualV006 || !launchRecord) return null;
+      if (!attributionRelease || !launchRecord) return null;
       try {
         return await app.prisma.miniAppEntryAdDecision.create({ data: {
           launchRef: launchRecord.launchRef, miniAppKey: app.config.MINI_APP_KEY, launchId, releaseId,
@@ -245,7 +246,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
         return { required: false as const, decisionId: suppressed?.id, decision: 'SUPPRESS' as const, decisionReason: reason, launchRef };
       }
     }
-    if (!isDualV006 && app.rootConfig.ENTRY_AD_ATTRIBUTION_GATE_ENABLED) {
+    if (!attributionRelease && app.rootConfig.ENTRY_AD_ATTRIBUTION_GATE_ENABLED) {
       let attribution;
       if (adId !== undefined) {
         attribution = classifyLaunchAttribution({ launchQuery: adId === null ? {} : { adId } });

@@ -23,6 +23,7 @@ const environment = z.object({
   DATABASE_POOLER_PORT: z.coerce.number().int().min(1).max(65535).optional(),
   API_DATABASE_CONNECTION_LIMIT: z.coerce.number().int().min(1).max(64).default(2),
   WORKER_DATABASE_CONNECTION_LIMIT: z.coerce.number().int().min(1).max(64).default(1),
+  API_ENABLED_MINI_APPS: z.string().trim().optional(),
   SHARED_PLATFORM_DATABASE_URL: z.string().url().optional(),
   QUARTZPLAY_DATABASE_URL: z.string().url().optional(),
   TALETV_DATABASE_URL: z.string().url().optional(),

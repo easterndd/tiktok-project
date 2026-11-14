@@ -273,6 +273,10 @@ it('registers all new Mini routes with separate databases and app-bound admin to
   const extraEnv = Object.fromEntries(extraKeys.map((key) => [`${key.toUpperCase()}_DATABASE_URL`, `postgresql://test:test@localhost:5432/test?schema=${key}`]));
   const expanded = loadEnv({ NODE_ENV: 'test', DATABASE_URL: env.DATABASE_URL, TALETV_DATABASE_URL: env.TALETV_DATABASE_URL, JWT_SECRET: env.JWT_SECRET, BYTEPLUS_ACCOUNT_ID: env.BYTEPLUS_ACCOUNT_ID, BYTEPLUS_SPACE_NAME: env.BYTEPLUS_SPACE_NAME, BYTEPLUS_REGION: env.BYTEPLUS_REGION, ...extraEnv });
   assert.deepEqual(configuredMiniAppKeys(expanded), [...miniAppKeys.slice(0, 2), ...extraKeys]);
+  const scoped = { ...expanded, API_ENABLED_MINI_APPS: 'zenclip,storyworld,dailyreel,elitedrama,sonicreel,orbitplay' };
+  assert.deepEqual(configuredMiniAppKeys(scoped), ['main', 'dailyreel', 'storyworld', 'elitedrama', 'orbitplay', 'zenclip', 'sonicreel']);
+  assert.throws(() => configuredMiniAppKeys({ ...scoped, API_ENABLED_MINI_APPS: 'not-a-mini-app' }), /Unknown mini app key/);
+  assert.throws(() => configuredMiniAppKeys({ ...scoped, API_ENABLED_MINI_APPS: 'main,cinereels' }), /Unconfigured mini app/);
   const miniPrisma = Object.fromEntries(extraKeys.map((key) => [key, databaseFor(key)]));
   const app = await buildApp(expanded, { prisma: databaseFor('main'), taletvPrisma: databaseFor('taletv'), miniPrisma, sharedPrisma: databaseFor('shared') });
   try {

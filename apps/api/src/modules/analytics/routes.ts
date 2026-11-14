@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 const eventKeys = ['app_open', 'ad_config', 'ad_load', 'ad_show', 'ad_close', 'launch_attribution', 'entry_ad_decision'] as const;
 const results = ['success', 'fail', 'timeout', 'unsupported'] as const;
-const analyticsEnabledMiniApps = new Set(['dramaflicks', 'heartreel', 'zenclip', 'sweetreel', 'luxereel']);
+const analyticsEnabledMiniApps = new Set(['dramaflicks', 'heartreel', 'zenclip', 'sweetreel', 'luxereel', 'storyworld', 'dailyreel', 'elitedrama', 'sonicreel', 'orbitplay']);
 const jsonValue = z.unknown().superRefine((value, ctx) => {
   try {
     if (JSON.stringify(value).length > 8_192) ctx.addIssue({ code: 'custom', message: 'JSON field is too large' });

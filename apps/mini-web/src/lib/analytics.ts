@@ -4,14 +4,14 @@ import { boundedDebugValue, debugHeaders, debugResponseDetails } from './debug-n
 import { debugPanelActive, debugRecordCaptureEnabled } from './debug-panel';
 import { captureClientTrace, setClientTraceDebugRecorder } from './client-trace';
 import { getMiniLaunchIds } from './launch-context';
-import { isV006DualRelease } from '../features/ads/ad-platform';
+import { isLaunchAttributionRelease } from '../features/ads/ad-platform';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
   ?? (import.meta.env.VITE_APP_KEY && import.meta.env.VITE_APP_KEY !== 'main' ? `http://localhost:3000/api/${import.meta.env.VITE_APP_KEY}/v1` : 'http://localhost:3000/api/v1');
 const releaseId = import.meta.env.VITE_MINI_RELEASE_ID || 'default';
 const appVersion = import.meta.env.VITE_APP_VERSION || releaseId;
 const debugEnabled = debugPanelActive;
-const instrumentedApps = new Set(['dramaflicks', 'heartreel', 'zenclip', 'sweetreel', 'luxereel']);
+const instrumentedApps = new Set(['dramaflicks', 'heartreel', 'zenclip', 'sweetreel', 'luxereel', 'storyworld', 'dailyreel', 'elitedrama', 'sonicreel', 'orbitplay']);
 const maxQueueSize = 50;
 const flushSize = 10;
 const flushDelayMs = 2_000;
@@ -115,7 +115,7 @@ function getOrCreateSessionId() {
 }
 
 function getLaunchId() {
-  if (isV006DualRelease(releaseId)) return getMiniLaunchIds().launchId;
+  if (isLaunchAttributionRelease(releaseId)) return getMiniLaunchIds().launchId;
   const key = releaseId === 'default' ? `${storagePrefix}_launch_id` : `${storagePrefix}_${releaseId}_launch_id`;
   const saved = sessionStorage.getItem(key);
   if (saved) return saved;

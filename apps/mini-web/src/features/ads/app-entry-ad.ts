@@ -9,7 +9,7 @@ import { createShownAcknowledgement } from './shown-acknowledgement';
 import { adLoadCallback, adLoadDurationMs, adLoadSupported, getInterstitialAd, getRewardedAd, prewarmInterstitialAd, prewarmInterstitialPlacements, prewarmRewardedAd, prewarmRewardedPlacements, primeEntryRewardedPool, readyRewardedPlacement, refillEntryRewardedPool, releaseInterstitialAd, releaseRewardedAd, returnRewardedAd, waitForAdReady } from './ad-instance-cache';
 import { claimNativeAd, markRewardedAdClosed } from './ad-activity';
 import { captureSdkCallback, newAdOperationId, nextAdSequence, recordAdClose, recordAdConfig, recordAdLoad, recordAdLoadResult, recordAdShow, recordEntryAdDecision } from '../../lib/analytics';
-import { getAdPlatform, getDefaultAdLoadMode, getMiniReleaseId, isV006DualRelease, isV006Release } from './ad-platform';
+import { getAdPlatform, getDefaultAdLoadMode, getMiniReleaseId, isLaunchAttributionRelease, isV006DualRelease, isV006Release } from './ad-platform';
 import { classifyAdFailure, normalizeErrorOrigin, taggedAdFailure, type AdErrorOrigin } from './ad-error-policy';
 import { restrictToPublicManifest, type AdPlacementType } from './ad-placement-manifest';
 import { selectAdPlacement } from './ad-placement-selection';
@@ -76,7 +76,7 @@ function eventId() {
 }
 
 export function getLaunchId() {
-  if (isV006DualRelease()) return getMiniLaunchIds().launchId;
+  if (isLaunchAttributionRelease()) return getMiniLaunchIds().launchId;
   const releaseId = getMiniReleaseId();
   const key = releaseId === 'default' ? `${storagePrefix}_launch_id` : `${storagePrefix}_${releaseId}_launch_id`;
   const existing = sessionStorage.getItem(key);
@@ -95,9 +95,10 @@ async function startAppEntryAdSessionInternal(launchRef?: string): Promise<AppEn
     const session = await apiClient.post<AppEntryAdSession>('/app-entry-ad-sessions', {
       launchId: getLaunchId(),
       releaseId: getMiniReleaseId(),
-      ...(isV006DualRelease() ? { launchRef: launchRef ?? getMiniLaunchRef() } : { adId: getMiniLaunchAdId() }),
+      ...(isLaunchAttributionRelease() ? { launchRef: launchRef ?? getMiniLaunchRef() } : { adId: getMiniLaunchAdId() }),
       platform: getAdPlatform(),
-      ...(isV006DualRelease() ? { entryFlowVersion: 2, launchAttributionVersion: 1 } : {})
+      ...(isLaunchAttributionRelease() ? { launchAttributionVersion: 1 } : {}),
+      ...(isV006DualRelease() ? { entryFlowVersion: 2 } : {})
     });
     if (isV006DualRelease() && import.meta.env?.VITE_ENTRY_COMPAT_MODE === 'true'
       && session.required && session.mode === 'REWARDED_GATED') {
@@ -107,7 +108,7 @@ async function startAppEntryAdSessionInternal(launchRef?: string): Promise<AppEn
     const durationMs = performance.now() - startedAt;
     reportPerformance('ENTRY_AD_POLICY_RESPONSE', '/app-entry-ad-sessions', durationMs, { required: session.required, mode: session.mode ?? 'NONE' });
     recordAdConfig({ result: 'success', durationMs, shouldShow: session.required ? session.requiredCount ?? 1 : 0, path: '/app-entry-ad-sessions' });
-    if (isV006DualRelease()) recordEntryAdDecision({ launchRef: session.launchRef ?? launchRef, decisionId: session.decisionId,
+    if (isLaunchAttributionRelease()) recordEntryAdDecision({ launchRef: session.launchRef ?? launchRef, decisionId: session.decisionId,
       decision: session.decision, reason: session.decisionReason, required: session.required });
     if (session.required && session.placementId) {
       const type: AdPlacementType = session.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED';

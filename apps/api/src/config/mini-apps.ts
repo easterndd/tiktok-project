@@ -159,7 +159,18 @@ export function miniAppEnvironment(env: Env, key: MiniAppKey): Env | null {
 }
 
 export function configuredMiniAppKeys(env: Env): MiniAppKey[] {
-  return miniAppKeys.filter((key) => key === 'main' || Boolean(valueOf(env, secondaryMiniApps[key].databaseEnv)));
+  const configured = miniAppKeys.filter((key) => key === 'main' || Boolean(valueOf(env, secondaryMiniApps[key].databaseEnv)));
+  if (env.API_ENABLED_MINI_APPS === undefined) return configured;
+
+  const requested = env.API_ENABLED_MINI_APPS.split(',').map((key) => key.trim()).filter(Boolean);
+  if (!requested.length) throw new Error('API_ENABLED_MINI_APPS must contain at least one mini app key.');
+  const unknown = requested.filter((key) => !miniAppKeys.includes(key as MiniAppKey));
+  if (unknown.length) throw new Error(`Unknown mini app key in API_ENABLED_MINI_APPS: ${unknown.join(', ')}`);
+  const unavailable = requested.filter((key) => key !== 'main' && !configured.includes(key as MiniAppKey));
+  if (unavailable.length) throw new Error(`Unconfigured mini app in API_ENABLED_MINI_APPS: ${unavailable.join(', ')}`);
+
+  const allowed = new Set(requested);
+  return configured.filter((key) => key === 'main' || allowed.has(key));
 }
 
 export function miniAppPath(key: MiniAppKey) {
