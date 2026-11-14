@@ -13,7 +13,7 @@ import { recordEntryAdDecision } from '../lib/analytics';
 import { ApiError, apiClient } from '../lib/api-client';
 import { campaignLaunchOptionsEvent, getCampaignEntryTarget, hasCampaignEntryIntent } from '../lib/launch-context';
 import { appKey } from '../lib/app-brand';
-import { isV006DualRelease } from '../features/ads/ad-platform';
+import { isLaunchAttributionRelease } from '../features/ads/ad-platform';
 import styles from './EntryAdGate.module.css';
 
 type GateState = 'LOADING' | 'READY' | 'ERROR';
@@ -79,7 +79,7 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
       if (controller.signal.aborted) return;
       let launchRecord: Awaited<ReturnType<typeof recordMiniLaunch>> | undefined;
       let attributionUnavailable = false;
-      if (isV006DualRelease()) {
+      if (isLaunchAttributionRelease()) {
         await ensureAnonymousSession();
         try {
           launchRecord = await recordMiniLaunch();
@@ -116,7 +116,7 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
         }
       }
 
-      if (localEntryMode && !isV006DualRelease()) {
+      if (localEntryMode && !isLaunchAttributionRelease()) {
         const anonymousSession = ensureAnonymousSession();
         void anonymousSession.then(() => setState('READY'), () => setState('READY'));
         void attemptLocalEntryAd({
@@ -153,7 +153,7 @@ export function EntryAdGate({ children }: { children: ReactNode }) {
           if (appKey === 'storyland') await ensureTikTokSession().catch(() => undefined);
           if (controller.signal.aborted) return;
           step = 'ENTRY_AD_POLICY';
-          if (attributionUnavailable || (isV006DualRelease() && !launchRecord?.launchRef)) {
+          if (attributionUnavailable || (isLaunchAttributionRelease() && !launchRecord?.launchRef)) {
             if (!attributionUnavailable) recordEntryAdDecision({ decision: 'SUPPRESS', reason: 'ATTRIBUTION_UNAVAILABLE', required: false });
             window.clearTimeout(startupTimer);
             setState('READY');

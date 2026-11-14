@@ -20,7 +20,7 @@ const mocks = {
   '../../lib/diagnostics': 'export const reportDiagnostic = () => {}; export const reportPerformance = (...args) => globalThis.__entryAdTestPerformance(...args);',
   '../../lib/client-trace': 'export const captureClientTrace = () => {}; export const setClientTraceLocalOnly = (value) => globalThis.__entryAdTestTraceModes.push(value);',
   '../../lib/analytics': 'export const captureSdkCallback = (name, payload = null) => ({ name, payload, capturedAt: new Date().toISOString() }); export const nextAdSequence = () => 1; export const newAdOperationId = (kind, seq) => kind + "-" + seq + "-test"; export const recordAdClose = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "close", input }); export const recordAdConfig = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "config", input }); export const recordAdLoad = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "load", input }); export const recordAdLoadResult = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "load", input }); export const recordAdShow = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "show", input }); export const recordEntryAdDecision = (input) => globalThis.__entryAdTestAnalytics.push({ kind: "entryDecision", input });',
-  './ad-platform': 'export const getAdPlatform = () => globalThis.__entryAdTestPlatform ?? "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const getMiniReleaseId = () => globalThis.__entryAdTestRelease ?? "default"; export const isV006Release = (release = getMiniReleaseId()) => release.includes("-v006-"); export const isV006DualRelease = (release = getMiniReleaseId()) => release.includes("-v006-dual-"); export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;',
+  './ad-platform': 'export const getAdPlatform = () => globalThis.__entryAdTestPlatform ?? "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const getMiniReleaseId = () => globalThis.__entryAdTestRelease ?? "default"; export const isV006Release = (release = getMiniReleaseId()) => release.includes("-v006-"); export const isV006DualRelease = (release = getMiniReleaseId()) => release.includes("-v006-dual-"); export const isLaunchAttributionRelease = (release = getMiniReleaseId()) => isV006DualRelease(release) || release.includes("-attr1-"); export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;',
   './ad-placement-manifest': 'export const restrictToPublicManifest = (_type, ids) => [...ids];',
   './ad-error-policy': 'export const classifyAdFailure = (error, origin) => globalThis.__entryAdTestClassify?.(error, origin) ?? "STOP"; export const normalizeErrorOrigin = (error) => error?.adErrorOrigin ?? "UNKNOWN"; export const taggedAdFailure = (message, origin) => Object.assign(new Error(message), { adErrorOrigin: origin });',
   './ad-activity': 'export const claimNativeAd = () => () => {}; export const markRewardedAdClosed = () => {};'
@@ -62,6 +62,28 @@ function setup() {
 
 const input = { mode: 'REWARDED_GATED', placementId: 'placement', sessionId: 'session', adIndex: 1 };
 const flush = () => new Promise(setImmediate);
+
+it('sends the launch reference for attribution-only releases without enabling the dual entry flow', async () => {
+  globalThis.__entryAdTestRelease = 'storyworld-attr1-test';
+  setup();
+  const requests = [];
+  post = async (path, body) => {
+    requests.push({ path, body });
+    return { required: false, launchRef: body.launchRef, decision: 'SUPPRESS', decisionReason: 'UNATTRIBUTED' };
+  };
+  try {
+    await startAppEntryAdSession('11111111-1111-4111-8111-111111111111');
+    const request = requests.find(({ path }) => path === '/app-entry-ad-sessions');
+    assert.equal(request.body.launchId, '00000000-0000-4000-8000-000000000001');
+    assert.equal(request.body.launchRef, '11111111-1111-4111-8111-111111111111');
+    assert.equal(request.body.launchAttributionVersion, 1);
+    assert.equal('adId' in request.body, false);
+    assert.equal('entryFlowVersion' in request.body, false);
+    assert.equal(analyticsEvents.find(({ kind }) => kind === 'entryDecision')?.input.reason, 'UNATTRIBUTED');
+  } finally {
+    delete globalThis.__entryAdTestRelease;
+  }
+});
 
 it('primes both Android entry placements in parallel and hands off before close telemetry', async () => {
   globalThis.__entryAdTestPlatform = 'android';

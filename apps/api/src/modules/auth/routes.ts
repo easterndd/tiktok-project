@@ -9,6 +9,7 @@ import { singleFlight } from '../../lib/single-flight';
 import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { observeAppEntryAdRelease } from '../app-entry-ads/routes';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
+import { supportsLaunchAttribution } from '../app-entry-ads/launch-attribution-policy';
 
 const launchContextInput = z.object({
   launchId: z.string().uuid().optional(),
@@ -104,7 +105,7 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
   const launchQuery = Object.fromEntries(Object.entries(context.launchQuery ?? {}).filter(([key, value]) =>
     /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(key)
     && !/(?:token|auth|secret|password|email|phone|openid|open_id|user.?id|username|uid|visitor|session|credential|code|url|redirect|callback)/i.test(key)
-    && !(/^(?:ttclid|ttoclid|click_id)$/i.test(key) && /(?:^|-)v006-dual(?:-|$)/i.test(context.releaseId ?? ''))
+    && !(/^(?:ttclid|ttoclid|click_id)$/i.test(key) && supportsLaunchAttribution(app.config.MINI_APP_KEY, context.releaseId ?? ''))
     && !/(?:https?:\/\/|www\.)/i.test(value)
   ).slice(0, 32));
   const fingerprint = createHash('sha256').update(JSON.stringify({ context, launchQuery })).digest('hex');
@@ -116,17 +117,17 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
     });
     if (existing) {
       const metadata = existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? existing.metadata as Record<string, unknown> : {};
-      const isDualV006 = /(?:^|-)v006-dual(?:-|$)/i.test(context.releaseId ?? String(metadata.releaseId ?? ''));
+      const usesLaunchAttribution = supportsLaunchAttribution(app.config.MINI_APP_KEY, context.releaseId ?? String(metadata.releaseId ?? ''));
       const { rawUrl: _rawUrl, sdkPayloadRaw: _sdkPayloadRaw, ...metadataWithoutRawEvidence } = metadata;
       const existingQuery = metadata.launchQuery && typeof metadata.launchQuery === 'object' && !Array.isArray(metadata.launchQuery)
         ? metadata.launchQuery as Record<string, string> : {};
-      const safeExistingQuery = isDualV006 ? Object.fromEntries(Object.entries(existingQuery).filter(([key]) => !/^(?:ttclid|ttoclid|click_id)$/i.test(key))) : existingQuery;
+      const safeExistingQuery = usesLaunchAttribution ? Object.fromEntries(Object.entries(existingQuery).filter(([key]) => !/^(?:ttclid|ttoclid|click_id)$/i.test(key))) : existingQuery;
       const launchRef = typeof metadata.launchRef === 'string' ? metadata.launchRef : randomUUID();
       const nextMetadataObject = {
         ...metadataWithoutRawEvidence,
         launchId,
         launchRef,
-        ...(!isDualV006 ? { rawUrl: context.rawUrl ?? metadata.rawUrl, sdkPayloadRaw: context.sdkPayloadRaw ?? metadata.sdkPayloadRaw } : {}),
+        ...(!usesLaunchAttribution ? { rawUrl: context.rawUrl ?? metadata.rawUrl, sdkPayloadRaw: context.sdkPayloadRaw ?? metadata.sdkPayloadRaw } : {}),
         launchScene: context.launchScene ?? metadata.launchScene,
         launchPath: context.launchPath ?? metadata.launchPath,
         webviewBase: context.webviewBase ?? metadata.webviewBase,
@@ -149,17 +150,17 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
       await saveStructuredLaunch(app, userId, launchId, entryId, launchRef, context.releaseId ?? 'default', attribution, attributionEvidence);
       return { saved: true as const, launchRef, launchId, attribution: { status: attribution.status, reason: attribution.reason, signalStatus: attribution.signalStatus } };
     }
-    const existingLaunch = context.launchId && /(?:^|-)v006-dual(?:-|$)/i.test(context.releaseId ?? '')
+    const existingLaunch = context.launchId && supportsLaunchAttribution(app.config.MINI_APP_KEY, context.releaseId ?? '')
       ? await app.prisma.miniAppLaunch.findUnique({ where: { miniAppKey_launchId: { miniAppKey: app.config.MINI_APP_KEY, launchId } } }) : null;
     const launchRef = existingLaunch?.launchRef ?? randomUUID();
     const attribution = classifyLaunchAttribution({ ...context, launchQuery });
-    const dualV006Context = /(?:^|-)v006-dual(?:-|$)/i.test(context.releaseId ?? '');
+    const attributionContext = supportsLaunchAttribution(app.config.MINI_APP_KEY, context.releaseId ?? '');
     await app.prisma.audienceActivityEvent.create({ data: {
       userId, eventType: 'APP_LAUNCH_CONTEXT', metadata: {
         launchId,
         launchRef,
         entryId,
-        ...(!dualV006Context ? { rawUrl: context.rawUrl, sdkPayloadRaw: context.sdkPayloadRaw } : {}),
+        ...(!attributionContext ? { rawUrl: context.rawUrl, sdkPayloadRaw: context.sdkPayloadRaw } : {}),
         launchScene: context.launchScene,
         launchPath: context.launchPath?.startsWith('/') && !context.launchPath.startsWith('//')
           ? context.launchPath.split(/[?#]/, 1)[0] : undefined,
@@ -179,7 +180,7 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
 
 async function saveStructuredLaunch(app: FastifyInstance, userId: string, launchId: string, entryId: string, launchRef: string, releaseId: string,
   attribution: ReturnType<typeof classifyLaunchAttribution>, context: Record<string, unknown>) {
-  if (!/(?:^|-)v006-dual(?:-|$)/i.test(releaseId)) return;
+  if (!supportsLaunchAttribution(app.config.MINI_APP_KEY, releaseId)) return;
   const query = context.launchQuery && typeof context.launchQuery === 'object' ? context.launchQuery as Record<string, string> : {};
   const sdkQuery = (() => {
     try {

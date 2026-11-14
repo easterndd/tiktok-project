@@ -3,7 +3,7 @@ import { clearSessionToken, getOrCreateVisitorKey, getSessionToken, isDemoMode, 
 import { storagePrefix } from '../../lib/app-brand';
 import { getMiniLaunchContext, getMiniLaunchIds, rememberSdkLaunchPayload, setMiniLaunchRef, stringifySdkPayload } from '../../lib/launch-context';
 import { getLocalEntryAdPlacementIds } from '../ads/entry-ad-placements';
-import { isV006DualRelease } from '../ads/ad-platform';
+import { isLaunchAttributionRelease } from '../ads/ad-platform';
 import { recordLaunchAttribution } from '../../lib/analytics';
 
 let pendingSession: Promise<void> | null = null;
@@ -93,7 +93,7 @@ export async function recordMiniLaunch(sdkPayloadRaw?: string) {
     setMiniLaunchRef(result.launchRef);
     if (sdkPayloadRaw) lastSdkPayloadRaw = sdkPayloadRaw;
     launchRecordResult = result;
-    if (isV006DualRelease()) recordLaunchAttribution({ saved: result.saved, launchRef: result.launchRef,
+    if (isLaunchAttributionRelease()) recordLaunchAttribution({ saved: result.saved, launchRef: result.launchRef,
       status: result.attribution?.status, reason: result.attribution?.reason, signalStatus: result.attribution?.signalStatus });
     return result;
   })();

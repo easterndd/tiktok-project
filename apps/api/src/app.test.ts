@@ -8,6 +8,7 @@ import { buildApp } from './app';
 import type { Env } from './config/env';
 import type { MiniAppKey } from './config/mini-apps';
 import { miniAppAdConfig } from './config/mini-apps';
+import { isAttributionPilotRelease, supportsLaunchAttribution } from './modules/app-entry-ads/launch-attribution-policy';
 import { loadEnv } from './config/env';
 import { hashPassword } from './services/password';
 import { BytePlusVodService } from './services/byteplus-vod.service';
@@ -2026,6 +2027,72 @@ describe('QuicK ReeLS API', () => {
     const adminQuery = await app.inject({ url: `${base}/admin/launch-attribution?launchId=${naturalLaunchId}`, headers: adminHeaders });
     assert.equal(adminQuery.statusCode, 200);
     assert.equal(adminQuery.json().items[0].decision.reason, 'UNATTRIBUTED');
+  });
+
+  it('uses one launch attribution decision per launch for all six single-placement pilot apps', async () => {
+    const keys = ['zenclip', 'storyworld', 'dailyreel', 'elitedrama', 'sonicreel', 'orbitplay'] as const;
+    const databases = Object.fromEntries(await Promise.all(keys.map(async (key) => [key, await createPrismaStub()]))) as Partial<Record<MiniAppKey, PrismaClient>>;
+    const envOverrides = Object.fromEntries(keys.map((key) => [`${key.toUpperCase()}_DATABASE_URL`, `postgresql://test:test@localhost:5432/${key}`])) as Partial<Env>;
+    const app = await createTestApp(envOverrides, { miniPrisma: databases });
+    apps.push(app);
+
+    for (const [index, key] of keys.entries()) {
+      const releaseId = `${key}-attr1-20261114T000000Z-test`;
+      const base = `/api/${key}/v1`;
+      const userHeaders = { authorization: `Bearer ${await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: key })}` };
+      const adminHeaders = { authorization: `Bearer ${await app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: key, role: 'OWNER', tokenVersion: 0 })}` };
+      assert.equal(isAttributionPilotRelease(key, releaseId), true);
+      assert.equal(supportsLaunchAttribution(key, `${key}-20261114T000000Z-test`), false);
+
+      const policy = await app.inject({ method: 'PUT', url: `${base}/admin/app-entry-ad-policy`, headers: adminHeaders,
+        payload: { releaseId, enabled: true, mode: 'REWARDED_GATED', placementId: `ad${index + 1}123456789`, requiredCount: 3, countMode: 'SHOWN', onUnavailable: 'ALLOW' } });
+      assert.equal(policy.statusCode, 200);
+      const missingLaunchId = `11111111-1111-4111-8111-${String(index + 1).padStart(12, '0')}`;
+      const missingReference = await app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers: userHeaders,
+        payload: { launchId: missingLaunchId, releaseId } });
+      assert.equal(missingReference.json().decisionReason, 'ATTRIBUTION_UNAVAILABLE');
+
+      const naturalLaunchId = `22222222-2222-4222-8222-${String(index + 1).padStart(12, '0')}`;
+      const naturalContext = await app.inject({ method: 'POST', url: `${base}/auth/launch-context`, headers: userHeaders,
+        payload: { launchId: naturalLaunchId, entryId: naturalLaunchId, releaseId, rawUrl: 'https://example.test/?ttoclid=preview-only' } });
+      assert.equal(naturalContext.statusCode, 200);
+      assert.equal(naturalContext.json().attribution.status, 'UNATTRIBUTED');
+      const naturalEntry = await app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers: userHeaders,
+        payload: { launchId: naturalLaunchId, releaseId, launchRef: naturalContext.json().launchRef, adId: '1881556363195874', launchAttributionVersion: 1 } });
+      assert.equal(naturalEntry.json().decisionReason, 'UNATTRIBUTED');
+      assert.equal(naturalEntry.json().required, false);
+      const repeated = await app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers: userHeaders,
+        payload: { launchId: naturalLaunchId, releaseId, launchRef: naturalContext.json().launchRef, launchAttributionVersion: 1 } });
+      assert.equal(repeated.json().decisionId, naturalEntry.json().decisionId);
+
+      const paidLaunchId = `33333333-3333-4333-8333-${String(index + 1).padStart(12, '0')}`;
+      const paidContext = await app.inject({ method: 'POST', url: `${base}/auth/launch-context`, headers: userHeaders,
+        payload: { launchId: paidLaunchId, entryId: paidLaunchId, releaseId, rawUrl: 'https://example.test/?adId=1881556363195874&ttclid=private-click-id' } });
+      assert.equal(paidContext.json().attribution.status, 'ATTRIBUTED');
+      const paidEntry = await app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers: userHeaders,
+        payload: { launchId: paidLaunchId, releaseId, launchRef: paidContext.json().launchRef, launchAttributionVersion: 1 } });
+      assert.equal(paidEntry.statusCode, 200);
+      assert.equal(paidEntry.json().required, true);
+      assert.equal(paidEntry.json().requiredCount, 3);
+      assert.equal(paidEntry.json().countMode, 'SHOWN');
+      assert.deepEqual(paidEntry.json().placementIds, [`ad${index + 1}123456789`]);
+      assert.equal(paidEntry.json().entryFlowVersion, undefined);
+
+      const analytics = await app.inject({ method: 'POST', url: `${base}/analytics/events`, headers: userHeaders, payload: { events: [
+        { eventId: `attribution-${key}-1`, eventKey: 'launch_attribution', releaseId, launchId: naturalLaunchId, metadata: { launchRef: naturalContext.json().launchRef, status: 'UNATTRIBUTED' } },
+        { eventId: `entry-decision-${key}-1`, eventKey: 'entry_ad_decision', releaseId, launchId: naturalLaunchId, metadata: { decisionId: naturalEntry.json().decisionId, decision: 'SUPPRESS' } }
+      ] } });
+      assert.equal(analytics.statusCode, 202);
+      assert.equal(analytics.json().accepted, 2);
+      const admin = await app.inject({ url: `${base}/admin/launch-attribution?launchId=${naturalLaunchId}`, headers: adminHeaders });
+      assert.equal(admin.statusCode, 200);
+      assert.equal(admin.json().items[0].decision.reason, 'UNATTRIBUTED');
+      const storedLaunch = [...(databases[key] as any)._state.miniAppLaunches.values()].find((item: any) => item.launchId === paidLaunchId);
+      assert.equal(storedLaunch.localAttributionStatus, 'ATTRIBUTED');
+      assert.equal(JSON.stringify(storedLaunch).includes('private-click-id'), false);
+    }
+    assert.equal(supportsLaunchAttribution('cinereels', 'cinereels-attr1-test'), false);
+    assert.equal(supportsLaunchAttribution('dramaflicks', 'dramaflicks-v006-dual-test'), true);
   });
 
   it('replays the current entry ad on an early close in completed mode', async () => {

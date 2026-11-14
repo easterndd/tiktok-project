@@ -552,7 +552,7 @@ async function syncUiComponentRows(tx: Prisma.TransactionClient, items: UiCompon
   })));
 }
 
-const clientAnalyticsMiniApps = new Set(['dramaflicks', 'heartreel', 'zenclip', 'sweetreel', 'luxereel']);
+const clientAnalyticsMiniApps = new Set(['dramaflicks', 'heartreel', 'zenclip', 'sweetreel', 'luxereel', 'storyworld', 'dailyreel', 'elitedrama', 'sonicreel', 'orbitplay']);
 
 export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/admin/viewers', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
