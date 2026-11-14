@@ -87,13 +87,13 @@ export async function registerAlbumRoutes(app: FastifyInstance) {
       }
     });
     return {
-        items: episodes.map((episode: { id: string; episodeNo: number; title: string; durationMs: number | null; isFree: boolean; unlocks?: { id: string }[]; translations?: { locale: string; title: string }[] }) => ({
+        items: episodes.map((episode: { id: string; episodeNo: number; platformSeq: number | null; title: string; durationMs: number | null; isFree: boolean; unlocks?: { id: string }[]; translations?: { locale: string; title: string }[] }) => ({
         id: episode.id,
-        episodeNo: episode.episodeNo,
+        episodeNo: episode.platformSeq ?? episode.episodeNo,
         title: episode.translations?.find((translation) => translation.locale === locale)?.title ?? episode.title,
         durationMs: episode.durationMs,
-        isFree: isEpisodeFree(episode, album?.accessConfig),
-        access: isEpisodeFree(episode, album?.accessConfig) || Boolean(episode.unlocks?.length) ? 'PLAYABLE' : 'REWARDED_AD_REQUIRED'
+        isFree: isEpisodeFree({ ...episode, episodeNo: episode.platformSeq ?? episode.episodeNo }, album?.accessConfig),
+        access: isEpisodeFree({ ...episode, episodeNo: episode.platformSeq ?? episode.episodeNo }, album?.accessConfig) || Boolean(episode.unlocks?.length) ? 'PLAYABLE' : 'REWARDED_AD_REQUIRED'
       }))
     };
   });

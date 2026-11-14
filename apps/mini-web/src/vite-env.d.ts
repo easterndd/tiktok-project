@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_ENTRY_REWARDED_AD_UNIT_IDS?: string;
+  readonly VITE_ENTRY_COMPAT_MODE?: string;
 }
 
 declare module '*.module.css' {

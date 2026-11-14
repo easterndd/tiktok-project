@@ -362,7 +362,11 @@ export async function projectSharedAlbumToLocal(sharedAlbum: any, authorization:
   if (!localAlbum) throw conflict(`目标小程序剧目不存在：${authorization.targetLocalAlbumId}`);
   if (localAlbum.tiktokAlbumId && localAlbum.tiktokAlbumId !== sharedAlbum.tiktokAlbumId) throw conflict('目标剧目已绑定其他 TikTok 剧目，不会覆盖。');
   await (localPrisma.$transaction as any)(async (tx: Db) => {
-    const localEpisodes = await tx.episode.findMany({ where: { albumId: authorization.targetLocalAlbumId }, orderBy: { episodeNo: 'asc' } });
+    const localEpisodes = await tx.episode.findMany({
+      where: { albumId: authorization.targetLocalAlbumId },
+      orderBy: { episodeNo: 'asc' },
+      select: { id: true, episodeNo: true, byteplusVid: true }
+    });
     const sharedEpisodes = [...sharedAlbum.episodes].sort((left: any, right: any) => left.episodeNo - right.episodeNo);
     if (!sharedEpisodes.length) throw conflict('主剧目分集快照为空，不能完成播放映射。');
     await tx.episode.updateMany({ where: { albumId: authorization.targetLocalAlbumId }, data: { status: 'OFFLINE', tiktokEpisodeId: null, byteplusVid: null } });
@@ -380,8 +384,8 @@ export async function projectSharedAlbumToLocal(sharedAlbum: any, authorization:
       };
       if (localEpisode) {
         if (localEpisode.byteplusVid && localEpisode.byteplusVid !== data.byteplusVid && localAlbum.tiktokAlbumId !== sharedAlbum.tiktokAlbumId) throw conflict(`第 ${sharedEpisode.episodeNo} 集已有不同 VID，不能覆盖。`);
-        await tx.episode.update({ where: { id: localEpisode.id }, data });
-      } else await tx.episode.create({ data: { ...data, albumId: authorization.targetLocalAlbumId, episodeNo: sharedEpisode.episodeNo, sortOrder: sharedEpisode.episodeNo, title: sharedEpisode.title, coverUrl: sharedEpisode.media.coverUrl, durationMs: sharedEpisode.media.durationMs } });
+        await tx.episode.update({ where: { id: localEpisode.id }, data, select: { id: true } });
+      } else await tx.episode.create({ data: { ...data, albumId: authorization.targetLocalAlbumId, episodeNo: sharedEpisode.episodeNo, sortOrder: sharedEpisode.episodeNo, title: sharedEpisode.title, coverUrl: sharedEpisode.media.coverUrl, durationMs: sharedEpisode.media.durationMs }, select: { id: true } });
     }
     await tx.album.update({
       where: { id: authorization.targetLocalAlbumId },

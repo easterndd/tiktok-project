@@ -7,8 +7,8 @@ let lastRewardedEndedAt = 0;
 let nativeCooldownUntil = 0;
 const idleListeners = new Set<() => void>();
 
-export function claimNativeAd(kind: NativeAdKind): (() => void) | null {
-  if (activeAd || Date.now() < nativeCooldownUntil) return null;
+export function claimNativeAd(kind: NativeAdKind, options: { entryHandoff?: boolean } = {}): (() => void) | null {
+  if (activeAd || (Date.now() < nativeCooldownUntil && !(kind === 'entry' && options.entryHandoff))) return null;
   activeAd = kind;
   let released = false;
   return () => {

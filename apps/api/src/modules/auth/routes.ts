@@ -1,4 +1,4 @@
-import { createCipheriv, createHmac, createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createHmac, createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -11,12 +11,13 @@ import { observeAppEntryAdRelease } from '../app-entry-ads/routes';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 
 const launchContextInput = z.object({
+  launchId: z.string().uuid().optional(),
   entryId: z.string().min(8).max(128).optional(),
   rawUrl: z.url().max(32768).optional(),
   sdkPayloadRaw: z.string().max(32768).optional(),
   launchScene: z.string().trim().max(64).optional(),
   launchPath: z.string().trim().max(256).optional(),
-  launchQuery: z.record(z.string(), z.string().max(128)).optional(),
+  launchQuery: z.record(z.string(), z.string().max(4096)).optional(),
   webviewBase: z.string().trim().max(512).optional(),
   releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/).optional()
 });
@@ -98,10 +99,12 @@ async function exchangeTikTokCode(app: FastifyInstance, code: string) {
 
 async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, userId: string, context: z.infer<typeof launchContextInput>, fallbackEntryId?: string) {
   const entryId = context.entryId ?? fallbackEntryId;
-  if (!entryId) return false;
+  if (!entryId) return { saved: false as const };
+  const launchId = context.launchId ?? entryId;
   const launchQuery = Object.fromEntries(Object.entries(context.launchQuery ?? {}).filter(([key, value]) =>
     /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(key)
     && !/(?:token|auth|secret|password|email|phone|openid|open_id|user.?id|username|uid|visitor|session|credential|code|url|redirect|callback)/i.test(key)
+    && !(/^(?:ttclid|ttoclid|click_id)$/i.test(key) && /(?:^|-)v006-dual(?:-|$)/i.test(context.releaseId ?? ''))
     && !/(?:https?:\/\/|www\.)/i.test(value)
   ).slice(0, 32));
   const fingerprint = createHash('sha256').update(JSON.stringify({ context, launchQuery })).digest('hex');
@@ -113,31 +116,50 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
     });
     if (existing) {
       const metadata = existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? existing.metadata as Record<string, unknown> : {};
+      const isDualV006 = /(?:^|-)v006-dual(?:-|$)/i.test(context.releaseId ?? String(metadata.releaseId ?? ''));
+      const { rawUrl: _rawUrl, sdkPayloadRaw: _sdkPayloadRaw, ...metadataWithoutRawEvidence } = metadata;
       const existingQuery = metadata.launchQuery && typeof metadata.launchQuery === 'object' && !Array.isArray(metadata.launchQuery)
         ? metadata.launchQuery as Record<string, string> : {};
-      const nextMetadata = {
-        ...metadata,
-        rawUrl: context.rawUrl ?? metadata.rawUrl,
-        sdkPayloadRaw: context.sdkPayloadRaw ?? metadata.sdkPayloadRaw,
+      const safeExistingQuery = isDualV006 ? Object.fromEntries(Object.entries(existingQuery).filter(([key]) => !/^(?:ttclid|ttoclid|click_id)$/i.test(key))) : existingQuery;
+      const launchRef = typeof metadata.launchRef === 'string' ? metadata.launchRef : randomUUID();
+      const nextMetadataObject = {
+        ...metadataWithoutRawEvidence,
+        launchId,
+        launchRef,
+        ...(!isDualV006 ? { rawUrl: context.rawUrl ?? metadata.rawUrl, sdkPayloadRaw: context.sdkPayloadRaw ?? metadata.sdkPayloadRaw } : {}),
         launchScene: context.launchScene ?? metadata.launchScene,
         launchPath: context.launchPath ?? metadata.launchPath,
         webviewBase: context.webviewBase ?? metadata.webviewBase,
         releaseId: context.releaseId ?? metadata.releaseId,
-        launchQuery: { ...existingQuery, ...launchQuery }
-      } as Prisma.InputJsonValue;
+        launchQuery: { ...safeExistingQuery, ...launchQuery }
+      };
       // Anonymous bootstrap and authenticated launch-context reporting can
       // carry the same entry twice. Avoid rewriting the JSON row when no
       // launch information actually changed.
-      if (JSON.stringify(nextMetadata) !== JSON.stringify(metadata)) {
-        await app.prisma.audienceActivityEvent.update({ where: { id: existing.id }, data: { metadata: nextMetadata } });
+      if (JSON.stringify(nextMetadataObject) !== JSON.stringify(metadata)) {
+        await app.prisma.audienceActivityEvent.update({ where: { id: existing.id }, data: { metadata: nextMetadataObject as Prisma.InputJsonValue } });
       }
-      return true;
+      const attributionEvidence = {
+        ...nextMetadataObject,
+        rawUrl: context.rawUrl ?? metadata.rawUrl,
+        sdkPayloadRaw: context.sdkPayloadRaw ?? metadata.sdkPayloadRaw,
+        launchQuery: { ...existingQuery, ...launchQuery }
+      };
+      const attribution = classifyLaunchAttribution(attributionEvidence);
+      await saveStructuredLaunch(app, userId, launchId, entryId, launchRef, context.releaseId ?? 'default', attribution, attributionEvidence);
+      return { saved: true as const, launchRef, launchId, attribution: { status: attribution.status, reason: attribution.reason, signalStatus: attribution.signalStatus } };
     }
+    const existingLaunch = context.launchId && /(?:^|-)v006-dual(?:-|$)/i.test(context.releaseId ?? '')
+      ? await app.prisma.miniAppLaunch.findUnique({ where: { miniAppKey_launchId: { miniAppKey: app.config.MINI_APP_KEY, launchId } } }) : null;
+    const launchRef = existingLaunch?.launchRef ?? randomUUID();
+    const attribution = classifyLaunchAttribution({ ...context, launchQuery });
+    const dualV006Context = /(?:^|-)v006-dual(?:-|$)/i.test(context.releaseId ?? '');
     await app.prisma.audienceActivityEvent.create({ data: {
       userId, eventType: 'APP_LAUNCH_CONTEXT', metadata: {
+        launchId,
+        launchRef,
         entryId,
-        rawUrl: context.rawUrl,
-        sdkPayloadRaw: context.sdkPayloadRaw,
+        ...(!dualV006Context ? { rawUrl: context.rawUrl, sdkPayloadRaw: context.sdkPayloadRaw } : {}),
         launchScene: context.launchScene,
         launchPath: context.launchPath?.startsWith('/') && !context.launchPath.startsWith('//')
           ? context.launchPath.split(/[?#]/, 1)[0] : undefined,
@@ -146,10 +168,51 @@ async function saveLaunchContext(app: FastifyInstance, request: FastifyRequest, 
         launchQuery
       } as Prisma.InputJsonValue
     } });
-    return true;
+    await saveStructuredLaunch(app, userId, launchId, entryId, launchRef, context.releaseId ?? 'default', attribution, { ...context, launchQuery });
+    return { saved: true as const, launchRef, launchId, attribution: { status: attribution.status, reason: attribution.reason, signalStatus: attribution.signalStatus } };
     } catch (error) {
       request.log.warn({ err: error }, 'Mini app launch context could not be saved');
-      return false;
+      return { saved: false as const };
+    }
+  });
+}
+
+async function saveStructuredLaunch(app: FastifyInstance, userId: string, launchId: string, entryId: string, launchRef: string, releaseId: string,
+  attribution: ReturnType<typeof classifyLaunchAttribution>, context: Record<string, unknown>) {
+  if (!/(?:^|-)v006-dual(?:-|$)/i.test(releaseId)) return;
+  const query = context.launchQuery && typeof context.launchQuery === 'object' ? context.launchQuery as Record<string, string> : {};
+  const sdkQuery = (() => {
+    try {
+      const payload = typeof context.sdkPayloadRaw === 'string' ? JSON.parse(context.sdkPayloadRaw) as { query?: unknown } : {};
+      return payload.query && typeof payload.query === 'object' && !Array.isArray(payload.query) ? payload.query as Record<string, unknown> : {};
+    } catch { return {}; }
+  })();
+  const queryValues = { ...sdkQuery, ...query };
+  if (typeof context.rawUrl === 'string') {
+    try { for (const [key, value] of new URL(context.rawUrl).searchParams) queryValues[key] ??= value; } catch { /* Keep other launch sources. */ }
+  }
+  const signalKeys = Object.keys(queryValues).filter((key) => /^(?:campaign|adgroup|creative|ttclid|ttoclid|click_id|placement)/i.test(key));
+  const clickIdFingerprints = Object.fromEntries(Object.entries(queryValues)
+    .filter(([key, value]) => /^(?:ttclid|ttoclid|click_id)$/i.test(key) && typeof value === 'string')
+    .map(([key, value]) => [key, createHmac('sha256', `${app.config.MINI_APP_KEY}:${app.config.JWT_SECRET}`).update(value as string).digest('hex')]));
+  const sdkHasSignals = Object.keys(sdkQuery).some((key) => /^(?:ad.?id|campaign|adgroup|creative|ttclid|ttoclid|click_id|placement)/i.test(key));
+  const summary = {
+    signalStatus: attribution.signalStatus, adId: attribution.adId, signalKeys, clickIdFingerprints,
+    sources: { webviewUrl: Boolean(context.rawUrl), tiktokSdkOptions: sdkHasSignals }
+  } as Prisma.InputJsonValue;
+  await app.prisma.miniAppLaunch.upsert({
+    where: { miniAppKey_launchId: { miniAppKey: app.config.MINI_APP_KEY, launchId } },
+    create: {
+      miniAppKey: app.config.MINI_APP_KEY, launchId, entryId, launchRef, userId, releaseId,
+      collectionStatus: context.rawUrl || Object.keys(query).length ? 'COMPLETE' : 'UNAVAILABLE',
+      localAttributionStatus: attribution.status, attributionReason: attribution.reason,
+      platformAttributionStatus: 'UNKNOWN',
+      signalSummary: summary
+    },
+    update: {
+      localAttributionStatus: attribution.status, attributionReason: attribution.reason,
+      collectionStatus: context.rawUrl || Object.keys(query).length ? 'COMPLETE' : 'UNAVAILABLE',
+      signalSummary: summary
     }
   });
 }
@@ -232,7 +295,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     const context = localEntryLaunchContextInput.parse(request.body);
     let user = await app.prisma.user.findUniqueOrThrow({ where: { id: request.user.sub }, select: { id: true, mergedIntoUserId: true, appEntryAdExempt: true } });
     if (user.mergedIntoUserId) user = await app.prisma.user.findUniqueOrThrow({ where: { id: user.mergedIntoUserId }, select: { id: true, mergedIntoUserId: true, appEntryAdExempt: true } });
-    const saved = await saveLaunchContext(app, request, user.id, context);
+    const launchRecord = await saveLaunchContext(app, request, user.id, context);
     if (context.releaseId) {
       try {
         const reviewExemptionStartedAt = performance.now();
@@ -248,7 +311,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       }
     }
     const localEntryAd = context.localEntryAd === true && localEntryAdMiniApps.has(app.config.MINI_APP_KEY);
-    if (!localEntryAd) return { saved };
+    if (!localEntryAd) return launchRecord;
 
     queueSharedIpVisit(app.sharedPrisma, {
       ipAddress: request.ip,
@@ -260,7 +323,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     }, (error) => request.log.warn({ err: error }, 'Shared IP visit could not be recorded'));
 
     const entryAdEligibility = await readLocalEntryAdEligibility(app, request, context, user.appEntryAdExempt);
-    return { saved, entryAdEligibility };
+    return { ...launchRecord, entryAdEligibility };
   });
 
   app.post('/auth/tiktok/session', {

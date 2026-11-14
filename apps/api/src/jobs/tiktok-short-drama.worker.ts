@@ -19,13 +19,40 @@ import { refreshAnalyticsDailySummaries, refreshOverviewSnapshot } from '../serv
 const defaultIntervalMs = 30_000;
 const defaultMaxRetries = 5;
 
+function workerLog(appKey: string, stage: string, message: string, details?: Record<string, unknown>, error?: unknown) {
+  const redact = (value: string) => value.replace(/https?:\/\/[^\s]+/gi, '[URL]')
+    .replace(/Bearer\s+[^\s]+/gi, 'Bearer [REDACTED]')
+    .replace(/((?:token|password|secret|authorization)\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]')
+    .slice(0, 2_000);
+  const safeDetails = Object.fromEntries(Object.entries(details ?? {}).filter(([key]) =>
+    ['jobId', 'episodeId', 'albumId', 'requestId', 'kind', 'retryCount', 'nextAttemptAt', 'error'].includes(key)
+  ).map(([key, value]) => [key, typeof value === 'string' ? redact(value) : value]));
+  const failure = error instanceof Error ? { name: error.name, message: redact(error.message), stack: redact(error.stack ?? '') }
+    : error === undefined ? undefined : { message: redact(String(error)) };
+  console.log(JSON.stringify({ level: failure ? 'error' : 'info', time: new Date().toISOString(), appKey, stage, message, ...safeDetails, ...(failure ? { error: failure } : {}) }));
+}
+
 type WorkerOptions = {
   maxRetries?: number;
   now?: () => Date;
   log?: (message: string, details?: Record<string, unknown>) => void;
 };
 
-type JobWithEpisode = UploadJob & {
+type JobWithEpisode = Pick<
+  UploadJob,
+  | 'id'
+  | 'episodeId'
+  | 'providerJobId'
+  | 'sourceUrl'
+  | 'sourceExpiresAt'
+  | 'status'
+  | 'errorMessage'
+  | 'retryCount'
+  | 'startedAt'
+  | 'nextAttemptAt'
+  | 'completedAt'
+  | 'createdAt'
+> & {
   episode: {
     title: string;
     status: string;
@@ -49,7 +76,7 @@ function isRetryable(error: unknown) {
 
 async function markFailure(
   prisma: PrismaClient,
-  job: UploadJob,
+  job: Pick<UploadJob, 'id' | 'episodeId' | 'providerJobId' | 'retryCount'>,
   message: string,
   retryable: boolean,
   options: Required<Pick<WorkerOptions, 'maxRetries' | 'now'>> & Pick<WorkerOptions, 'log'>
@@ -222,7 +249,21 @@ export async function processJobs(
     },
     take: 20,
     orderBy: { createdAt: 'asc' },
-    include: { episode: { select: { title: true, status: true, coverAsset: { select: { publicUrl: true, status: true } } } } }
+    select: {
+      id: true,
+      episodeId: true,
+      providerJobId: true,
+      sourceUrl: true,
+      sourceExpiresAt: true,
+      status: true,
+      errorMessage: true,
+      retryCount: true,
+      startedAt: true,
+      nextAttemptAt: true,
+      completedAt: true,
+      createdAt: true,
+      episode: { select: { title: true, status: true, coverAsset: { select: { publicUrl: true, status: true } } } }
+    }
   });
   for (const job of jobs) {
     await processJob(prisma, job, service, env, { maxRetries, now, log: workerOptions.log });
@@ -252,23 +293,23 @@ export async function startUploadWorker() {
       try {
         if (context.service instanceof BytePlusVodService) await processLocalUploadJobs(context.prisma, sharedPrisma, context.service, context.env, {
           concurrency: 2,
-          log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
+          log: (message, details) => workerLog(context.env.MINI_APP_KEY, 'local-upload', message, details)
         });
         await processJobs(context.prisma, context.service, {
           maxRetries: context.env.UPLOAD_MAX_RETRIES,
-          log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
+          log: (message, details) => workerLog(context.env.MINI_APP_KEY, 'upload', message, details)
         }, context.env);
         if (context.platformApi.isConfigured()) {
           if (!(context.service instanceof BytePlusVodService)) throw new Error('BytePlus credentials are required to verify platform media playback.');
-          await enqueueDueReviewReconciliations(context.prisma as any, new Date(), (albumId, error) => console.error(context.env.MINI_APP_KEY, 'Could not queue review reconciliation.', albumId, error));
+          await enqueueDueReviewReconciliations(context.prisma as any, new Date(), (albumId, error) => workerLog(context.env.MINI_APP_KEY, 'review-reconciliation', 'Could not queue review reconciliation.', { albumId }, error));
           await processPlatformSyncJobs(context.prisma as any, context.platformApi, {
             maxRetries: context.env.UPLOAD_MAX_RETRIES,
             playability: { service: context.service, spaceName: context.env.BYTEPLUS_SPACE_NAME },
-            log: (message, details) => console.info(context.env.MINI_APP_KEY, message, details)
+            log: (message, details) => workerLog(context.env.MINI_APP_KEY, 'platform-sync', message, details)
           });
         }
       } catch (error) {
-        console.error(`${context.env.MINI_APP_KEY} worker cycle failed.`, error);
+        workerLog(context.env.MINI_APP_KEY, 'cycle', 'Worker cycle failed.', undefined, error);
       }
 
     }
@@ -280,7 +321,7 @@ export async function startUploadWorker() {
       maxRetries: env.UPLOAD_MAX_RETRIES,
       localPrismaByApp,
       apiByApp,
-      log: (message, details) => console.info('shared-platform', message, details)
+      log: (message, details) => workerLog('shared-platform', 'reconciliation', message, details)
     });
   };
 
@@ -294,20 +335,20 @@ export async function startUploadWorker() {
           await refreshAnalyticsDailySummaries(context.prisma, { days: 2 });
           await refreshOverviewSnapshot(context.prisma);
           await context.prisma.miniAppRuntimeError.deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 86_400_000) } } });
-        } catch (error) { console.error(`${context.env.MINI_APP_KEY} analytics summary refresh failed.`, error); }
+        } catch (error) { workerLog(context.env.MINI_APP_KEY, 'analytics-summary', 'Analytics summary refresh failed.', undefined, error); }
       }
       try { await cleanupSharedIps(sharedPrisma); }
-      catch (error) { console.error('Shared IP retention cleanup failed.', error); }
+      catch (error) { workerLog('shared-platform', 'ip-retention', 'Shared IP retention cleanup failed.', undefined, error); }
     } finally { analyticsRunning = false; }
   };
   void refreshAnalytics();
   const analyticsTimer = setInterval(() => { void refreshAnalytics(); }, 15 * 60_000);
-  await run().catch((error) => console.error('Upload worker cycle failed.', error));
+  await run().catch((error) => workerLog('shared-platform', 'cycle', 'Upload worker cycle failed.', undefined, error));
   let running = false;
   const timer = setInterval(() => {
     if (running) return;
     running = true;
-    void run().catch((error) => console.error('Upload worker cycle failed.', error)).finally(() => { running = false; });
+    void run().catch((error) => workerLog('shared-platform', 'cycle', 'Upload worker cycle failed.', undefined, error)).finally(() => { running = false; });
   }, env.UPLOAD_WORKER_INTERVAL_MS || defaultIntervalMs);
   const shutdown = async () => {
     clearInterval(timer);

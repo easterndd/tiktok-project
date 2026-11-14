@@ -16,7 +16,7 @@ export function toPlayerSource(info: DramaPlayerSource): VePlayerSource {
     albumId: info.albumId,
     episodeId: info.episodeId,
     vid: info.vid,
-    getVideoByToken: info.playAuthToken ? { playAuthToken: info.playAuthToken, needPoster: true } : undefined,
+    getVideoByToken: info.playAuthToken ? { playAuthToken: info.playAuthToken, needPoster: false } : undefined,
     enableMp4MSE: supportsMp4Mse()
   };
 }

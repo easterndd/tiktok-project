@@ -1,21 +1,30 @@
 import { apiClient, registerUnauthorizedHandler } from '../../lib/api-client';
 import { clearSessionToken, getOrCreateVisitorKey, getSessionToken, isDemoMode, setSessionToken } from '../../lib/storage';
 import { storagePrefix } from '../../lib/app-brand';
-import { getMiniLaunchContext, rememberSdkLaunchPayload, stringifySdkPayload } from '../../lib/launch-context';
+import { getMiniLaunchContext, getMiniLaunchIds, rememberSdkLaunchPayload, setMiniLaunchRef, stringifySdkPayload } from '../../lib/launch-context';
 import { getLocalEntryAdPlacementIds } from '../ads/entry-ad-placements';
+import { isV006DualRelease } from '../ads/ad-platform';
+import { recordLaunchAttribution } from '../../lib/analytics';
 
 let pendingSession: Promise<void> | null = null;
 let pendingTikTokSession: Promise<void> | null = null;
 let pendingLaunchRecord: Promise<MiniLaunchRecordResult> | null = null;
 let launchRecordResult: MiniLaunchRecordResult | undefined;
-const entryId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `entry-${Date.now()}-${Math.random()}`;
+const entryId = getMiniLaunchIds().entryId;
 let lastSdkPayloadRaw = '';
 let sdkLaunchListenerInstalled = false;
 
 export type MiniLaunchRecordResult = {
   saved: boolean;
+  launchRef?: string;
+  launchId?: string;
+  attribution?: { status: string; reason: string; signalStatus: string };
   entryAdEligibility?: { showEntryAd: boolean; reason?: string };
 };
+
+export function getMiniLaunchRecordResult() {
+  return launchRecordResult;
+}
 
 function localEntryLaunchFields() {
   const releaseId = import.meta.env.VITE_MINI_RELEASE_ID || 'default';
@@ -38,10 +47,6 @@ export function installTikTokLaunchListener() {
     else return;
     sdkLaunchListenerInstalled = true;
   } catch { /* The SDK can be injected without lifecycle support in browser previews. */ }
-}
-
-function createLaunchEntryId() {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `entry-${Date.now()}-${Math.random()}`;
 }
 
 function getOrCreateClientSessionId() {
@@ -67,7 +72,7 @@ export async function ensureAnonymousSession(options: { force?: boolean } = {}) 
       platform: window.TTMinis ? 'TIKTOK_MINIS' : 'WEB',
       clientVersion: import.meta.env.VITE_APP_VERSION || undefined,
       source: launchContext.launchScene || 'APP_LAUNCH',
-      launchContext: { ...launchContext, entryId, releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default' }
+      launchContext: { ...launchContext, ...getMiniLaunchIds(), entryId, releaseId: import.meta.env.VITE_MINI_RELEASE_ID || 'default' }
     })
       .then((session) => setSessionToken(session.accessToken))
       .finally(() => { pendingSession = null; });
@@ -77,25 +82,24 @@ export async function ensureAnonymousSession(options: { force?: boolean } = {}) 
 
 export async function recordMiniLaunch(sdkPayloadRaw?: string) {
   if (isDemoMode()) return { saved: false };
-  if (sdkPayloadRaw) {
-    if (sdkPayloadRaw === lastSdkPayloadRaw) return launchRecordResult ?? { saved: true };
-    const launchEntryId = lastSdkPayloadRaw ? createLaunchEntryId() : entryId;
+  if (pendingLaunchRecord) await pendingLaunchRecord;
+  if (sdkPayloadRaw ? sdkPayloadRaw === lastSdkPayloadRaw : Boolean(launchRecordResult)) return launchRecordResult!;
+  const pending = (async () => {
     await ensureAnonymousSession();
-    const result = await apiClient.post<MiniLaunchRecordResult>('/auth/launch-context', { ...getMiniLaunchContext(), ...localEntryLaunchFields(), entryId: launchEntryId, sdkPayloadRaw });
-    lastSdkPayloadRaw = sdkPayloadRaw;
+    const result = await apiClient.post<MiniLaunchRecordResult>('/auth/launch-context', {
+      ...getMiniLaunchContext(), ...localEntryLaunchFields(), entryId, launchId: getMiniLaunchIds().launchId,
+      ...(sdkPayloadRaw ? { sdkPayloadRaw } : {})
+    });
+    setMiniLaunchRef(result.launchRef);
+    if (sdkPayloadRaw) lastSdkPayloadRaw = sdkPayloadRaw;
     launchRecordResult = result;
+    if (isV006DualRelease()) recordLaunchAttribution({ saved: result.saved, launchRef: result.launchRef,
+      status: result.attribution?.status, reason: result.attribution?.reason, signalStatus: result.attribution?.signalStatus });
     return result;
-  }
-  if (launchRecordResult) return launchRecordResult;
-  if (!pendingLaunchRecord) {
-    pendingLaunchRecord = (async () => {
-      await ensureAnonymousSession();
-      const result = await apiClient.post<MiniLaunchRecordResult>('/auth/launch-context', { ...getMiniLaunchContext(), ...localEntryLaunchFields(), entryId });
-      launchRecordResult = result;
-      return result;
-    })().finally(() => { pendingLaunchRecord = null; });
-  }
-  return pendingLaunchRecord;
+  })();
+  pendingLaunchRecord = pending;
+  try { return await pending; }
+  finally { if (pendingLaunchRecord === pending) pendingLaunchRecord = null; }
 }
 
 function getTikTokLoginCode() {

@@ -13,7 +13,7 @@ import { Metric, Status, Panel } from './dashboard-ui';
 import { createAdminApi } from './admin-api';
 import { HealthPanel, type Health } from './health-panel';
 import { AudiencePage, AudienceCountries, PlaybackPage, type Audience, type Playback } from './analytics-pages';
-import { V006AdDiagnostics, V006PlayerDiagnostics } from './v006-diagnostics';
+import { V006AdDiagnostics, V006ClientTraces, V006LaunchAttributionDiagnostics, V006PlayerDiagnostics } from './v006-diagnostics';
 import { ViewerAdControls } from './viewer-ad-controls';
 import { SharedIpControls } from './shared-ip-controls';
 import { MiniEntryLinks } from './mini-entry-links';
@@ -122,7 +122,7 @@ type EpisodeOption = { id: string; albumId: string; episodeNo: number; title: st
 type CoverAsset = { id: string; publicUrl: string; status: string; width?: number | null; height?: number | null };
 type DraftEpisode = { localId: string; episodeNo: number; title: string; sortOrder: number; isFree: boolean; file?: File | null; byteplusVid?: string; coverFile?: File | null; coverAsset?: CoverAsset | null; coverPreviewUrl?: string; savedEpisodeId?: string; uploadStatus?: string; uploadError?: string };
 type BatchDramaDraft = { id: string; title: string; description: string; releaseYear: number; dramaType: number; tagList: string; coverFile: File; freeCount: number; rewardedEnabled: boolean; placementId: string; rewardedCount: number; episodes: DraftEpisode[]; albumId?: string; status: '待创建' | '处理中' | '已完成' | '失败'; error?: string };
-type UploadJob = { id: string; episodeId: string; sourceType?: string; sourceName?: string | null; status: string; localFilePath?: string | null; uploadScope?: string | null; providerJobId?: string | null; errorMessage?: string | null; createdAt: string; startedAt?: string | null; completedAt?: string | null; leaseExpiresAt?: string | null; nextAttemptAt?: string | null; episode?: { title: string; episodeNo: number } };
+type UploadJob = { id: string; episodeId: string; sourceType?: string; sourceName?: string | null; status: string; localFilePath?: string | null; uploadScope?: string | null; providerJobId?: string | null; replacesByteplusVid?: string | null; errorMessage?: string | null; createdAt: string; startedAt?: string | null; completedAt?: string | null; leaseExpiresAt?: string | null; nextAttemptAt?: string | null; episode?: { title: string; episodeNo: number } };
 type VodMedia = { vid: string; title: string; coverUrl?: string; durationMs?: number; createTime?: string };
 type PlatformEpisodeFailure = { episode_id?: string; seq?: number; title?: string; exception_reason?: string; review_status?: string; review_result?: Record<string, unknown> };
 type PlatformProviderResponse = {
@@ -1368,12 +1368,13 @@ function AdminApp() {
         </tr>;
       })}</tbody></table></div></Panel>}
       {tab === 'albums' && resourceStatus.albums?.loaded && canWriteContent && <DramaMaterials albums={albums} api={api} onSaved={() => loadTab('albums')} selection={materialSelection}
-        uploadVideo={async (episodeId, file, onProgress) => {
+        uploadVideo={async (episodeId, file, onProgress, mode) => {
           const form = new FormData();
           form.append('episodeId', episodeId);
           form.append('file', file);
           try {
-            return await uploadMultipart<{ job: UploadJob }>(`${API}/admin/upload-jobs/local`, form,
+            const endpoint = mode === 'replace' ? API + '/admin/episodes/' + encodeURIComponent(episodeId) + '/replace-video' : API + '/admin/upload-jobs/local';
+            return await uploadMultipart<{ job: UploadJob }>(endpoint, form,
               sessionStorage.getItem(adminTokenStorageKey), onProgress);
           } catch (error) {
             if (error instanceof UploadRequestError && error.status === 401) {
@@ -1487,6 +1488,8 @@ function AdminApp() {
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <ViewerAdControls api={api} canEdit miniApps={organizationApps} currentMiniApp={activeApp} />}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <SharedIpControls api={api} canEdit miniApps={Object.entries(miniAppNames).map(([key, name]) => ({ key, name }))} />}
       {tab === 'ads' && v006DiagnosticApps.has(activeApp) && <V006AdDiagnostics api={api} releaseId={entryAdReleaseId} />}
+      {tab === 'ads' && v006DiagnosticApps.has(activeApp) && <V006LaunchAttributionDiagnostics api={api} releaseId={entryAdReleaseId} />}
+      {tab === 'ads' && v006DiagnosticApps.has(activeApp) && <V006ClientTraces api={api} releaseId={entryAdReleaseId} />}
       {tab === 'audience' && audience && <AudiencePage audience={audience} />}
       {tab === 'audience' && audience && <AudienceCountries api={api} from={analyticsFrom} to={analyticsTo} timezone={analyticsTimezone} />}
       {tab === 'playback' && !playback && !resourceStatus.playback?.error && <p className="load-placeholder">正在加载播放质量...</p>}

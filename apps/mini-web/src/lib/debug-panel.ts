@@ -1,16 +1,21 @@
-import { isV006Release } from '../features/ads/ad-platform';
+import { isV006DualRelease, isV006Release } from '../features/ads/ad-platform';
 
 const activationKey = 'quickreels_debug_panel_active';
+const debugPanelBuildEnabled = (import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_DEBUG_PANEL === 'true';
 
 export function debugPanelAvailable() {
-  return import.meta.env.VITE_DEBUG_PANEL === 'true' || isV006Release();
+  return debugPanelBuildEnabled || isV006Release();
 }
 
 export function debugPanelActive() {
-  if (import.meta.env.VITE_DEBUG_PANEL === 'true') return true;
+  if (debugPanelBuildEnabled) return true;
   if (!isV006Release()) return false;
   try { return sessionStorage.getItem(activationKey) === 'true'; }
   catch { return false; }
+}
+
+export function debugRecordCaptureEnabled() {
+  return debugPanelActive() || isV006DualRelease();
 }
 
 export function activateDebugPanel() {

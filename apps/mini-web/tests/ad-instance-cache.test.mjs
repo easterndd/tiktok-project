@@ -4,16 +4,19 @@ import { after, it } from 'node:test';
 
 const hooks = registerHooks({
   resolve(specifier, context, next) {
+    if (context.parentURL?.endsWith('/features/ads/ad-instance-cache.ts') && specifier === '../../lib/client-trace') {
+      return { url: 'data:text/javascript,export const captureClientTrace = () => {};', shortCircuit: true };
+    }
     if (context.parentURL?.endsWith('/features/ads/ad-instance-cache.ts') && specifier === './ad-platform') {
-      return { url: 'data:text/javascript,export const getAdPlatform = () => globalThis.__cacheTestPlatform ?? "unknown"; export const isV006Release = () => globalThis.__cacheTestV006 ?? false;', shortCircuit: true };
+      return { url: 'data:text/javascript,export const getAdPlatform = () => globalThis.__cacheTestPlatform ?? "unknown"; export const isV006Release = () => globalThis.__cacheTestV006 ?? false; export const isV006DualRelease = () => globalThis.__cacheTestDual ?? false;', shortCircuit: true };
     }
     return next(specifier, context);
   }
 });
-const { getInterstitialAd, getRewardedAd, prewarmInterstitialAd, prewarmInterstitialPlacements, prewarmRewardedAd, prewarmRewardedPlacements, releaseInterstitialAd, releaseRewardedAd, waitForAdReady } = await import('../src/features/ads/ad-instance-cache.ts');
+const { getInterstitialAd, getRewardedAd, prewarmInterstitialAd, prewarmInterstitialPlacements, prewarmRewardedAd, prewarmRewardedPlacements, primeEntryRewardedPool, readyRewardedPlacement, refillEntryRewardedPool, releaseInterstitialAd, releaseRewardedAd, waitForAdReady } = await import('../src/features/ads/ad-instance-cache.ts');
 
 const previousWindow = globalThis.window;
-after(() => { hooks.deregister(); globalThis.window = previousWindow; delete globalThis.__cacheTestPlatform; delete globalThis.__cacheTestV006; });
+after(() => { hooks.deregister(); globalThis.window = previousWindow; delete globalThis.__cacheTestPlatform; delete globalThis.__cacheTestV006; delete globalThis.__cacheTestDual; });
 
 it('loads a single next rewarded instance and waits for its onLoad callback', async () => {
   const ads = [];

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import { boundedDebugValue, debugHeaders, debugQueryParams, debugResponseDetails } from '../src/lib/debug-network.ts';
+import { boundedDebugValue, debugHeaders, debugQueryParams, debugRequestTarget, debugResponseDetails } from '../src/lib/debug-network.ts';
 
 it('redacts credentials and tracking identifiers from request details', () => {
   const url = new URL('https://example.test/api/home?albumId=42&ttclid=private-click&click_id=private-id');
@@ -18,6 +18,26 @@ it('bounds large request and response previews', () => {
   const result = boundedDebugValue(Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`field${index}`, 'x'.repeat(900)])));
   assert.equal(result.truncated, true);
   assert.ok(result.preview.length <= 4_096);
+});
+
+it('normalizes non-JSON console values without leaking circular objects', () => {
+  const circular = { value: 123n };
+  circular.self = circular;
+  const result = boundedDebugValue(circular);
+  assert.equal(result.value, '123');
+  assert.doesNotThrow(() => JSON.stringify(result));
+});
+
+it('keeps request targets free of query values and tolerates invalid configuration', () => {
+  assert.deepEqual(debugRequestTarget('https://api.example.test/v1/runtime-errors?token=private', 'https://mini.example.test'), {
+    url: 'https://api.example.test/v1/runtime-errors', apiOrigin: 'https://api.example.test', crossOrigin: true
+  });
+  assert.deepEqual(debugRequestTarget('/api/v1/runtime-errors?token=private', 'https://mini.example.test'), {
+    url: 'https://mini.example.test/api/v1/runtime-errors', apiOrigin: 'https://mini.example.test', crossOrigin: false
+  });
+  assert.deepEqual(debugRequestTarget('https://[invalid?token=private', 'https://mini.example.test'), {
+    url: 'https://[invalid'
+  });
 });
 
 it('keeps response correlation and retry headers while redacting credentials', () => {

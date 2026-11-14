@@ -1,7 +1,10 @@
 import { appKey, storagePrefix } from './app-brand';
 import { getSessionToken } from './storage';
 import { boundedDebugValue, debugHeaders, debugResponseDetails } from './debug-network';
-import { debugPanelActive } from './debug-panel';
+import { debugPanelActive, debugRecordCaptureEnabled } from './debug-panel';
+import { captureClientTrace, setClientTraceDebugRecorder } from './client-trace';
+import { getMiniLaunchIds } from './launch-context';
+import { isV006DualRelease } from '../features/ads/ad-platform';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
   ?? (import.meta.env.VITE_APP_KEY && import.meta.env.VITE_APP_KEY !== 'main' ? `http://localhost:3000/api/${import.meta.env.VITE_APP_KEY}/v1` : 'http://localhost:3000/api/v1');
@@ -15,7 +18,7 @@ const flushDelayMs = 2_000;
 const maxBatchSize = 10;
 const maxUploadAttempts = 3;
 
-export type AnalyticsEventKey = 'app_open' | 'ad_config' | 'ad_load' | 'ad_show' | 'ad_close';
+export type AnalyticsEventKey = 'app_open' | 'ad_config' | 'ad_load' | 'ad_show' | 'ad_close' | 'launch_attribution' | 'entry_ad_decision';
 export type AnalyticsResult = 'success' | 'fail' | 'timeout' | 'unsupported';
 export type SdkErrorDetails = {
   errorCode?: string;
@@ -64,7 +67,7 @@ export type AnalyticsEvent = {
 export type DebugRecord = {
   id: number;
   at: string;
-  kind: 'event' | 'request' | 'runtime';
+  kind: 'event' | 'request' | 'runtime' | 'console';
   data: Record<string, unknown>;
 };
 
@@ -112,6 +115,7 @@ function getOrCreateSessionId() {
 }
 
 function getLaunchId() {
+  if (isV006DualRelease(releaseId)) return getMiniLaunchIds().launchId;
   const key = releaseId === 'default' ? `${storagePrefix}_launch_id` : `${storagePrefix}_${releaseId}_launch_id`;
   const saved = sessionStorage.getItem(key);
   if (saved) return saved;
@@ -198,7 +202,10 @@ function callbackPayload(value: unknown): unknown {
   }
 }
 
-export function captureSdkCallback(name: string, payload: unknown = null): SdkCallbackSnapshot {
+export function captureSdkCallback(name: string, payload: unknown = null, context: {
+  operationId?: string; sessionId?: string; placementId?: string;
+} = {}): SdkCallbackSnapshot {
+  captureClientTrace('SDK_CALLBACK', name, payload, context);
   const sanitized = callbackPayload(payload);
   try {
     const encoded = JSON.stringify(sanitized);
@@ -234,7 +241,7 @@ export function normalizeSdkError(error: unknown): SdkErrorDetails {
 }
 
 function addDebugRecord(kind: DebugRecord['kind'], data: Record<string, unknown>) {
-  if (!debugEnabled()) return;
+  if (!debugRecordCaptureEnabled()) return;
   debugRecords.push({ id: ++debugSequence, at: new Date().toISOString(), kind, data: sanitizeValue(data) as Record<string, unknown> });
   while (debugRecords.length > 200) debugRecords.shift();
   debugListeners.forEach((listener) => listener());
@@ -260,12 +267,27 @@ export function clearDebugRecords() {
   debugListeners.forEach((listener) => listener());
 }
 
-export function recordDebugRequest(data: Record<string, unknown>) {
+export function recordDebugRequest(data: Record<string, unknown>, options: { captureTrace?: boolean } = {}) {
+  if (options.captureTrace !== false) {
+    captureClientTrace('HTTP_RESPONSE', String(data.path ?? 'request'), data, { requestId: typeof data.requestId === 'string' ? data.requestId : undefined });
+  }
   addDebugRecord('request', data);
 }
 
+setClientTraceDebugRecorder((data) => recordDebugRequest(data, { captureTrace: false }));
+
 export function recordDebugRuntime(data: Record<string, unknown>) {
+  captureClientTrace('RUNTIME_ERROR', String(data.phase ?? 'runtime'), data);
   addDebugRecord('runtime', data);
+}
+
+export function recordDebugConsole(level: string, args: unknown[]) {
+  const message = args.map((item) => {
+    if (typeof item === 'string') return item;
+    try { return JSON.stringify(item); }
+    catch { return String(item); }
+  }).join(' ').slice(0, 1_000);
+  addDebugRecord('console', { level, message, args: boundedDebugValue(args) });
 }
 
 type AdAnalyticsContext = Pick<AnalyticsEvent, 'adType' | 'operationId' | 'attemptNo' | 'adPhase' | 'errorOrigin' | 'strategyVariant' | 'placementRole'>;
@@ -291,6 +313,9 @@ export function recordAnalyticsEvent(input: Omit<AnalyticsEvent, 'eventId' | 're
   };
   addDebugRecord('event', event as unknown as Record<string, unknown>);
   const sdkCallback = event.metadata?.sdkCallback;
+  captureClientTrace('ENTRY_STATE', event.eventKey, event, {
+    operationId: event.operationId, placementId: event.placementId, requestId: event.requestId
+  });
   if (sdkCallback) {
     addDebugRecord('runtime', { phase: 'SDK_CALLBACK', eventKey: event.eventKey, sdkCallback });
     if (debugEnabled()) console.debug('[TikTok Minis SDK callback]', event.eventKey, sdkCallback);
@@ -312,7 +337,7 @@ export async function flushAnalytics() {
   const headers = new Headers({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` });
   const payload = { events: batch.map(({ event }) => event) };
   const startedAt = Date.now();
-  const debugEndpoint = debugEnabled() ? new URL(`${apiBaseUrl}/analytics/events`, window.location.origin) : undefined;
+  const debugEndpoint = debugRecordCaptureEnabled() ? new URL(`${apiBaseUrl}/analytics/events`, window.location.origin) : undefined;
   const requestSnapshot = debugEndpoint ? {
     startedAt: new Date(startedAt).toISOString(),
     url: debugEndpoint.origin + debugEndpoint.pathname,
@@ -321,6 +346,7 @@ export async function flushAnalytics() {
     preflightRequired: debugEndpoint.origin !== window.location.origin,
     requestHeaders: boundedDebugValue(debugHeaders(headers)), requestBody: boundedDebugValue(payload)
   } : {};
+  captureClientTrace('HTTP_REQUEST', 'POST /analytics/events', { ...requestSnapshot, eventCount: batch.length });
   const controller = new AbortController();
   let timedOut = false;
   const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 5_000);
@@ -328,28 +354,36 @@ export async function flushAnalytics() {
   let responseStatus = 0;
   let response: Response | undefined;
   let responseBody: unknown;
+  let tracedResponse = false;
   try {
     response = await fetch(`${apiBaseUrl}/analytics/events`, {
       method: 'POST', keepalive: true, headers,
       body: JSON.stringify(payload), signal: controller.signal
     });
     responseStatus = response.status;
-    if (debugEnabled()) {
+    if (debugRecordCaptureEnabled()) {
       const rawBody = await response.text().catch(() => '');
       try { responseBody = JSON.parse(rawBody); } catch { responseBody = rawBody; }
     }
+    captureClientTrace('HTTP_RESPONSE', 'POST /analytics/events', {
+      statusCode: response.status, responseBody, responseHeaders: Object.fromEntries(response.headers.entries()), durationMs: Date.now() - startedAt
+    }, { requestId: response.headers.get('x-request-id') ?? undefined });
+    tracedResponse = true;
     if (!response.ok) {
       if (response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500) {
         const retryAfter = Number(response.headers.get('Retry-After'));
         if (Number.isFinite(retryAfter) && retryAfter > 0) retryDelayMs = Math.min(60_000, retryAfter * 1_000);
         throw new Error(`Analytics upload failed with HTTP ${response.status}`);
       }
-      if (debugEnabled()) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: response.status, durationMs: Date.now() - startedAt, eventCount: batch.length, error: `HTTP ${response.status}`, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
+    if (debugRecordCaptureEnabled()) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: response.status, durationMs: Date.now() - startedAt, eventCount: batch.length, error: `HTTP ${response.status}`, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
       return;
     }
-    if (debugEnabled()) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: response.status, durationMs: Date.now() - startedAt, eventCount: batch.length, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
+    if (debugRecordCaptureEnabled()) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: response.status, durationMs: Date.now() - startedAt, eventCount: batch.length, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
   } catch (error) {
-    if (debugEnabled()) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: responseStatus, durationMs: Date.now() - startedAt, eventCount: batch.length, error: error instanceof Error ? error.message : String(error), browserOnline: navigator.onLine, timedOut, aborted: controller.signal.aborted, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
+    if (!tracedResponse) captureClientTrace('HTTP_RESPONSE', 'POST /analytics/events', {
+      statusCode: responseStatus, responseBody, error, durationMs: Date.now() - startedAt, timedOut
+    }, { requestId: response?.headers.get('x-request-id') ?? undefined });
+    if (debugRecordCaptureEnabled()) addDebugRecord('request', { method: 'POST', path: '/analytics/events', statusCode: responseStatus, durationMs: Date.now() - startedAt, eventCount: batch.length, error: error instanceof Error ? error.message : String(error), browserOnline: navigator.onLine, timedOut, aborted: controller.signal.aborted, ...requestSnapshot, ...debugResponseDetails(response, responseBody) });
     const retryable = batch.filter(({ attempts }) => attempts + 1 < maxUploadAttempts)
       .map(({ event, attempts }) => ({ event, attempts: attempts + 1 }));
     queue.unshift(...retryable);
@@ -364,6 +398,20 @@ export async function flushAnalytics() {
 
 export function recordAppOpen(metadata: Record<string, unknown> = {}) {
   return recordAnalyticsEvent({ eventKey: 'app_open', metadata });
+}
+
+export function recordLaunchAttribution(input: { launchRef?: string; status?: string; reason?: string; signalStatus?: string; saved: boolean }) {
+  return recordAnalyticsEvent({ eventKey: 'launch_attribution', result: input.saved ? 'success' : 'fail', metadata: {
+    launchRef: input.launchRef ?? null, status: input.status ?? 'UNKNOWN', reason: input.reason ?? 'ATTRIBUTION_UNAVAILABLE',
+    signalStatus: input.signalStatus ?? 'UNAVAILABLE'
+  } });
+}
+
+export function recordEntryAdDecision(input: { launchRef?: string; decisionId?: string; decision?: string; reason?: string; required: boolean }) {
+  return recordAnalyticsEvent({ eventKey: 'entry_ad_decision', result: 'success', metadata: {
+    launchRef: input.launchRef ?? null, decisionId: input.decisionId ?? null, decision: input.decision ?? (input.required ? 'SHOW' : 'SUPPRESS'),
+    reason: input.reason ?? 'UNKNOWN'
+  } });
 }
 
 export function recordAdConfig(input: { result: AnalyticsResult; durationMs: number; shouldShow?: number | null; error?: unknown; path?: string }) {

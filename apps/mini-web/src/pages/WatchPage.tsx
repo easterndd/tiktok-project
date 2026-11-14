@@ -49,7 +49,7 @@ export function WatchPage() {
     : undefined;
   const [episodePickerOpen, setEpisodePickerOpen] = useState(false);
   const [unlockTarget, setUnlockTarget] = useState<EpisodeSummary | null>(null);
-  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const touchStart = useRef<{ x: number; y: number; axis: 'pending' | 'vertical' | 'horizontal' } | null>(null);
   const transitionPending = useRef(false);
   const lastNaturalTransitionFrom = useRef<string | null>(null);
   const mounted = useRef(false);
@@ -210,9 +210,25 @@ export function WatchPage() {
   const handleTouchStart = (event: React.TouchEvent<HTMLElement>) => {
     if (retentionOpen || episodePickerOpen || unlock.isPending || event.touches.length !== 1) return;
     const target = event.target as HTMLElement;
-    if (target.closest('button, a, input, select')) return;
+    if (target.closest('button, a, input, select, textarea, [role="button"]')) return;
     const touch = event.touches[0];
-    touchStart.current = { x: touch.clientX, y: touch.clientY };
+    touchStart.current = { x: touch.clientX, y: touch.clientY, axis: 'pending' };
+  };
+  const handleTouchMove = (event: React.TouchEvent<HTMLElement>) => {
+    const start = touchStart.current;
+    if (!start || retentionOpen || episodePickerOpen || unlock.isPending || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (start.axis === 'pending' && Math.max(Math.abs(deltaX), Math.abs(deltaY)) >= 8) {
+      start.axis = Math.abs(deltaY) > Math.abs(deltaX) * 1.2 ? 'vertical' : 'horizontal';
+    }
+    if (start.axis === 'vertical') {
+      // 垂直手势由本页切集处理，拦截播放器 SDK 对同一手势的切剧响应。
+      if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+      event.nativeEvent.stopImmediatePropagation();
+    }
   };
   const handleTouchEnd = (event: React.TouchEvent<HTMLElement>) => {
     const start = touchStart.current;
@@ -222,11 +238,17 @@ export function WatchPage() {
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
     const verticalDistance = Math.abs(deltaY);
+    const verticalSwipe = verticalDistance > Math.abs(deltaX) * 1.2;
+    if (verticalSwipe) {
+      if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+      event.nativeEvent.stopImmediatePropagation();
+    }
     if (verticalDistance < 72 || verticalDistance < Math.abs(deltaX) * 1.2) return;
     requestEpisode(deltaY < 0 ? nextEpisode : previousEpisode, true);
   };
 
-  return <section className={styles.page} onTouchStartCapture={handleTouchStart} onTouchEndCapture={handleTouchEnd} onTouchCancelCapture={() => { touchStart.current = null; }}>
+  return <section className={styles.page} onTouchStartCapture={handleTouchStart} onTouchMoveCapture={handleTouchMove} onTouchEndCapture={handleTouchEnd} onTouchCancelCapture={() => { touchStart.current = null; }}>
     <PlayerShell
       message={message}
       onRetry={playInfo.isError ? () => { void playInfo.refetch(); } : undefined}

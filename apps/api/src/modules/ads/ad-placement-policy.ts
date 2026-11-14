@@ -47,6 +47,10 @@ const v006AppIds: Record<string, string> = {
   luxereel: '7694100516736927765'
 };
 
+export function supportsV006DualApp(appKey: string) {
+  return Object.hasOwn(v006Placements, appKey);
+}
+
 const pairCacheTtlMs = 5_000;
 const pairCache = new WeakMap<FastifyInstance, Map<string, { pair: AdPlacementPair | null; expiresAt: number }>>();
 
@@ -88,8 +92,12 @@ export function isV006Release(releaseId: string) {
   return /(?:^|-)v006(?:-|$)/i.test(releaseId);
 }
 
-function isClientPairedRelease(releaseId: string) {
+export function isV006DualRelease(releaseId: string) {
   return /(?:^|-)v006-dual(?:-|$)/i.test(releaseId);
+}
+
+function isClientPairedRelease(releaseId: string) {
+  return isV006DualRelease(releaseId);
 }
 
 export async function resolveAdPlacementPolicy(app: FastifyInstance, input: {

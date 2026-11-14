@@ -1,4 +1,5 @@
-import { getAdPlatform, isV006Release, type AdLoadMode } from './ad-platform';
+import { getAdPlatform, isV006DualRelease, isV006Release, type AdLoadMode } from './ad-platform';
+import { captureClientTrace } from '../../lib/client-trace';
 
 type SdkCallbackSnapshot = { name: string; payload: unknown; capturedAt: string };
 
@@ -8,9 +9,11 @@ type PreparedAd<T extends NativeAd> = {
   host: NonNullable<Window['TTMinis']>;
   ready: Promise<void>;
   loadMode: AdLoadMode;
+  state: 'loading' | 'ready' | 'failed';
 };
 
 const maxPreparedAds = 4;
+const maxDualPreparedAds = 8;
 const loadTimeoutMs = 7_500;
 const rewardedAds = new Map<string, PreparedAd<RewardedVideoAd>[]>();
 const interstitialAds = new Map<string, PreparedAd<InterstitialAd>[]>();
@@ -58,7 +61,8 @@ function sanitizeLoadPayload(value: unknown, depth = 0): unknown {
   return output;
 }
 
-function captureLoadCallback(name: string, payload: unknown = null): SdkCallbackSnapshot {
+function captureLoadCallback(name: string, payload: unknown = null, placementId?: string): SdkCallbackSnapshot {
+  captureClientTrace('SDK_CALLBACK', name, payload, { placementId });
   if (payload instanceof Error) {
     const errorPayload: Record<string, unknown> = { name: payload.name, message: payload.message, stack: payload.stack };
     for (const key of Object.getOwnPropertyNames(payload)) errorPayload[key] = (payload as unknown as Record<string, unknown>)[key];
@@ -98,11 +102,11 @@ function prepare<T extends NativeAd>(ad: T, host: NonNullable<Window['TTMinis']>
   loadModes.set(ad, loadMode);
   if (loadMode === 'DIRECT_SHOW') {
     loadDurations.set(ad, 0);
-    loadCallbacks.set(ad, captureLoadCallback('load.skipped', { reason: 'DIRECT_SHOW' }));
+    loadCallbacks.set(ad, captureLoadCallback('load.skipped', { reason: 'DIRECT_SHOW' }, adUnitId));
     ready = Promise.resolve();
   } else if (typeof ad.load !== 'function') {
     loadDurations.set(ad, 0);
-    loadCallbacks.set(ad, captureLoadCallback('load.unsupported'));
+    loadCallbacks.set(ad, captureLoadCallback('load.unsupported', null, adUnitId));
     ready = Promise.resolve();
   }
   else {
@@ -123,15 +127,15 @@ function prepare<T extends NativeAd>(ad: T, host: NonNullable<Window['TTMinis']>
         else resolve();
       };
       const onLoad = () => {
-        loadCallbacks.set(ad, captureLoadCallback('onLoad'));
+        loadCallbacks.set(ad, captureLoadCallback('onLoad', null, adUnitId));
         finish();
       };
       const onError = (error: unknown) => {
-        loadCallbacks.set(ad, captureLoadCallback('onError', error));
+        loadCallbacks.set(ad, captureLoadCallback('onError', error, adUnitId));
         finish(error);
       };
       const timer = setTimeout(() => {
-        loadCallbacks.set(ad, captureLoadCallback('load.timeout'));
+        loadCallbacks.set(ad, captureLoadCallback('load.timeout', null, adUnitId));
         disposedAds.add(ad);
         try { ad.destroy?.(); } catch { /* An unresponsive SDK instance may already be gone. */ }
         finish(new Error('AD_LOAD_TIMEOUT'));
@@ -139,21 +143,22 @@ function prepare<T extends NativeAd>(ad: T, host: NonNullable<Window['TTMinis']>
       try {
         ad.onLoad?.(onLoad);
         ad.onError(onError);
+        captureClientTrace('SDK_CALL', 'load', { adUnitId, loadMode }, { placementId: adUnitId });
         const result = ad.load!();
         if (result && typeof (result as Promise<void>).then === 'function') {
           void Promise.resolve(result).then(() => {
-            if (!loadCallbacks.has(ad)) loadCallbacks.set(ad, captureLoadCallback('load.resolve'));
+            if (!loadCallbacks.has(ad)) loadCallbacks.set(ad, captureLoadCallback('load.resolve', null, adUnitId));
             finish();
           }, (error) => {
-            if (!loadCallbacks.has(ad)) loadCallbacks.set(ad, captureLoadCallback('load.reject', error));
+            if (!loadCallbacks.has(ad)) loadCallbacks.set(ad, captureLoadCallback('load.reject', error, adUnitId));
             finish(error);
           });
         } else if (!ad.onLoad) {
-          loadCallbacks.set(ad, captureLoadCallback('load.resolve'));
+          loadCallbacks.set(ad, captureLoadCallback('load.resolve', null, adUnitId));
           finish();
         }
       } catch (error) {
-        loadCallbacks.set(ad, captureLoadCallback('load.throw', error));
+        loadCallbacks.set(ad, captureLoadCallback('load.throw', error, adUnitId));
         finish(error);
       }
     });
@@ -169,7 +174,8 @@ function prepare<T extends NativeAd>(ad: T, host: NonNullable<Window['TTMinis']>
     } else ready = load();
   }
   void ready.catch(() => undefined);
-  const prepared = { ad, host, ready, loadMode } satisfies PreparedAd<T>;
+  const prepared: PreparedAd<T> = { ad, host, ready, loadMode, state: 'loading' };
+  void ready.then(() => { prepared.state = 'ready'; }, () => { prepared.state = 'failed'; });
   readiness.set(ad, ready);
   void ready.catch(() => {
     for (const map of [rewardedAds, interstitialAds] as Array<Map<string, PreparedAd<T>[]>>) {
@@ -202,9 +208,12 @@ function addPrepared<T extends NativeAd>(
   });
   if (pool.length) map.set(adUnitId, pool);
   else map.delete(adUnitId);
-  while (pool.length < Math.min(maxPreparedAds, count) && preparedCount() < maxPreparedAds) {
+  const limit = isV006DualRelease() && getAdPlatform() === 'android' ? maxDualPreparedAds : maxPreparedAds;
+  while (pool.length < Math.min(limit, count) && preparedCount() < limit) {
     try {
-      pool.push(prepare(create(), host, loadMode, adUnitId));
+      const ad = create();
+      captureClientTrace('SDK_CALL', 'create', { adUnitId, loadMode }, { placementId: adUnitId });
+      pool.push(prepare(ad, host, loadMode, adUnitId));
     } catch {
       break;
     }
@@ -226,11 +235,33 @@ export function prewarmRewardedPlacements(adUnitIds: string[], loadMode: AdLoadM
   for (const id of ids) prewarmRewardedAd(id, 1, loadMode);
 }
 
+export function readyRewardedPlacement(adUnitIds: string[], preferredId: string, loadMode: AdLoadMode = 'EXPLICIT_LOAD') {
+  const ready = (id: string) => rewardedAds.get(id)?.some((item) => item.host === window.TTMinis && item.loadMode === loadMode && item.state === 'ready');
+  if (ready(preferredId)) return preferredId;
+  return adUnitIds.find((id) => id !== preferredId && ready(id)) ?? preferredId;
+}
+
+export function primeEntryRewardedPool(adUnitIds: string[], loadMode: AdLoadMode = 'EXPLICIT_LOAD') {
+  const primaryId = adUnitIds[0];
+  if (!primaryId || loadMode === 'DIRECT_SHOW') return;
+  prewarmRewardedAd(primaryId, 1, loadMode);
+  if (!isV006DualRelease() || getAdPlatform() !== 'android' || adUnitIds.length < 2) return;
+  prewarmRewardedAd(adUnitIds[1], 1, loadMode);
+  const firstReady = adUnitIds.slice(0, 2).map((id) => rewardedAds.get(id)?.[0]?.ready).filter((ready): ready is Promise<void> => Boolean(ready));
+  if (firstReady.length) void Promise.any(firstReady).then(() => refillEntryRewardedPool(adUnitIds, loadMode), () => undefined);
+}
+
+export function refillEntryRewardedPool(adUnitIds: string[], loadMode: AdLoadMode = 'EXPLICIT_LOAD') {
+  if (loadMode === 'DIRECT_SHOW' || !isV006DualRelease() || getAdPlatform() !== 'android') return;
+  for (const id of adUnitIds.slice(0, 2)) prewarmRewardedAd(id, 3, loadMode);
+}
+
 export function getRewardedAd(adUnitId: string, prewarmNext = true, loadMode: AdLoadMode = 'EXPLICIT_LOAD') {
   const host = window.TTMinis;
   if (!host) throw new Error('TIKTOK_MINIS_UNAVAILABLE');
   const pool = loadMode === 'DIRECT_SHOW' ? undefined : rewardedAds.get(adUnitId);
-  const prepared = pool?.find((item) => item.host === host && item.loadMode === loadMode);
+  const prepared = pool?.find((item) => item.host === host && item.loadMode === loadMode && item.state === 'ready')
+    ?? pool?.find((item) => item.host === host && item.loadMode === loadMode);
   const refillNow = prewarmNext && !(isV006Release() && getAdPlatform() === 'android');
   if (prepared) pool?.splice(pool.indexOf(prepared), 1);
   if (pool && pool.length === 0) rewardedAds.delete(adUnitId);
@@ -239,6 +270,7 @@ export function getRewardedAd(adUnitId: string, prewarmNext = true, loadMode: Ad
     return prepared.ad;
   }
   const ad = host.createRewardedVideoAd({ adUnitId });
+  captureClientTrace('SDK_CALL', 'createRewardedVideoAd', { adUnitId, loadMode }, { placementId: adUnitId });
   prepare(ad, host, loadMode, adUnitId);
   if (refillNow) prewarmRewardedAd(adUnitId, 1, loadMode);
   return ad;
@@ -263,6 +295,15 @@ export function releaseRewardedAd(adUnitId: string, ad: RewardedVideoAd) {
   }
   readiness.delete(ad);
   try { ad.destroy?.(); } catch { /* SDK cleanup is best effort. */ }
+}
+
+export function returnRewardedAd(adUnitId: string, ad: RewardedVideoAd, loadMode: AdLoadMode) {
+  if (disposedAds.has(ad) || !window.TTMinis) return false;
+  const pool = rewardedAds.get(adUnitId) ?? [];
+  if (pool.some((item) => item.ad === ad)) return true;
+  pool.unshift({ ad, host: window.TTMinis, ready: readiness.get(ad) ?? Promise.resolve(), loadMode, state: 'ready' });
+  rewardedAds.set(adUnitId, pool);
+  return true;
 }
 
 export function prewarmInterstitialAd(adUnitId: string, count = 1, loadMode: AdLoadMode = 'EXPLICIT_LOAD') {
@@ -291,6 +332,7 @@ export function getInterstitialAd(adUnitId: string, prewarmNext = true, loadMode
     return prepared.ad;
   }
   const ad = host.createInterstitialAd({ adUnitId });
+  captureClientTrace('SDK_CALL', 'createInterstitialAd', { adUnitId, loadMode }, { placementId: adUnitId });
   prepare(ad, host, loadMode, adUnitId);
   if (refillNow) prewarmInterstitialAd(adUnitId, 1, loadMode);
   return ad;

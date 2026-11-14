@@ -11,11 +11,11 @@ function fixture() {
   const localSource: any = { id: 'source-1', tiktokAlbumId: 'platform-1', title: 'Draft title', coverUrl: 'https://example.com/draft.jpg', description: 'Draft', language: 'en', status: 'ONLINE', accessConfig: { rewardedAdEnabled: true, freeEpisodeCount: 1, rewardedPlacementId: 'main-ad', rewardedAdCount: 1 }, episodes: [{ id: 'source-episode', episodeNo: 1, byteplusVid: 'new-draft-vid', tiktokEpisodeId: 'new-draft-id', isFree: true, durationMs: 1000 }] };
   const online: any = { version: 1, review_status: 2, episode_info_list: [{ seq: 1, episode_id: 'online-episode', byteplus_vid: 'online-vid' }] };
   const sourceDb: any = {
-    album: { findUnique: async () => localSource },
+    album: { findUnique: async (args: any) => { state.sourceAlbumQueryArgs = args; return localSource; } },
     coverAsset: { findMany: async () => [{ providerImageId: 'cover-id', publicUrl: 'https://example.com/online.jpg' }] },
     platformSyncJob: { findFirst: async () => ({ snapshotJson: { albumInfo: { title: 'Online title', desp: 'Online description', language: 'en', year: 2026, drama_type: 2, tag_list: [1], cover_list: ['cover-id'] }, episodes: [{ localEpisodeId: 'source-episode', seq: 1, title: 'Episode 1', byteplus_vid: 'online-vid', cover_list: ['cover-id'] }] }, providerResponse: { episode_id_map: { 'seq:1': 'online-episode' } } }) }
   };
-  const state: any = { album: null, sharedEpisodes: [], auths: new Map(), ops: [], media: new Map(), grantCalls: 0, targetAlbum: null, targetEpisodes: [] };
+  const state: any = { album: null, sharedEpisodes: [], auths: new Map(), ops: [], media: new Map(), grantCalls: 0, targetAlbum: null, targetEpisodes: [], sourceAlbumQueryArgs: null, targetEpisodeQueryArgs: null, targetEpisodeWriteArgs: [] };
   const fullAlbum = () => ({ ...state.album, authorizations: [...state.auths.values()], episodes: state.sharedEpisodes.map((entry: any) => ({ ...entry, media: [...state.media.values()].find((media: any) => media.id === entry.sharedMediaId) })) });
   const sharedDb: any = {
     sharedMediaAsset: {
@@ -63,9 +63,9 @@ function fixture() {
     },
     episode: {
       findFirst: async () => null,
-      findMany: async () => state.targetEpisodes.map((entry: any) => ({ ...entry })),
-      create: async ({ data }: any) => { const item = { id: `target-episode-${data.episodeNo}`, ...data }; state.targetEpisodes.push(item); return item; },
-      update: async ({ where, data }: any) => { const item = state.targetEpisodes.find((entry: any) => entry.id === where.id); Object.assign(item, data); return item; },
+      findMany: async (args: any) => { state.targetEpisodeQueryArgs = args; return state.targetEpisodes.map((entry: any) => ({ ...entry })); },
+      create: async (args: any) => { state.targetEpisodeWriteArgs.push(args); const item = { id: `target-episode-${args.data.episodeNo}`, ...args.data }; state.targetEpisodes.push(item); return { id: item.id }; },
+      update: async (args: any) => { state.targetEpisodeWriteArgs.push(args); const item = state.targetEpisodes.find((entry: any) => entry.id === args.where.id); Object.assign(item, args.data); return { id: item.id }; },
       updateMany: async ({ data }: any) => { state.targetEpisodes.forEach((entry: any) => Object.assign(entry, data)); return { count: state.targetEpisodes.length }; }
     }
   };
@@ -88,6 +88,8 @@ test('uses approved online snapshot while a newer draft is reviewing', async () 
   assert.equal(source.onlineVersion, 1);
   assert.equal(source.episodes[0].byteplusVid, 'online-vid');
   assert.equal(source.episodes[0].tiktokEpisodeId, 'online-episode');
+  assert.equal(f.state.sourceAlbumQueryArgs.select.episodes.select.platformSeq, undefined);
+  assert.equal(f.state.sourceAlbumQueryArgs.select.episodes.select.byteplusVid, true);
   assert.equal(f.localSource.episodes[0].byteplusVid, 'new-draft-vid');
 });
 
@@ -141,9 +143,14 @@ test('reconciliation preserves target-local display metadata after initial share
   };
   Object.assign(f.state.targetAlbum, localMetadata);
   f.state.ops.push({ id: 'reconcile-op', kind: 'RECONCILE_ALBUM', sharedAlbumId: 'shared-album', status: 'PENDING', attemptCount: 0 });
+  f.state.targetEpisodeWriteArgs = [];
 
   await f.run();
 
+  assert.equal(f.state.targetEpisodeQueryArgs.select.platformSeq, undefined);
+  assert.equal(f.state.targetEpisodeQueryArgs.select.byteplusVid, true);
+  assert.ok(f.state.targetEpisodeWriteArgs.length > 0);
+  assert.ok(f.state.targetEpisodeWriteArgs.every((args: any) => args.select?.id === true && Object.keys(args.select).length === 1));
   for (const [field, value] of Object.entries(localMetadata)) assert.deepEqual(f.state.targetAlbum[field], value);
   assert.equal(f.state.targetAlbum.tiktokAlbumId, 'platform-1');
   assert.equal(f.state.targetAlbum.tiktokVersion, 1);

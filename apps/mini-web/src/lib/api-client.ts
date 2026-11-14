@@ -4,13 +4,23 @@ import { getSessionToken } from './storage';
 import { reportDiagnostic, reportPerformance } from './diagnostics';
 import { recordDebugRequest } from './analytics';
 import { boundedDebugValue, debugHeaders, debugQueryParams, debugResponseDetails } from './debug-network';
-import { debugPanelActive } from './debug-panel';
+import { debugPanelActive, debugRecordCaptureEnabled } from './debug-panel';
+import { captureClientTrace } from './client-trace';
+import { isV006DualRelease } from '../features/ads/ad-platform';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
   ?? (import.meta.env.VITE_APP_KEY && import.meta.env.VITE_APP_KEY !== 'main' ? `http://localhost:3000/api/${import.meta.env.VITE_APP_KEY}/v1` : 'http://localhost:3000/api/v1');
 const useMockApi = import.meta.env.VITE_USE_MOCK_API === 'true' || import.meta.env.VITE_DEMO_MODE === 'true';
 const enableMockFallback = import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
 const debugEnabled = debugPanelActive;
+
+function shouldTraceRequest(path: string) {
+  return isV006DualRelease() && (debugEnabled() || /^\/(?:auth|app-entry-ad-sessions|ad-events|analytics|episodes|exit-retention|episode-interstitial)/.test(path));
+}
+
+function shouldCaptureDebugRequest(path: string) {
+  return debugRecordCaptureEnabled() && (debugEnabled() || /^\/(?:auth|app-entry-ad-sessions|ad-events|analytics|episodes|exit-retention|episode-interstitial)/.test(path));
+}
 
 function shouldMeasureRequest(path: string) {
   const route = path.split('?', 1)[0];
@@ -52,7 +62,8 @@ class ApiClient {
   async request<T>(path: string, options: RequestInit = {}, retried = false, authenticate = true): Promise<T> {
     const method = options.method ?? 'GET';
     let parsedBody: unknown;
-    if (useMockApi || enableMockFallback || debugEnabled()) {
+    const captureDebug = shouldCaptureDebugRequest(path);
+    if (useMockApi || enableMockFallback || captureDebug || shouldTraceRequest(path)) {
       try { parsedBody = typeof options.body === 'string' ? JSON.parse(options.body) : options.body; }
       catch { parsedBody = options.body; }
     }
@@ -60,12 +71,15 @@ class ApiClient {
 
     const token = getSessionToken();
     const startedAt = Date.now();
-    const requestUrl = debugEnabled() ? new URL(`${apiBaseUrl}${path}`, window.location.origin) : undefined;
+    const requestUrl = captureDebug ? new URL(`${apiBaseUrl}${path}`, window.location.origin) : undefined;
     const crossOrigin = requestUrl ? requestUrl.origin !== window.location.origin : undefined;
     const headers = new Headers({ Accept: 'application/json' });
     if (options.body) headers.set('Content-Type', 'application/json');
     if (authenticate && token) headers.set('Authorization', `Bearer ${token}`);
     new Headers(options.headers).forEach((value, key) => headers.set(key, value));
+    if (shouldTraceRequest(path) && !path.includes('/client-traces/')) captureClientTrace('HTTP_REQUEST', `${method} ${path.split('?', 1)[0]}`, {
+      method, path, requestHeaders: Object.fromEntries(headers.entries()), requestBody: parsedBody
+    });
     const preflightRequired = crossOrigin === true && (headers.has('authorization') || Boolean(options.body) || !['GET', 'HEAD', 'POST'].includes(method.toUpperCase()));
     const requestSnapshot = requestUrl ? {
       startedAt: new Date(startedAt).toISOString(),
@@ -90,14 +104,17 @@ class ApiClient {
       });
       if (!response.ok) {
         let body: ApiErrorResponse | null = null;
-        if (debugEnabled()) {
+        if (captureDebug) {
           const rawBody = await response.text().catch(() => '');
           try { body = JSON.parse(rawBody) as ApiErrorResponse; } catch { /* A gateway may return HTML or plain text. */ }
           responseBody = body ?? rawBody;
-        } else body = await response.json().catch(() => null) as ApiErrorResponse | null;
+        } else {
+          body = await response.json().catch(() => null) as ApiErrorResponse | null;
+          responseBody = body;
+        }
         if (authenticate && response.status === 401 && !retried && !path.startsWith('/auth/') && unauthorizedHandler) {
           const responseDurationMs = Date.now() - startedAt;
-          if (debugEnabled()) recordDebugRequest({
+          if (captureDebug) recordDebugRequest({
             method, path: path.split('?', 1)[0], statusCode: response.status, durationMs: responseDurationMs,
             errorCode: body?.error?.code, error: body?.error?.message ?? 'HTTP 401', ...requestSnapshot,
             ...debugResponseDetails(response, responseBody)
@@ -115,7 +132,11 @@ class ApiClient {
         );
       }
       const data = response.status === 204 ? undefined as T : await response.json() as T;
-      if (debugEnabled()) recordDebugRequest({
+      if (shouldTraceRequest(path)) captureClientTrace('HTTP_RESPONSE', `${method} ${path.split('?', 1)[0]}`, {
+        statusCode: response.status, responseHeaders: Object.fromEntries(response.headers.entries()), responseBody: data,
+        durationMs: Date.now() - startedAt
+      }, { requestId: response.headers.get('x-request-id') ?? undefined });
+      if (captureDebug) recordDebugRequest({
         method, path: path.split('?', 1)[0], statusCode: response.status, durationMs: Date.now() - startedAt,
         ...requestSnapshot, ...debugResponseDetails(response, data)
       });
@@ -127,7 +148,11 @@ class ApiClient {
       }
       return data;
     } catch (error) {
-      if (debugEnabled()) recordDebugRequest({
+      if (shouldTraceRequest(path)) captureClientTrace('HTTP_RESPONSE', `${method} ${path.split('?', 1)[0]}`, {
+        statusCode: response?.status ?? 0, responseHeaders: response ? Object.fromEntries(response.headers.entries()) : null,
+        responseBody, error, durationMs: Date.now() - startedAt, timedOut, aborted: controller.signal.aborted
+      }, { requestId: response?.headers.get('x-request-id') ?? undefined });
+      if (captureDebug) recordDebugRequest({
         method, path: path.split('?', 1)[0], statusCode: error instanceof ApiError ? error.status : response?.status ?? 0,
         durationMs: Date.now() - startedAt, errorCode: error instanceof ApiError ? error.code : undefined,
         error: error instanceof Error ? error.message : String(error), errorName: error instanceof Error ? error.name : undefined,

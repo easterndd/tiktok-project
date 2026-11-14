@@ -26,7 +26,14 @@ type AlbumSnapshot = {
   albumId: string;
   albumInfo: TikTokAlbumInfoInput;
   episodes: Array<TikTokEpisodeInfoInput & { localEpisodeId: string }>;
+  submissionPlanId?: string;
   retryOfJobId?: string;
+};
+
+export type AlbumSnapshotOptions = {
+  episodeIds?: string[];
+  platformSequenceByEpisodeId?: Record<string, number>;
+  submissionPlanId?: string;
 };
 
 type PlatformJobInput = {
@@ -46,6 +53,7 @@ type WorkerOptions = {
   maxRetries?: number;
   log?: (message: string, details?: Record<string, unknown>) => void;
   playability?: { service: Pick<BytePlusVodService, 'getMediaInfos' | 'hasPlayableUrl'>; spaceName: string };
+  platformEpisodePlanEnabled?: boolean;
 };
 
 type Playability = NonNullable<WorkerOptions['playability']>;
@@ -61,7 +69,7 @@ function stableJson(value: unknown): string {
   return `{${Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`;
 }
 
-function hashSnapshot(value: unknown) {
+export function hashSnapshot(value: unknown) {
   return createHash('sha256').update(stableJson(value)).digest('hex');
 }
 
@@ -209,7 +217,7 @@ function episodeFailureDetails(value: unknown) {
   });
 }
 
-export async function buildAlbumSnapshot(prisma: Db, albumId: string): Promise<AlbumSnapshot> {
+export async function buildAlbumSnapshot(prisma: Db, albumId: string, options: AlbumSnapshotOptions = {}): Promise<AlbumSnapshot> {
   const album = await prisma.album.findUnique({
     where: { id: albumId },
     include: {
@@ -218,6 +226,12 @@ export async function buildAlbumSnapshot(prisma: Db, albumId: string): Promise<A
     }
   });
   if (!album) throw Object.assign(new Error('剧目不存在。'), { statusCode: 404 });
+  const rejectedReview = ['3', '7', 'REJECTED', 'APPEAL_REJECTED'].includes(String(album.reviewStatus ?? ''));
+  const storedPlan = Array.isArray(album.platformEpisodePlan) ? album.platformEpisodePlan : null;
+  const requestedEpisodeIds = options.episodeIds ?? storedPlan?.map((item: unknown) => typeof item === 'string' ? item : '');
+  if (rejectedReview && !requestedEpisodeIds?.length) {
+    throw workflowConflict('当前版本存在审核驳回，请先在剧目素材中确认“排除驳回分集并重排”清单，再同步新版本。');
+  }
   if (typeof album.description !== 'string' || !album.description.trim()) {
     throw workflowConflict('剧目缺少 TikTok 所需的剧情简介，请先编辑并保存简介。');
   }
@@ -226,19 +240,39 @@ export async function buildAlbumSnapshot(prisma: Db, albumId: string): Promise<A
     throw workflowConflict('剧目缺少 TikTok 所需的年份、剧目类型或 1 至 3 个标签。');
   }
   const albumCoverPicId = album.coverAsset.providerImageId;
-  const missingVideos = album.episodes.filter((episode: any) => !episode.byteplusVid || episode.tiktokVideoStatus !== 'READY');
+  if (requestedEpisodeIds && (requestedEpisodeIds.some((id: string) => !id)
+    || new Set(requestedEpisodeIds).size !== requestedEpisodeIds.length)) {
+    throw workflowConflict('已保存的新版本分集清单无效，请在剧目素材中重新生成。');
+  }
+  const selectedEpisodes = requestedEpisodeIds
+    ? album.episodes.filter((episode: any) => requestedEpisodeIds.includes(episode.id))
+    : album.episodes;
+  const sequenceById = options.platformSequenceByEpisodeId ?? (storedPlan
+    ? Object.fromEntries(storedPlan.map((value: unknown, index: number) => [typeof value === 'string' ? value : '', index + 1]))
+    : undefined);
+  if (sequenceById) {
+    selectedEpisodes.sort((left: any, right: any) => sequenceById[left.id] - sequenceById[right.id]);
+  }
+  if (!selectedEpisodes.length || (requestedEpisodeIds && selectedEpisodes.length !== new Set(requestedEpisodeIds).size)) {
+    throw workflowConflict('提交计划中的本地分集不存在或为空，请重新生成计划。');
+  }
+  const replacingVideos = selectedEpisodes.filter((episode: any) => episode.byteplusVid && episode.byteplusUploadStatus === 'UPLOADING');
+  if (replacingVideos.length) {
+    throw workflowConflict('驳回分集的视频替换仍在进行，请等待新 VID 绑定及 TikTok 媒资登记完成后再同步版本。');
+  }
+  const missingVideos = selectedEpisodes.filter((episode: any) => !episode.byteplusVid || episode.tiktokVideoStatus !== 'READY');
   if (missingVideos.length) {
     const episodeNumbers = missingVideos.map((episode: any) => episode.episodeNo).join('、');
     throw workflowConflict(`第 ${episodeNumbers} 集视频尚未完成 TikTok 登记（共 ${missingVideos.length} 集）；请先同步媒资并等待任务成功。`);
   }
-  const episodes = album.episodes.map((episode: any) => {
+  const episodes = selectedEpisodes.map((episode: any) => {
     const coverPicId = episode.coverAsset?.providerImageId ?? albumCoverPicId;
     if (!coverPicId) throw workflowConflict(`第 ${episode.episodeNo} 集封面尚未同步到 TikTok。`);
     return {
       localEpisodeId: episode.id,
       ...(episode.tiktokEpisodeId ? { episode_id: episode.tiktokEpisodeId } : {}),
       title: episode.title,
-      seq: episode.episodeNo,
+      seq: sequenceById?.[episode.id] ?? episode.episodeNo,
       cover_list: [coverPicId],
       byteplus_vid: episode.byteplusVid
     };
@@ -257,7 +291,8 @@ export async function buildAlbumSnapshot(prisma: Db, albumId: string): Promise<A
       tag_list: tags(album.tagList),
       publish_status: 0
     },
-    episodes
+    episodes,
+    ...(options.submissionPlanId ? { submissionPlanId: options.submissionPlanId } : {})
   };
 }
 
@@ -298,6 +333,9 @@ export async function enqueuePlatformSyncJob(prisma: Db, input: PlatformJobInput
 
 export async function enqueueAlbumVersionSync(prisma: Db, albumId: string, createdByAdminUserId?: string) {
   const album = await prisma.album.findUnique({ where: { id: albumId }, select: { reviewStatus: true, tiktokAlbumId: true, tiktokVersion: true } });
+  if (['REJECTED', '3', 'APPEAL_REJECTED', '7'].includes(String(album?.reviewStatus ?? ''))) {
+    throw workflowConflict('当前版本含审核驳回分集。请使用“排除驳回集并同步新版本”计划，避免把驳回集再次提交。');
+  }
   if (['REVIEWING', '1'].includes(album?.reviewStatus ?? '')) throw workflowConflict('当前版本正在审核，请等待审核结束后再同步新版本。');
   const snapshot = await buildAlbumSnapshot(prisma, albumId);
   const snapshotHash = hashSnapshot({ ...snapshot, episodes: snapshot.episodes.map(({ episode_id: _platformId, ...episode }) => episode) });
@@ -542,7 +580,7 @@ async function processVideo(prisma: Db, api: TikTokShortDramaApiService, job: an
   });
 }
 
-async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date, playability?: Playability) {
+async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date, playability?: Playability, platformEpisodePlanEnabled = false) {
   const snapshot = job.snapshotJson as AlbumSnapshot | null;
   if (!snapshot?.albumInfo || !snapshot.episodes?.length) throw new Error('剧目同步任务缺少不可变版本快照。');
   await assertPlayableEpisodes(playability, snapshot.episodes);
@@ -628,8 +666,11 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
         ...(recreatedAlbum ? { onlineVersion: null, platformPublishedVersion: null, platformPublishedAt: null, reviewStatus: null } : {})
       } });
       await Promise.all(snapshot.episodes.map((episode, index) => {
-        return tx.episode.update({ where: { id: episode.localEpisodeId }, data: { tiktokEpisodeId: episodeIds[index], tiktokCoverPicId: episode.cover_list[0] } });
+        return tx.episode.update({ where: { id: episode.localEpisodeId }, data: { tiktokCoverPicId: episode.cover_list[0] } });
       }));
+      if (platformEpisodePlanEnabled && snapshot.submissionPlanId) {
+        await tx.platformEpisodePlan.update({ where: { id: snapshot.submissionPlanId }, data: { status: 'SYNCED', platformVersion: result.version } });
+      }
       await completeJob(tx, job, { providerRequestId: result.requestId, providerResponse: { version: result.version, platform_album_id: platformAlbumId, episode_id_map: result.episodeIdMap } }, now);
     });
   } catch {
@@ -637,7 +678,7 @@ async function processAlbumVersion(prisma: Db, api: TikTokShortDramaApiService, 
   }
 }
 
-async function activateOnlineEpisodes(prisma: Db, albumId: string, version: number, requireSnapshot = false) {
+async function activateOnlineEpisodes(prisma: Db, albumId: string, version: number, requireSnapshot = false, platformEpisodePlanEnabled = false) {
   const versionJob = await prisma.platformSyncJob.findFirst({
     where: { albumId, kind: 'ALBUM_VERSION', status: 'SUCCEEDED', providerResponse: { path: ['version'], equals: version } },
     orderBy: { createdAt: 'desc' }
@@ -647,9 +688,42 @@ async function activateOnlineEpisodes(prisma: Db, albumId: string, version: numb
     if (requireSnapshot) throw workflowConflict('找不到线上版本对应的分集快照，请先对账，不可开放新分集。');
     return;
   }
+  const response = platformResponse(versionJob?.providerResponse);
+  const ids = resolvedEpisodeIds(snapshot, record(response.episode_id_map), true);
+  await prisma.episode.updateMany({ where: { albumId }, data: { status: 'OFFLINE', platformSeq: null } });
   const episodeIds = snapshot.episodes.map((episode) => episode.localEpisodeId);
-  await prisma.episode.updateMany({ where: { albumId }, data: { status: 'OFFLINE' } });
-  await prisma.episode.updateMany({ where: { albumId, id: { in: episodeIds }, tiktokVideoStatus: 'READY', tiktokEpisodeId: { not: null } }, data: { status: 'ONLINE' } });
+  if (platformEpisodePlanEnabled) {
+    await prisma.episode.updateMany({
+      where: { albumId, id: { in: episodeIds }, tiktokVideoStatus: 'READY' },
+      data: { status: 'ONLINE' }
+    });
+  }
+  for (const [index, episode] of snapshot.episodes.entries()) {
+    const tiktokEpisodeId = ids?.[index];
+    const where = {
+      albumId,
+      id: episode.localEpisodeId,
+      ...(episode.byteplus_vid ? { byteplusVid: episode.byteplus_vid } : {}),
+      tiktokVideoStatus: 'READY' as const,
+      ...(tiktokEpisodeId ? {} : { tiktokEpisodeId: { not: null } })
+    };
+    const activated = await prisma.episode.updateMany({
+      where,
+      data: {
+        status: 'ONLINE',
+        ...(Number.isInteger(episode.seq) ? { platformSeq: episode.seq } : {}),
+        ...(tiktokEpisodeId ? { tiktokEpisodeId } : {})
+      }
+    });
+    if (activated.count === 0) throw workflowConflict(`第 ${episode.seq} 集未能按新版本清单上线，请先对账。`);
+  }
+}
+
+async function activateSubmissionPlan(prisma: Db, albumId: string, snapshotValue: unknown, version: number, platformEpisodePlanEnabled: boolean) {
+  if (!platformEpisodePlanEnabled || !prisma.platformEpisodePlan) return;
+  const planId = stringify(record(snapshotValue).submissionPlanId);
+  await prisma.platformEpisodePlan.updateMany({ where: { albumId, status: 'ACTIVE' }, data: { status: 'SUPERSEDED' } });
+  if (planId) await prisma.platformEpisodePlan.update({ where: { id: planId }, data: { status: 'ACTIVE', platformVersion: version } });
 }
 
 async function episodeIdRepairs(prisma: Db, album: { id: string; tiktokAlbumId: string }, version: number | undefined, platformEpisodes: Record<string, unknown>[]) {
@@ -669,23 +743,22 @@ async function episodeIdRepairs(prisma: Db, album: { id: string; tiktokAlbumId: 
   if (platformEpisodes.length !== snapshot.episodes.length) throw workflowConflict('版本快照与 TikTok 平台的分集数量不一致，不能自动恢复分集 ID。');
   const platformBySeq = new Map(platformEpisodes.map((episode) => [numberValue(episode.seq), episode]));
   const localById = new Map(localEpisodes.map((episode: any) => [episode.id, episode]));
-  const repairs: Array<{ id: string; episodeNo: number; byteplusVid: string; tiktokEpisodeId: string }> = [];
+  const repairs: Array<{ id: string; byteplusVid: string; tiktokEpisodeId: string }> = [];
   for (const [index, episode] of snapshot.episodes.entries()) {
     const local = localById.get(episode.localEpisodeId) as { episodeNo: number; byteplusVid: string | null; tiktokEpisodeId: string | null } | undefined;
     const platform = platformBySeq.get(episode.seq);
     const expectedId = ids[index];
-    if (!local || local.episodeNo !== episode.seq || local.byteplusVid !== episode.byteplus_vid
+    if (!local || local.byteplusVid !== episode.byteplus_vid
       || !platform || stringify(platform.episode_id) !== expectedId
-      || (stringify(platform.byteplus_vid) && stringify(platform.byteplus_vid) !== episode.byteplus_vid)
-      || (local.tiktokEpisodeId && local.tiktokEpisodeId !== expectedId)) {
+      || (stringify(platform.byteplus_vid) && stringify(platform.byteplus_vid) !== episode.byteplus_vid)) {
       throw workflowConflict(`第 ${episode.seq} 集的本地数据与 TikTok 当前版本不一致，不能自动恢复分集 ID。`);
     }
-    if (!local.tiktokEpisodeId) repairs.push({ id: episode.localEpisodeId, episodeNo: episode.seq, byteplusVid: episode.byteplus_vid, tiktokEpisodeId: expectedId });
+    if (!local.tiktokEpisodeId) repairs.push({ id: episode.localEpisodeId, byteplusVid: episode.byteplus_vid, tiktokEpisodeId: expectedId });
   }
   return repairs;
 }
 
-async function processAlbumAction(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date, playability?: Playability) {
+async function processAlbumAction(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date, playability?: Playability, platformEpisodePlanEnabled = false) {
   const album = await prisma.album.findUnique({ where: { id: job.albumId ?? job.targetId }, select: { id: true, tiktokAlbumId: true, tiktokVersion: true, onlineVersion: true, reviewStatus: true, publishStatus: true, platformPublishedVersion: true } });
   if (!album?.tiktokAlbumId) throw new Error('剧目尚未同步至 TikTok。');
   if (job.kind === 'REVIEW') {
@@ -758,7 +831,8 @@ async function processAlbumAction(prisma: Db, api: TikTokShortDramaApiService, j
     try {
       await (prisma.$transaction as any)(async (tx: Db) => {
         await tx.album.update({ where: { id: album.id }, data: { status: 'ONLINE', publishStatus: 'LISTED', platformPublishedVersion: album.onlineVersion, platformPublishedAt: now } });
-        await activateOnlineEpisodes(tx, album.id, album.onlineVersion!);
+        await activateOnlineEpisodes(tx, album.id, album.onlineVersion!, false, platformEpisodePlanEnabled);
+        await activateSubmissionPlan(tx, album.id, versionJob.snapshotJson, album.onlineVersion!, platformEpisodePlanEnabled);
         await completeJob(tx, job, { providerRequestId: result.requestId, providerResponse: { status: result.status } }, now);
       });
     } catch {
@@ -805,7 +879,7 @@ async function processAlbumAction(prisma: Db, api: TikTokShortDramaApiService, j
   const locallyPlayable = Boolean(isPublished && isOnlinePassed && onlineVersion);
   await (prisma.$transaction as any)(async (tx: Db) => {
     for (const repair of repairs) {
-      const updated = await tx.episode.updateMany({ where: { id: repair.id, albumId: album.id, episodeNo: repair.episodeNo, byteplusVid: repair.byteplusVid, tiktokEpisodeId: null }, data: { tiktokEpisodeId: repair.tiktokEpisodeId } });
+      const updated = await tx.episode.updateMany({ where: { id: repair.id, albumId: album.id, byteplusVid: repair.byteplusVid, tiktokEpisodeId: null }, data: { tiktokEpisodeId: repair.tiktokEpisodeId } });
       if (updated.count !== 1) throw workflowConflict('分集在对账期间发生变化，未写入任何分集 ID；请重新对账。');
     }
     await tx.album.update({ where: { id: album.id }, data: {
@@ -817,12 +891,16 @@ async function processAlbumAction(prisma: Db, api: TikTokShortDramaApiService, j
       platformPublishedVersion: locallyPlayable ? onlineVersion : null,
       platformPublishedAt: locallyPlayable ? now : null
     } });
-    if (locallyPlayable) await activateOnlineEpisodes(tx, album.id, onlineVersion!);
-    else await tx.episode.updateMany({ where: { albumId: album.id }, data: { status: 'OFFLINE' } });
+    if (locallyPlayable) {
+      await activateOnlineEpisodes(tx, album.id, onlineVersion!, false, platformEpisodePlanEnabled);
+      const onlineVersionJob = await tx.platformSyncJob.findFirst({ where: { albumId: album.id, kind: 'ALBUM_VERSION', status: 'SUCCEEDED', providerResponse: { path: ['version'], equals: onlineVersion } }, orderBy: { createdAt: 'desc' } });
+      await activateSubmissionPlan(tx, album.id, onlineVersionJob?.snapshotJson, onlineVersion!, platformEpisodePlanEnabled);
+    }
+    else await tx.episode.updateMany({ where: { albumId: album.id }, data: platformEpisodePlanEnabled ? { status: 'OFFLINE', platformSeq: null } : { status: 'OFFLINE' } });
     if (missingVideoEpisodeIds.length) {
       await tx.episode.updateMany({
         where: { albumId: album.id, tiktokEpisodeId: { in: missingVideoEpisodeIds } },
-        data: { status: 'OFFLINE', tiktokVideoStatus: 'FAILED', tiktokVideoError: 'TikTok reported that the BytePlus video was deleted.' }
+        data: { status: 'OFFLINE', ...(platformEpisodePlanEnabled ? { platformSeq: null } : {}), tiktokVideoStatus: 'FAILED', tiktokVideoError: 'TikTok reported that the BytePlus video was deleted.' }
       });
     }
     await completeJob(tx, job, {
@@ -843,12 +921,12 @@ async function processAlbumAction(prisma: Db, api: TikTokShortDramaApiService, j
   });
 }
 
-async function processPlatformJob(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date, playability?: Playability) {
+async function processPlatformJob(prisma: Db, api: TikTokShortDramaApiService, job: any, now: Date, playability?: Playability, platformEpisodePlanEnabled = false) {
   if (job.albumId?.startsWith('release_')) throw retiredWorkflow('旧独立发布任务已停用，保留历史记录，不再自动发布或送审。');
   if (job.kind === 'COVER') return processCover(prisma, api, job, now);
   if (job.kind === 'VIDEO') return processVideo(prisma, api, job, now, playability);
-  if (job.kind === 'ALBUM_VERSION') return processAlbumVersion(prisma, api, job, now, playability);
-  return processAlbumAction(prisma, api, job, now, playability);
+  if (job.kind === 'ALBUM_VERSION') return processAlbumVersion(prisma, api, job, now, playability, platformEpisodePlanEnabled);
+  return processAlbumAction(prisma, api, job, now, playability, platformEpisodePlanEnabled);
 }
 
 export async function processPlatformSyncJobs(prisma: Db, api: TikTokShortDramaApiService, workerOptions: WorkerOptions = {}) {
@@ -884,7 +962,7 @@ export async function processPlatformSyncJobs(prisma: Db, api: TikTokShortDramaA
     }
     const job = { ...pending, status: 'PROCESSING' };
     try {
-      await processPlatformJob(prisma, api, job, current, workerOptions.playability);
+      await processPlatformJob(prisma, api, job, current, workerOptions.playability, workerOptions.platformEpisodePlanEnabled);
       workerOptions.log?.('TikTok platform sync job completed.', { jobId: job.id, kind: job.kind });
     } catch (error) {
       await failJob(prisma, job, error, current, maxRetries);

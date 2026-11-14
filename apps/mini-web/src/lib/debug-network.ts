@@ -9,6 +9,9 @@ function redactText(value: string) {
 
 export function safeDebugValue(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') return redactText(value);
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'function') return '[Function]';
+  if (typeof value === 'symbol') return String(value);
   if (value === null || typeof value !== 'object') return value;
   if (depth >= 4) return '[TRUNCATED]';
   if (Array.isArray(value)) return value.slice(0, 20).map((item) => safeDebugValue(item, depth + 1));
@@ -54,6 +57,15 @@ export function debugHeaders(headers: Headers) {
     catch { sanitized['access-control-allow-origin'] = '[REDACTED]'; }
   }
   return sanitized;
+}
+
+export function debugRequestTarget(requestUrl: string, pageOrigin: string) {
+  try {
+    const url = new URL(requestUrl, pageOrigin);
+    return { url: url.origin + url.pathname, apiOrigin: url.origin, crossOrigin: url.origin !== pageOrigin };
+  } catch {
+    return { url: requestUrl.split(/[?#]/, 1)[0] };
+  }
 }
 
 export function debugResponseDetails(response: Response | undefined, body?: unknown) {
