@@ -5,7 +5,7 @@ import { requireUser } from '../../plugins/auth';
 import { miniAppAdConfig } from '../../config/mini-apps';
 import { measureDatabase, sampleResponseLog, type ResponseLogSampleCache } from '../../lib/request-performance';
 import { serialByKey, singleFlight } from '../../lib/single-flight';
-import { isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
+import { exemptIpForReviewRelease, isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { requestCountry } from '../../lib/content-visibility';
 import { isV006DualRelease, isV006Release, resolveAdPlacementPolicy, sessionAllowedPlacementIds, supportsV006DualApp, type AdClientPlatform } from '../ads/ad-placement-policy';
@@ -216,13 +216,21 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     let responseFlowVersion: number | undefined;
     const saveDecision = async (input: { attributionStatus: string; decision: 'SHOW' | 'SUPPRESS'; reason: string; policyVersion?: number; requiredCount?: number; countMode?: string; sessionId?: string }) => {
       if (!attributionRelease || !launchRecord) return null;
+      const data = {
+        launchRef: launchRecord.launchRef, miniAppKey: app.config.MINI_APP_KEY, launchId, releaseId,
+        userId: request.user.sub, attributionStatus: input.attributionStatus, decision: input.decision,
+        reason: input.reason, policyVersion: input.policyVersion, requiredCount: input.requiredCount,
+        countMode: input.countMode, sessionId: input.sessionId, requestId: request.id
+      };
+      // An IP exemption can revoke a previous SHOW, including a resumed launch.
+      if (input.reason === 'IP_EXEMPT') {
+        return app.prisma.miniAppEntryAdDecision.upsert({
+          where: { launchRef: launchRecord.launchRef }, create: data,
+          update: { decision: 'SUPPRESS', reason: 'IP_EXEMPT', requestId: request.id }
+        });
+      }
       try {
-        return await app.prisma.miniAppEntryAdDecision.create({ data: {
-          launchRef: launchRecord.launchRef, miniAppKey: app.config.MINI_APP_KEY, launchId, releaseId,
-          userId: request.user.sub, attributionStatus: input.attributionStatus, decision: input.decision,
-          reason: input.reason, policyVersion: input.policyVersion, requiredCount: input.requiredCount,
-          countMode: input.countMode, sessionId: input.sessionId, requestId: request.id
-        } });
+        return await app.prisma.miniAppEntryAdDecision.create({ data });
       } catch (error) {
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
         return app.prisma.miniAppEntryAdDecision.findUnique({ where: { launchRef: launchRecord.launchRef } });
@@ -238,6 +246,26 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       if (!launchRecord || launchRecord.userId !== request.user.sub || launchRecord.launchId !== launchId || launchRecord.releaseId !== releaseId || launchRecord.miniAppKey !== app.config.MINI_APP_KEY) {
         return { required: false as const, decision: 'SUPPRESS' as const, decisionReason: 'ATTRIBUTION_UNAVAILABLE' };
       }
+    }
+    const ipExempt = await measureDatabase(request, async () => {
+      const reviewExempt = await exemptIpForReviewRelease({
+        db: app.sharedPrisma, miniAppKey: app.config.MINI_APP_KEY, releaseId, ipAddress: request.ip,
+        fresh: usesLaunchAttribution
+      });
+      return reviewExempt || isEntryAdIpExempt(app.sharedPrisma, request.ip, { fresh: usesLaunchAttribution });
+    }).catch((error) => {
+      request.log.warn({ err: error }, 'Shared IP exemption lookup failed');
+      return null;
+    });
+    if (ipExempt) {
+      const saved = await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SUPPRESS', reason: 'IP_EXEMPT' });
+      return { required: false as const, ...(saved ? { decisionId: saved.id, decision: 'SUPPRESS' as const, decisionReason: saved.reason, launchRef } : {}) };
+    }
+    if (ipExempt === null && usesLaunchAttribution) {
+      // Do not show an ad when the highest-priority check is unavailable.
+      return { required: false as const, decision: 'SUPPRESS' as const, decisionReason: 'IP_CHECK_UNAVAILABLE', launchRef };
+    }
+    if (usesLaunchAttribution && launchRecord) {
       if (decision?.decision === 'SUPPRESS') return { required: false as const, decisionId: decision.id, decision: 'SUPPRESS' as const, decisionReason: decision.reason, launchRef };
       if (!decision && launchRecord.localAttributionStatus !== 'ATTRIBUTED') {
         const reason = launchRecord.localAttributionStatus === 'AD_ID_CONFLICT' ? 'AD_ID_CONFLICT'
@@ -271,17 +299,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       primaryPlacementId: policy.placementId,
       platform
     });
-    const [ipExempt, viewer] = await Promise.all([
-      measureDatabase(request, () => isEntryAdIpExempt(app.sharedPrisma, request.ip)).catch((error) => {
-        request.log.warn({ err: error }, 'Shared IP exemption lookup failed; applying entry-ad policy');
-        return false;
-      }),
-      measureDatabase(request, () => app.prisma.user.findUnique({ where: { id: request.user.sub }, select: { appEntryAdExempt: true, mergedIntoUserId: true } }))
-    ]);
-    if (ipExempt) {
-      const saved = await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SUPPRESS', reason: 'IP_EXEMPT', policyVersion: policy.version });
-      return { required: false as const, ...(saved ? { decisionId: saved.id, decision: 'SUPPRESS' as const, decisionReason: saved.reason, launchRef } : {}) };
-    }
+    const viewer = await measureDatabase(request, () => app.prisma.user.findUnique({ where: { id: request.user.sub }, select: { appEntryAdExempt: true, mergedIntoUserId: true } }));
     if (viewer?.appEntryAdExempt) {
       const saved = await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SUPPRESS', reason: 'USER_EXEMPT', policyVersion: policy.version });
       return { required: false as const, ...(saved ? { decisionId: saved.id, decision: 'SUPPRESS' as const, decisionReason: saved.reason, launchRef } : {}) };
@@ -337,6 +355,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       if (!session) throw error;
     }
     const savedDecision = decision ?? await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SHOW', reason: 'ENTRY_AD_REQUIRED', policyVersion: policy.version, requiredCount: policy.requiredCount, countMode: policy.countMode, sessionId: session.id });
+    if (savedDecision?.decision === 'SUPPRESS') return { required: false as const, decisionId: savedDecision.id, decision: 'SUPPRESS' as const, decisionReason: savedDecision.reason, launchRef };
     return { ...sessionResponse(session, policy.onUnavailable, responseFlowVersion), ...(savedDecision ? { decisionId: savedDecision.id, decision: 'SHOW' as const, decisionReason: savedDecision.reason, launchRef } : {}) };
     });
   });

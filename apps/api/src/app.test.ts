@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -274,6 +275,12 @@ async function createPrismaStub() {
     },
     miniAppEntryAdDecision: {
       findUnique: async ({ where }: any) => state.miniAppEntryAdDecisions.get(where.launchRef) ?? null,
+      upsert: async ({ where, create, update }: any) => {
+        const existing = state.miniAppEntryAdDecisions.get(where.launchRef);
+        const value = existing ? { ...existing, ...update } : { id: `entry-decision-${state.miniAppEntryAdDecisions.size + 1}`, ...create };
+        state.miniAppEntryAdDecisions.set(where.launchRef, value);
+        return value;
+      },
       create: async ({ data }: any) => {
         const value = { id: `entry-decision-${state.miniAppEntryAdDecisions.size + 1}`, ...data };
         state.miniAppEntryAdDecisions.set(data.launchRef, value);
@@ -2038,6 +2045,12 @@ describe('QuicK ReeLS API', () => {
     await app.inject({ method: 'POST', url: '/api/v1/auth/launch-context', headers: viewerHeaders, remoteAddress: releasedIp,
       payload: { entryId: 'review-launch-0002', releaseId: releasedId } });
     assert.equal(exemptions.has(releasedIp), false);
+    const anonymousIp = '198.51.100.64';
+    const anonymous = await app.inject({ method: 'POST', url: '/api/v1/auth/anonymous/session', remoteAddress: anonymousIp,
+      payload: { visitorKey: 'review-anonymous-visitor-key-000001', clientSessionId: randomUUID(),
+        launchContext: { entryId: randomUUID(), releaseId } } });
+    assert.equal(anonymous.statusCode, 200, anonymous.body);
+    assert.equal(exemptions.get(anonymousIp).note, `AUTO_REVIEW: main:${releaseId}`);
   });
 
   it('uses the current v006-dual launch attribution for entry decisions and keeps a suppressed launch frozen', async () => {
@@ -2165,6 +2178,89 @@ describe('QuicK ReeLS API', () => {
     }
     assert.equal(supportsLaunchAttribution('cinereels', 'cinereels-attr1-test'), false);
     assert.equal(supportsLaunchAttribution('dramaflicks', 'dramaflicks-v006-dual-test'), true);
+  });
+
+  it('prioritizes global IP exemptions over attribution and previous decisions for all six pilot apps', async () => {
+    const keys = ['zenclip', 'storyworld', 'dailyreel', 'elitedrama', 'sonicreel', 'orbitplay'] as const;
+    const databases = Object.fromEntries(await Promise.all(keys.map(async (key) => [key, await createPrismaStub()]))) as Partial<Record<MiniAppKey, PrismaClient>>;
+    const app = await createTestApp(Object.fromEntries(keys.map((key) => [`${key.toUpperCase()}_DATABASE_URL`, `postgresql://test:test@localhost:5432/${key}`])), { miniPrisma: databases });
+    apps.push(app);
+    const shared = (app.sharedPrisma as any)._state;
+    const globalIp = '198.51.100.210';
+    shared.sharedExemptions.set(globalIp, { ipAddress: globalIp, note: 'manual global' });
+    for (const [index, key] of keys.entries()) {
+      const releaseId = `${key}-attr1-ip-priority-test`;
+      const base = `/api/${key}/v1`;
+      const headers = { authorization: `Bearer ${await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: key })}` };
+      const adminHeaders = { authorization: `Bearer ${await app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: key, role: 'OWNER', tokenVersion: 0 })}` };
+      const policy = await app.inject({ method: 'PUT', url: `${base}/admin/app-entry-ad-policy`, headers: adminHeaders,
+        payload: { releaseId, enabled: true, mode: 'REWARDED_GATED', placementId: `ad${index + 1}123456789`, requiredCount: 3, countMode: 'SHOWN', onUnavailable: 'ALLOW' } });
+      assert.equal(policy.statusCode, 200, policy.body);
+      const context = async (ip: string, query: Record<string, string> = { adId: '1880692531008737' }) => {
+        const launchId = randomUUID();
+        const response = await app.inject({ method: 'POST', url: `${base}/auth/launch-context`, headers, remoteAddress: ip,
+          payload: { launchId, entryId: launchId, releaseId, launchQuery: query } });
+        assert.equal(response.statusCode, 200, response.body);
+        return { launchId, releaseId, launchRef: response.json().launchRef, launchAttributionVersion: 1 };
+      };
+      const entry = (ip: string, payload: any) => app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers, remoteAddress: ip, payload });
+      for (const query of [{ adId: '1880692531008737' }, {}] as Record<string, string>[]) {
+        const payload = await context(globalIp, query);
+        const response = await entry(globalIp, payload);
+        assert.equal(response.json().required, false, response.body);
+        assert.equal(response.json().decisionReason, 'IP_EXEMPT');
+        const stored = (databases[key] as any)._state.miniAppEntryAdDecisions.get(payload.launchRef);
+        assert.equal(stored.attributionStatus, query.adId ? 'ATTRIBUTED' : 'UNATTRIBUTED');
+        assert.equal(stored.reason, 'IP_EXEMPT');
+      }
+      const changedIp = `198.51.100.${220 + index}`;
+      const payload = await context(changedIp);
+      const shown = await entry(changedIp, payload);
+      assert.equal(shown.json().required, true, shown.body);
+      // Simulate a second replica writing the shared table while this client caches a negative lookup.
+      shared.sharedExemptions.set(changedIp, { ipAddress: changedIp, note: 'other replica' });
+      const suppressed = await entry(changedIp, payload);
+      assert.equal(suppressed.json().required, false, suppressed.body);
+      assert.equal(suppressed.json().decisionReason, 'IP_EXEMPT');
+      assert.equal(suppressed.json().decisionId, shown.json().decisionId);
+      const stored = (databases[key] as any)._state.miniAppEntryAdDecisions.get(payload.launchRef);
+      assert.equal(stored.decision, 'SUPPRESS');
+      assert.equal(stored.attributionStatus, 'ATTRIBUTED');
+      assert.equal(stored.sessionId, shown.json().sessionId, 'retain the old session link for diagnostics');
+
+      const reviewIp = `203.0.113.${220 + index}`;
+      const reviewPayload = await context(reviewIp);
+      // The entry endpoint must see a status change even if launch-context previously cached RELEASED/UNKNOWN.
+      shared.codeReleases.set(`${key}:${releaseId}`, { miniAppKey: key, releaseId, portalStatus: 'IN_REVIEW' });
+      const review = await entry(reviewIp, reviewPayload);
+      assert.equal(review.json().decisionReason, 'IP_EXEMPT', review.body);
+      assert.equal(shared.sharedExemptions.get(reviewIp).note, `AUTO_REVIEW: ${key}:${releaseId}`);
+      shared.codeReleases.get(`${key}:${releaseId}`).portalStatus = 'RELEASED';
+      const nextIp = `203.0.113.${230 + index}`;
+      const next = await entry(nextIp, await context(nextIp));
+      assert.equal(next.json().required, true, next.body);
+      assert.equal(shared.sharedExemptions.has(nextIp), false);
+      assert.equal((await entry(reviewIp, reviewPayload)).json().decisionReason, 'IP_EXEMPT', 'release approval must retain previous IP exemptions');
+    }
+  });
+
+  it('suppresses pilot entry ads without freezing a decision when the shared IP lookup is unavailable', async () => {
+    const database = await createPrismaStub();
+    const app = await createTestApp({ ZENCLIP_DATABASE_URL: 'postgresql://test:test@localhost:5432/zenclip' }, { miniPrisma: { zenclip: database as unknown as PrismaClient } });
+    apps.push(app);
+    const headers = { authorization: `Bearer ${await app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'zenclip' })}` };
+    const launchId = randomUUID();
+    const releaseId = 'zenclip-attr1-ip-outage';
+    const context = await app.inject({ method: 'POST', url: '/api/zenclip/v1/auth/launch-context', headers,
+      payload: { launchId, entryId: launchId, releaseId, launchQuery: { adId: '1880692531008737' } } });
+    const queryRaw = app.sharedPrisma.$queryRaw;
+    app.sharedPrisma.$queryRaw = (async () => { throw new Error('shared database unavailable'); }) as typeof queryRaw;
+    const result = await app.inject({ method: 'POST', url: '/api/zenclip/v1/app-entry-ad-sessions', headers,
+      payload: { launchId, releaseId, launchRef: context.json().launchRef, launchAttributionVersion: 1 } });
+    app.sharedPrisma.$queryRaw = queryRaw;
+    assert.equal(result.json().required, false);
+    assert.equal(result.json().decisionReason, 'IP_CHECK_UNAVAILABLE');
+    assert.equal((database as any)._state.miniAppEntryAdDecisions.size, 0);
   });
 
   it('replays the current entry ad on an early close in completed mode', async () => {

@@ -5,11 +5,58 @@ import { resolve } from 'node:path';
 import { it } from 'node:test';
 import { Prisma, PrismaClient } from '@prisma/client';
 import {
-  isEntryAdIpExempt, listSharedIps, listSharedIpVisits, listViewerIdsForIp,
+  ensureEntryAdIpExemption, exemptIpForReviewRelease, isEntryAdIpExempt, listSharedIps, listSharedIpVisits, listViewerIdsForIp,
   queueSharedIpVisit, recordSharedIpVisit, removeEntryAdIpExemption, setEntryAdIpExemption, waitForSharedIpVisits
 } from './shared-ip.service';
 
 const databaseUrl = process.env.SHARED_IP_TEST_DATABASE_URL;
+
+it('refreshes cross-replica IP changes and clears a negative cache after an insert conflict', async () => {
+  let exists = false;
+  const db = {
+    $queryRaw: async (query: TemplateStringsArray) => query.join('').includes('SELECT EXISTS') ? [{ exempt: exists }] : [],
+    $executeRaw: async () => 0
+  } as unknown as PrismaClient;
+  const ip = '198.51.100.201';
+  assert.equal(await isEntryAdIpExempt(db, ip), false);
+  exists = true;
+  assert.equal(await isEntryAdIpExempt(db, ip, { fresh: true }), true);
+  exists = false;
+  assert.equal(await isEntryAdIpExempt(db, ip, { fresh: true }), false);
+  exists = true;
+  assert.equal(await ensureEntryAdIpExemption(db, ip, 'test', 'system:test'), false);
+  assert.equal(await isEntryAdIpExempt(db, ip), true);
+});
+
+it('does not confuse automatic review exemptions between database clients or cache a deleted row', async () => {
+  const makeDb = () => {
+    let exists = false;
+    let writes = 0;
+    return {
+      get writes() { return writes; },
+      remove() { exists = false; },
+      miniAppCodeRelease: { findUnique: async () => ({ portalStatus: 'IN_REVIEW' }) },
+      $queryRaw: async (query: TemplateStringsArray) => {
+        if (query.join('').includes('SELECT EXISTS')) return [{ exempt: exists }];
+        writes += 1;
+        exists = true;
+        return [{ ipAddress: '198.51.100.202' }];
+      },
+      $executeRaw: async () => 0
+    };
+  };
+  const first = makeDb();
+  const second = makeDb();
+  const input = { miniAppKey: 'zenclip', releaseId: 'zenclip-attr1-review', ipAddress: '198.51.100.202', fresh: true };
+  await exemptIpForReviewRelease({ ...input, db: first as any });
+  await exemptIpForReviewRelease({ ...input, db: first as any });
+  assert.equal(first.writes, 1);
+  await exemptIpForReviewRelease({ ...input, db: second as any });
+  assert.equal(second.writes, 1);
+  first.remove();
+  await exemptIpForReviewRelease({ ...input, db: first as any });
+  assert.equal(first.writes, 2);
+});
 type Plan = { 'Node Type': string; 'Relation Name'?: string; Plans?: Plan[] };
 type Explain = Array<{ 'QUERY PLAN': Array<{ Plan: Plan }> }>;
 function nodes(plan: Plan): Plan[] {

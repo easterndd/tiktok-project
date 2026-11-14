@@ -18,10 +18,6 @@ const maxEntryAdIpExemptionKeys = 10_000;
 // launch path from reading the shared release table on every session.
 const reviewReleaseStatusTtlMs = 30_000;
 const maxReviewReleaseStatusKeys = 500;
-// Reviewers reload a preview many times in a row. Remember the last automatic
-// write per release/IP so a reload burst does not turn into a write burst.
-const reviewReleaseExemptionTtlMs = 10 * 60_000;
-const maxReviewReleaseExemptionKeys = 20_000;
 const reviewReleasePortalStatus = 'IN_REVIEW';
 const reviewReleaseExemptionActor = 'system:review-release';
 type SharedIpVisitJob = {
@@ -36,7 +32,6 @@ const pendingSharedIpVisitKeys = new Set<string>();
 const completedSharedIpVisitKeys = new WeakMap<object, Map<string, number>>();
 const entryAdIpExemptionCache = new WeakMap<object, Map<string, { exempt: boolean; expiresAt: number }>>();
 const reviewReleaseStatusCache = new WeakMap<object, Map<string, { inReview: boolean; expiresAt: number }>>();
-const automaticReviewExemptions = new Map<string, number>();
 const sharedIpVisitDrainWaiters: Array<() => void> = [];
 let activeSharedIpVisits = 0;
 let droppedSharedIpVisits = 0;
@@ -235,7 +230,7 @@ export async function recentViewerIps(db: PrismaClient, miniAppKey: string, user
   return new Map(rows.map((row) => [row.userId, row.ipAddress ?? '']));
 }
 
-export async function isEntryAdIpExempt(db: PrismaClient, ipAddress: string | null) {
+export async function isEntryAdIpExempt(db: SharedIpDb, ipAddress: string | null, options: { fresh?: boolean } = {}) {
   const ip = ipAddress && normalizeIp(ipAddress);
   if (!ip) return false;
   const cache = exemptionCacheFor(db);
@@ -245,7 +240,7 @@ export async function isEntryAdIpExempt(db: PrismaClient, ipAddress: string | nu
     cache.delete(cachedIp);
   }
   const cached = cache.get(ip);
-  if (cached && cached.expiresAt > now) return cached.exempt;
+  if (!options.fresh && cached && cached.expiresAt > now) return cached.exempt;
   const rows = await db.$queryRaw<Array<{ exempt: boolean }>>`
     SELECT EXISTS(SELECT 1 FROM "SharedEntryAdIpExemption" WHERE "ipAddress" = ${ip}) AS exempt`;
   const exempt = rows[0]?.exempt === true;
@@ -282,7 +277,7 @@ export async function ensureEntryAdIpExemption(db: SharedIpDb, ip: string, note:
     INSERT INTO "SharedEntryAdIpExemption" ("ipAddress", "note", "updatedBy") VALUES (${ip}, ${note}, ${updatedBy})
     ON CONFLICT ("ipAddress") DO NOTHING
     RETURNING "ipAddress"`;
-  if (rows.length > 0) clearEntryAdIpExemptionCache(db, ip);
+  clearEntryAdIpExemptionCache(db, ip);
   return rows.length > 0;
 }
 
@@ -307,12 +302,12 @@ export function invalidateReviewReleaseStatusCache(db: SharedIpDb, miniAppKey?: 
   for (const key of [...cache.keys()]) if (key.startsWith(prefix)) cache.delete(key);
 }
 
-async function isReleaseInReview(db: ReviewReleaseDb, miniAppKey: string, releaseId: string) {
+async function isReleaseInReview(db: ReviewReleaseDb, miniAppKey: string, releaseId: string, fresh = false) {
   const cache = reviewStatusCacheFor(db);
   const key = `${miniAppKey}:${releaseId}`;
   const now = Date.now();
   const cached = cache.get(key);
-  if (cached && cached.expiresAt > now) return cached.inReview;
+  if (!fresh && cached && cached.expiresAt > now) return cached.inReview;
   const release = await db.miniAppCodeRelease.findUnique({
     where: { miniAppKey_releaseId: { miniAppKey, releaseId } },
     select: { portalStatus: true }
@@ -333,23 +328,13 @@ async function isReleaseInReview(db: ReviewReleaseDb, miniAppKey: string, releas
  * `MiniAppCodeRelease` row (`miniAppKey` + `releaseId`) and is recorded with an
  * `AUTO_REVIEW:` note so OWNERs can tell automatic rows from manual ones.
  */
-export async function exemptIpForReviewRelease(input: { db: ReviewReleaseDb; miniAppKey: string; releaseId: string; ipAddress: string | null }) {
+export async function exemptIpForReviewRelease(input: { db: ReviewReleaseDb; miniAppKey: string; releaseId: string; ipAddress: string | null; fresh?: boolean }) {
   const ip = input.ipAddress ? normalizeIp(input.ipAddress) : null;
   if (!ip) return false;
-  if (!await isReleaseInReview(input.db, input.miniAppKey, input.releaseId)) return false;
-  const key = `${input.miniAppKey}:${input.releaseId}:${ip}`;
-  const now = Date.now();
-  for (const [cachedKey, expiresAt] of automaticReviewExemptions) {
-    if (expiresAt > now) break;
-    automaticReviewExemptions.delete(cachedKey);
-  }
-  if ((automaticReviewExemptions.get(key) ?? 0) > now) return true;
-  await ensureEntryAdIpExemption(input.db, ip, `AUTO_REVIEW: ${input.miniAppKey}:${input.releaseId}`, reviewReleaseExemptionActor);
-  automaticReviewExemptions.set(key, now + reviewReleaseExemptionTtlMs);
-  while (automaticReviewExemptions.size > maxReviewReleaseExemptionKeys) {
-    const oldest = automaticReviewExemptions.keys().next().value;
-    if (!oldest) break;
-    automaticReviewExemptions.delete(oldest);
+  if (!await isReleaseInReview(input.db, input.miniAppKey, input.releaseId, input.fresh)) return false;
+  // Verify persistence across clients/replicas and after an OWNER deletes a row.
+  if (!await isEntryAdIpExempt(input.db, ip, { fresh: true })) {
+    await ensureEntryAdIpExemption(input.db, ip, `AUTO_REVIEW: ${input.miniAppKey}:${input.releaseId}`, reviewReleaseExemptionActor);
   }
   return true;
 }

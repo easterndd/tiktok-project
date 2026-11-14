@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requestCountry } from '../../lib/content-visibility';
 import { requireUser } from '../../plugins/auth';
-import { addDatabaseDuration } from '../../lib/request-performance';
+import { addDatabaseDuration, measureDatabase } from '../../lib/request-performance';
 import { singleFlight } from '../../lib/single-flight';
 import { exemptIpForReviewRelease, isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { observeAppEntryAdRelease } from '../app-entry-ads/routes';
@@ -253,6 +253,18 @@ async function readLocalEntryAdEligibility(app: FastifyInstance, request: Fastif
   return { showEntryAd: true, reason: 'ELIGIBLE' };
 }
 
+async function applyReviewIpExemption(app: FastifyInstance, request: FastifyRequest, releaseId?: string) {
+  if (!releaseId) return;
+  try {
+    await measureDatabase(request, () => exemptIpForReviewRelease({
+      db: app.sharedPrisma, miniAppKey: app.config.MINI_APP_KEY, releaseId, ipAddress: request.ip,
+      fresh: supportsLaunchAttribution(app.config.MINI_APP_KEY, releaseId)
+    }));
+  } catch (error) {
+    request.log.warn({ err: error }, 'Review release IP exemption could not be applied');
+  }
+}
+
 export async function registerAuthRoutes(app: FastifyInstance) {
   app.post('/auth/anonymous/session', {
     // Shared NATs can contain many real viewers; keep this above the global
@@ -263,7 +275,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     const countryCode = requestCountry(request, app.config.TRUST_GEO_COUNTRY_HEADER && request.ip !== request.raw.socket.remoteAddress);
     const visitorKeyHash = createHmac('sha256', app.config.JWT_SECRET).update(visitorKey).digest('base64url');
     const fingerprint = createHash('sha256').update(JSON.stringify({
-      visitorKeyHash, clientSessionId, platform, clientVersion, source, countryCode, launchContext
+      visitorKeyHash, clientSessionId, platform, clientVersion, source, countryCode, launchContext, ipAddress: request.ip
     })).digest('hex');
     return singleFlight(app, `anonymous-session:${fingerprint}`, async () => {
     const databaseStartedAt = performance.now();
@@ -279,7 +291,10 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       update: { platform, clientVersion, source, countryCode }
     });
     addDatabaseDuration(request, performance.now() - databaseStartedAt);
-    if (launchContext) await saveLaunchContext(app, request, user.id, launchContext, clientSessionId);
+    if (launchContext) {
+      await saveLaunchContext(app, request, user.id, launchContext, clientSessionId);
+      await applyReviewIpExemption(app, request, launchContext.releaseId);
+    }
     const accessToken = await app.jwt.sign({ sub: user.id, kind: 'user', appKey: app.config.MINI_APP_KEY }, { expiresIn: app.config.USER_JWT_EXPIRES_IN });
     return {
       accessToken,
@@ -297,20 +312,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     let user = await app.prisma.user.findUniqueOrThrow({ where: { id: request.user.sub }, select: { id: true, mergedIntoUserId: true, appEntryAdExempt: true } });
     if (user.mergedIntoUserId) user = await app.prisma.user.findUniqueOrThrow({ where: { id: user.mergedIntoUserId }, select: { id: true, mergedIntoUserId: true, appEntryAdExempt: true } });
     const launchRecord = await saveLaunchContext(app, request, user.id, context);
-    if (context.releaseId) {
-      try {
-        const reviewExemptionStartedAt = performance.now();
-        await exemptIpForReviewRelease({
-          db: app.sharedPrisma,
-          miniAppKey: app.config.MINI_APP_KEY,
-          releaseId: context.releaseId,
-          ipAddress: request.ip
-        });
-        addDatabaseDuration(request, performance.now() - reviewExemptionStartedAt);
-      } catch (error) {
-        request.log.warn({ err: error }, 'Review release IP exemption could not be applied');
-      }
-    }
+    await applyReviewIpExemption(app, request, context.releaseId);
     const localEntryAd = context.localEntryAd === true && localEntryAdMiniApps.has(app.config.MINI_APP_KEY);
     if (!localEntryAd) return launchRecord;
 
