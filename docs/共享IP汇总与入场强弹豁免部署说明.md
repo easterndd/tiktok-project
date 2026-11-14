@@ -40,3 +40,16 @@ psql "$SHARED_PLATFORM_DATABASE_URL" -v ON_ERROR_STOP=1 \
 4. 在后台添加测试 IP 豁免，确认“广告配置”页能显示豁免记录。
 5. 用该 IP 访问任一小程序，确认入场强弹跳过；再确认剧集解锁广告仍按原策略运行。
 6. 把一个测试版本 `releaseId` 的状态改为 `In review`，用该版本启动小程序，确认“广告配置”页出现备注为 `AUTO_REVIEW: <miniAppKey>:<releaseId>` 的豁免记录；改回 `Released` 后新的启动不再写入。
+
+## 快速验证脚本
+
+```bash
+API_BASE=https://api.example.com/api/v1 \
+ADMIN_EMAIL='<owner 邮箱>' ADMIN_PASSWORD='<密码>' \
+MINI_APP_KEY=taletv RELEASE_ID=taletv-20261114-smoke \
+bash scripts/review-exemption-smoke.sh
+```
+
+脚本会依次完成：管理员登录 → 登记/置为 `IN_REVIEW` → 匿名启动该版本 → 校验共享库出现 `AUTO_REVIEW:` 豁免行 → 用未登记版本做反向校验。追加 `CLEANUP=1` 可在结束时删除本次豁免并把状态改回 `RELEASED`。
+
+脚本以执行机出口 IP 触发写入，因此只能验证“链路是否通”；如需验证真实终端 IP，请用手机打开对应版本的预览包，然后在后台“广告配置”页核对 IP 与备注。
