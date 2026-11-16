@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily docker cleanup (containers, images, build cache)
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=600
+Persistent=true
+Unit=docker-gc.service
+
+[Install]
+WantedBy=timers.target

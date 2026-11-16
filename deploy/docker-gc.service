@@ -1,0 +1,12 @@
+[Unit]
+Description=Reclaim docker containers, images and build cache
+Documentation=file:///opt/quickreels/deploy/docker-gc.sh
+
+[Service]
+Type=oneshot
+Environment=CONTAINER_KEEP_HOURS=72
+Environment=IMAGE_KEEP_HOURS=168
+Environment=BUILD_CACHE_MAX=2gb
+ExecStart=/opt/quickreels/deploy/docker-gc.sh
+Nice=10
+IOSchedulingClass=idle
