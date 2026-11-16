@@ -10,6 +10,7 @@ import { classifyLaunchAttribution } from '../../services/launch-attribution.ser
 import { requestCountry } from '../../lib/content-visibility';
 import { isClientDualRelease, isEnhancedAdRelease, resolveAdPlacementPolicy, sessionAllowedPlacementIds, supportsClientDualApp, v007InterstitialPrimary, type AdClientPlatform } from '../ads/ad-placement-policy';
 import { supportsLaunchAttribution } from './launch-attribution-policy';
+import { activeEntryAdTestAccount, testAccountAttributionDecision } from '../../services/entry-ad-test-account.service';
 
 const policyId = 'default';
 const sessionTtlMs = 15 * 60 * 1000;
@@ -266,13 +267,18 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       // Do not show an ad when the highest-priority check is unavailable.
       return { required: false as const, decision: 'SUPPRESS' as const, decisionReason: 'IP_CHECK_UNAVAILABLE', launchRef };
     }
+    const testAccountActive = Boolean(usesLaunchAttribution && launchRecord?.localAttributionStatus === 'UNATTRIBUTED' && !decision && await measureDatabase(request, async () => {
+      const viewer = await app.prisma.user.findUnique({ where: { id: request.user.sub }, select: { mergedIntoUserId: true } });
+      return activeEntryAdTestAccount(app.sharedPrisma, app.config.MINI_APP_KEY, viewer?.mergedIntoUserId ?? request.user.sub);
+    }).catch((error) => { request.log.warn({ err: error }, 'Entry-ad test account lookup failed'); return false; }));
     if (usesLaunchAttribution && launchRecord) {
       if (decision?.decision === 'SUPPRESS') return { required: false as const, decisionId: decision.id, decision: 'SUPPRESS' as const, decisionReason: decision.reason, launchRef };
-      if (!decision && launchRecord.localAttributionStatus !== 'ATTRIBUTED') {
-        const reason = launchRecord.localAttributionStatus === 'AD_ID_CONFLICT' ? 'AD_ID_CONFLICT'
-          : launchRecord.localAttributionStatus === 'INVALID' ? 'INVALID_ATTRIBUTION_SIGNAL' : 'UNATTRIBUTED';
-        const suppressed = await saveDecision({ attributionStatus: launchRecord.localAttributionStatus, decision: 'SUPPRESS', reason });
-        return { required: false as const, decisionId: suppressed?.id, decision: 'SUPPRESS' as const, decisionReason: reason, launchRef };
+      if (!decision) {
+        const attributionDecision = testAccountAttributionDecision(launchRecord.localAttributionStatus, testAccountActive);
+        if (!attributionDecision.allowed) {
+          const suppressed = await saveDecision({ attributionStatus: launchRecord.localAttributionStatus, decision: 'SUPPRESS', reason: attributionDecision.reason });
+          return { required: false as const, decisionId: suppressed?.id, decision: 'SUPPRESS' as const, decisionReason: attributionDecision.reason, launchRef };
+        }
       }
     }
     if (!attributionRelease && app.rootConfig.ENTRY_AD_ATTRIBUTION_GATE_ENABLED) {
@@ -355,7 +361,9 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       session = await measureDatabase(request, () => app.prisma.appEntryAdSession.findUnique({ where: { userId_releaseId_launchId: { userId: request.user.sub, releaseId, launchId } } }));
       if (!session) throw error;
     }
-    const savedDecision = decision ?? await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SHOW', reason: 'ENTRY_AD_REQUIRED', policyVersion: policy.version, requiredCount: policy.requiredCount, countMode: policy.countMode, sessionId: session.id });
+    const savedDecision = decision ?? await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SHOW',
+      reason: launchRecord ? testAccountAttributionDecision(launchRecord.localAttributionStatus, testAccountActive).reason : 'ENTRY_AD_REQUIRED',
+      policyVersion: policy.version, requiredCount: policy.requiredCount, countMode: policy.countMode, sessionId: session.id });
     if (savedDecision?.decision === 'SUPPRESS') return { required: false as const, decisionId: savedDecision.id, decision: 'SUPPRESS' as const, decisionReason: savedDecision.reason, launchRef };
     return { ...sessionResponse(session, policy.onUnavailable, responseFlowVersion), ...(savedDecision ? { decisionId: savedDecision.id, decision: 'SHOW' as const, decisionReason: savedDecision.reason, launchRef } : {}) };
     });

@@ -116,6 +116,7 @@ async function createPrismaStub() {
     sharedIps: new Map<string, any>(),
     sharedVisits: new Map<string, any>(),
     sharedExemptions: new Map<string, any>(),
+    entryAdTestAccounts: new Map<string, any>(),
     playbackSessions: new Map<string, any>(),
     completionEvents: new Map<string, any>(),
     uiConfigVersions: new Map<number, any>(),
@@ -287,6 +288,22 @@ async function createPrismaStub() {
         return value;
       },
       findMany: async () => [...state.miniAppEntryAdDecisions.values()]
+    },
+    entryAdTestAccount: {
+      findUnique: async ({ where }: any) => state.entryAdTestAccounts.get(`${where.miniAppKey_userId.miniAppKey}:${where.miniAppKey_userId.userId}`) ?? null,
+      findMany: async ({ where }: any) => [...state.entryAdTestAccounts.values()].filter((item) => item.miniAppKey === where.miniAppKey),
+      upsert: async ({ where, create, update }: any) => {
+        const key = `${where.miniAppKey_userId.miniAppKey}:${where.miniAppKey_userId.userId}`;
+        const value = { ...(state.entryAdTestAccounts.get(key) ?? create), ...update };
+        state.entryAdTestAccounts.set(key, value);
+        return value;
+      },
+      update: async ({ where, data }: any) => {
+        const key = `${where.miniAppKey_userId.miniAppKey}:${where.miniAppKey_userId.userId}`;
+        const value = { ...state.entryAdTestAccounts.get(key), ...data };
+        state.entryAdTestAccounts.set(key, value);
+        return value;
+      }
     },
     clientAnalyticsEvent: {
       createMany: async ({ data }: any) => {
@@ -2112,6 +2129,60 @@ describe('QuicK ReeLS API', () => {
     const adminQuery = await app.inject({ url: `${base}/admin/launch-attribution?launchId=${naturalLaunchId}`, headers: adminHeaders });
     assert.equal(adminQuery.statusCode, 200);
     assert.equal(adminQuery.json().items[0].decision.reason, 'UNATTRIBUTED');
+  });
+
+  it('manages entry-ad test accounts by app and user ID without changing the real attribution', async () => {
+    const zenclipDb = await createPrismaStub();
+    const app = await createTestApp({
+      ZENCLIP_DATABASE_URL: 'postgresql://test:test@localhost:5432/zenclip',
+      ZENCLIP_TIKTOK_APP_ID: '7695973362471929908'
+    }, { miniPrisma: { zenclip: zenclipDb as unknown as PrismaClient } });
+    apps.push(app);
+    const base = '/api/zenclip/v1';
+    const releaseId = 'zenclip-v007-dual-test-account';
+    const owner = { authorization: `Bearer ${app.jwt.sign({ sub: 'admin-1', kind: 'admin', appKey: 'zenclip', role: 'OWNER', tokenVersion: 0 })}` };
+    const viewer = { authorization: `Bearer ${app.jwt.sign({ sub: 'user-1', kind: 'user', appKey: 'zenclip' })}` };
+    const policy = await app.inject({ method: 'PUT', url: `${base}/admin/app-entry-ad-policy`, headers: owner,
+      payload: { releaseId, enabled: true, mode: 'REWARDED_GATED', placementId: 'ad7695690471826311220', requiredCount: 3, countMode: 'SHOWN', onUnavailable: 'ALLOW' } });
+    assert.equal(policy.statusCode, 200, policy.body);
+    const wrongUser = await app.inject({ method: 'POST', url: `${base}/admin/shared/entry-ad-test-accounts`, headers: owner,
+      payload: { miniAppKey: 'zenclip', userId: 'unknown-user' } });
+    assert.equal(wrongUser.statusCode, 404);
+    const added = await app.inject({ method: 'POST', url: `${base}/admin/shared/entry-ad-test-accounts`, headers: owner,
+      payload: { miniAppKey: 'zenclip', userId: 'user-1', note: 'VPN tester' } });
+    assert.equal(added.statusCode, 200, added.body);
+    const listed = await app.inject({ url: `${base}/admin/shared/entry-ad-test-accounts?miniAppKey=zenclip`, headers: owner });
+    assert.equal(listed.statusCode, 200, listed.body);
+    assert.equal(listed.json().items[0].userId, 'user-1');
+    const enter = async (ip: string, query: Record<string, string>) => {
+      const launchId = randomUUID();
+      const context = await app.inject({ method: 'POST', url: `${base}/auth/launch-context`, headers: viewer, remoteAddress: ip,
+        payload: { launchId, entryId: launchId, releaseId, launchQuery: query } });
+      assert.equal(context.statusCode, 200, context.body);
+      const response = await app.inject({ method: 'POST', url: `${base}/app-entry-ad-sessions`, headers: viewer, remoteAddress: ip,
+        payload: { launchId, launchRef: context.json().launchRef, launchAttributionVersion: 1, releaseId, platform: 'android', entryFlowVersion: 2 } });
+      assert.equal(response.statusCode, 200, response.body);
+      return { launchId, context: context.json(), response: response.json() };
+    };
+    const natural = await enter('198.51.100.110', {});
+    assert.equal(natural.context.attribution.status, 'UNATTRIBUTED');
+    assert.equal(natural.response.required, true);
+    assert.equal(natural.response.requiredCount, 3);
+    assert.equal(natural.response.decisionReason, 'TEST_ACCOUNT_OVERRIDE');
+    assert.equal([...((zenclipDb as any)._state.miniAppLaunches.values())].find((item: any) => item.launchId === natural.launchId).localAttributionStatus, 'UNATTRIBUTED');
+    const paid = await enter('198.51.100.111', { adId: '1880692531008737' });
+    assert.equal(paid.context.attribution.status, 'ATTRIBUTED');
+    assert.equal(paid.response.decisionReason, 'ENTRY_AD_REQUIRED');
+    await setEntryAdIpExemption(app.sharedPrisma, '198.51.100.112', 'global tester block', 'admin-1');
+    const ipBlocked = await enter('198.51.100.112', {});
+    assert.equal(ipBlocked.response.required, false);
+    assert.equal(ipBlocked.response.decisionReason, 'IP_EXEMPT');
+    const disabled = await app.inject({ method: 'PATCH', url: `${base}/admin/shared/entry-ad-test-accounts/user-1`, headers: owner,
+      payload: { miniAppKey: 'zenclip', enabled: false } });
+    assert.equal(disabled.statusCode, 200, disabled.body);
+    const naturalAfterDisable = await enter('198.51.100.113', {});
+    assert.equal(naturalAfterDisable.response.required, false);
+    assert.equal(naturalAfterDisable.response.decisionReason, 'UNATTRIBUTED');
   });
 
   it('uses one launch attribution decision per launch for all six single-placement pilot apps', async () => {

@@ -15,6 +15,7 @@ import { HealthPanel, type Health } from './health-panel';
 import { AudiencePage, AudienceCountries, PlaybackPage, type Audience, type Playback } from './analytics-pages';
 import { V006AdDiagnostics, V006ClientTraces, V006LaunchAttributionDiagnostics, V006PlayerDiagnostics } from './v006-diagnostics';
 import { ViewerAdControls } from './viewer-ad-controls';
+import { EntryAdTestAccounts } from './entry-ad-test-accounts';
 import { SharedIpControls } from './shared-ip-controls';
 import { MiniEntryLinks } from './mini-entry-links';
 import './styles.css';
@@ -1487,6 +1488,7 @@ function AdminApp() {
       </Panel>}
       {tab === 'audience' && !audience && !resourceStatus.audience?.error && <p className="load-placeholder">正在加载观众数据...</p>}
       {tab === 'links' && <MiniEntryLinks api={api} miniAppKey={activeApp} miniAppName={miniAppNames[activeApp]} />}
+      {tab === 'ads' && currentAdmin?.role === 'OWNER' && <EntryAdTestAccounts api={api} miniApps={organizationApps} currentMiniApp={activeApp} />}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <ViewerAdControls api={api} canEdit miniApps={organizationApps} currentMiniApp={activeApp} />}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <SharedIpControls api={api} canEdit miniApps={Object.entries(miniAppNames).map(([key, name]) => ({ key, name }))} />}
       {tab === 'ads' && v006DiagnosticApps.has(activeApp) && <V006AdDiagnostics api={api} releaseId={entryAdReleaseId} />}

@@ -817,6 +817,22 @@ model MiniAppEntryAdDecision {
   @@index([decision, reason, decidedAt])
 }
 
+// Stored in the shared database; userId belongs to the named Mini App database.
+model EntryAdTestAccount {
+  miniAppKey String
+  userId     String
+  enabled    Boolean  @default(true)
+  note       String?
+  expiresAt  DateTime
+  createdBy  String
+  updatedBy  String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([miniAppKey, userId])
+  @@index([enabled, expiresAt])
+}
+
 model AppEntryAdSession {
   id             String                  @id @default(cuid())
   userId         String

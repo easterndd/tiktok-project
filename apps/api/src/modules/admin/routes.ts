@@ -267,6 +267,25 @@ const sharedViewerQueryInput = viewerSearchInput.extend({ miniAppKey: z.enum(min
 const sharedViewerLaunchQueryInput = z.object({ miniAppKey: z.enum(miniAppKeys), limit: z.coerce.number().int().min(1).max(100).default(30), offset: z.coerce.number().int().min(0).max(1_000_000).default(0) });
 const sharedViewerAdBatchInput = viewerAdBatchInput.extend({ miniAppKey: z.enum(miniAppKeys) });
 const viewerParams = z.object({ userId: z.string().min(1).max(128) });
+const testAccountQuery = z.object({ miniAppKey: z.enum(miniAppKeys) });
+const testAccountInput = testAccountQuery.extend({
+  userId: z.string().trim().min(1).max(128),
+  note: z.string().trim().max(200).nullable().default(null),
+  expiresAt: z.string().datetime().optional()
+});
+const testAccountPatch = testAccountQuery.extend({
+  enabled: z.boolean(),
+  note: z.string().trim().max(200).nullable().optional(),
+  expiresAt: z.string().datetime().optional()
+});
+function testAccountExpiresAt(value?: string) {
+  const now = Date.now();
+  const expiresAt = value ? new Date(value) : new Date(now + 7 * 86_400_000);
+  if (expiresAt.getTime() <= now || expiresAt.getTime() > now + 90 * 86_400_000) {
+    throw Object.assign(new Error('测试账号有效期须在未来 90 天内。'), { statusCode: 400 });
+  }
+  return expiresAt;
+}
 const ipSearchInput = z.object({ search: z.string().trim().max(45).default(''), miniAppKey: z.enum(miniAppKeys).optional(), limit: z.coerce.number().int().min(1).max(100).default(30) });
 const ipVisitsInput = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), offset: z.coerce.number().int().min(0).max(1_000_000).default(0), miniAppKey: z.enum(miniAppKeys).optional() });
 const ipExemptionInput = z.object({ ipAddress: z.string().trim().min(3).max(45), note: z.string().trim().max(500).nullable().default(null) });
@@ -612,6 +631,58 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       return { ...viewer, miniAppKey, lastSeenAt: appSessions[0]?.lastSeenAt ?? null, countryCode: appSessions[0]?.countryCode ?? null, ipAddress: ips.get(viewer.id) || null,
         launchContext: launchContext ? { ...launchContext, attribution: classifyLaunchAttribution(launchContext.metadata) } : null };
     }) };
+  });
+  app.get('/admin/shared/entry-ad-test-accounts', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
+    const { miniAppKey } = testAccountQuery.parse(request.query);
+    assertSameMiniAppOrganization(app.config.MINI_APP_KEY, [miniAppKey]);
+    const authorized = await playbackAdminIds(app, request, [miniAppKey]);
+    if (!authorized[miniAppKey] || !app.miniAppPrisma[miniAppKey]) return reply.code(403).send({ error: { code: 'TARGET_ADMIN_REQUIRED', message: '请先登录目标小程序。', requestId: request.id } });
+    const items = await app.sharedPrisma.entryAdTestAccount.findMany({ where: { miniAppKey }, orderBy: { updatedAt: 'desc' }, take: 100 });
+    return { items };
+  });
+  app.post('/admin/shared/entry-ad-test-accounts', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
+    const input = testAccountInput.parse(request.body);
+    assertSameMiniAppOrganization(app.config.MINI_APP_KEY, [input.miniAppKey]);
+    const authorized = await playbackAdminIds(app, request, [input.miniAppKey]);
+    const targetDb = app.miniAppPrisma[input.miniAppKey];
+    const adminId = authorized[input.miniAppKey];
+    if (!adminId || !targetDb) return reply.code(403).send({ error: { code: 'TARGET_ADMIN_REQUIRED', message: '请先登录目标小程序。', requestId: request.id } });
+    const viewer = await targetDb.user.findUnique({ where: { id: input.userId }, select: { id: true, mergedIntoUserId: true, appEntryAdExempt: true } });
+    if (!viewer) return reply.code(404).send({ error: { code: 'VIEWER_NOT_FOUND', message: '目标小程序中不存在该用户 ID。', requestId: request.id } });
+    const userId = viewer.mergedIntoUserId ?? viewer.id;
+    const canonical = viewer.mergedIntoUserId ? await targetDb.user.findUnique({ where: { id: userId }, select: { appEntryAdExempt: true } }) : viewer;
+    if (!canonical || canonical.appEntryAdExempt) return reply.code(409).send({ error: { code: 'VIEWER_AD_EXEMPT', message: '请先取消该用户的入口广告豁免。', requestId: request.id } });
+    const expiresAt = testAccountExpiresAt(input.expiresAt);
+    const item = await app.sharedPrisma.entryAdTestAccount.upsert({
+      where: { miniAppKey_userId: { miniAppKey: input.miniAppKey, userId } },
+      create: { miniAppKey: input.miniAppKey, userId, enabled: true, note: input.note, expiresAt, createdBy: adminId, updatedBy: adminId },
+      update: { enabled: true, note: input.note, expiresAt, updatedBy: adminId }
+    });
+    await auditTo(targetDb, adminId, 'UPDATE', 'EntryAdTestAccount', userId, { enabled: true, expiresAt, note: input.note });
+    return { item };
+  });
+  app.patch('/admin/shared/entry-ad-test-accounts/:userId', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
+    const { userId } = viewerParams.parse(request.params);
+    const input = testAccountPatch.parse(request.body);
+    assertSameMiniAppOrganization(app.config.MINI_APP_KEY, [input.miniAppKey]);
+    const authorized = await playbackAdminIds(app, request, [input.miniAppKey]);
+    const targetDb = app.miniAppPrisma[input.miniAppKey];
+    const adminId = authorized[input.miniAppKey];
+    if (!adminId || !targetDb) return reply.code(403).send({ error: { code: 'TARGET_ADMIN_REQUIRED', message: '请先登录目标小程序。', requestId: request.id } });
+    if (input.enabled) {
+      const viewer = await targetDb.user.findUnique({ where: { id: userId }, select: { appEntryAdExempt: true } });
+      if (!viewer || viewer.appEntryAdExempt) return reply.code(409).send({ error: { code: 'VIEWER_AD_EXEMPT', message: '用户不存在或已豁免入口广告。', requestId: request.id } });
+    }
+    const existing = await app.sharedPrisma.entryAdTestAccount.findUnique({ where: { miniAppKey_userId: { miniAppKey: input.miniAppKey, userId } } });
+    if (!existing) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '测试账号不存在。', requestId: request.id } });
+    const expiresAt = input.enabled && (!existing.enabled || existing.expiresAt <= new Date())
+      ? testAccountExpiresAt(input.expiresAt) : input.expiresAt ? testAccountExpiresAt(input.expiresAt) : undefined;
+    const item = await app.sharedPrisma.entryAdTestAccount.update({
+      where: { miniAppKey_userId: { miniAppKey: input.miniAppKey, userId } },
+      data: { enabled: input.enabled, note: input.note, expiresAt, updatedBy: adminId }
+    });
+    await auditTo(targetDb, adminId, 'UPDATE', 'EntryAdTestAccount', userId, { enabled: input.enabled, expiresAt: item.expiresAt, note: input.note });
+    return { item };
   });
   app.get('/admin/shared/viewers/:userId/launches', { preHandler: requirePermission('admin.manage') }, async (request, reply) => {
     const { userId } = viewerParams.parse(request.params);
