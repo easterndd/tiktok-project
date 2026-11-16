@@ -3,6 +3,7 @@ import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { v006Placements, validateV006Placements } from './v006-placements.mjs';
+import { v007Placements, validateV007Placements } from './v007-placements.mjs';
 
 const appRoot = process.cwd();
 const appKey = basename(appRoot) === 'mini-web' ? 'main' : basename(appRoot);
@@ -13,7 +14,8 @@ const stamp = builtAt.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z
 const v005Apps = new Set(['bloomreel', 'quillshort', 'amberplay', 'nimbusclip', 'runereel']);
 const attributionApps = new Set(['zenclip', 'storyworld', 'dailyreel', 'elitedrama', 'sonicreel', 'orbitplay']);
 validateV006Placements();
-const version = appKey in v006Placements ? 'v006-dual-' : attributionApps.has(appKey) ? 'attr1-' : v005Apps.has(appKey) ? 'v005-' : '';
+validateV007Placements(v006Placements);
+const version = appKey in v006Placements ? 'v006-dual-' : appKey in v007Placements ? 'v007-dual-' : attributionApps.has(appKey) ? 'attr1-' : v005Apps.has(appKey) ? 'v005-' : '';
 const releaseId = `${appKey}-${version}${stamp}-${randomBytes(3).toString('hex')}`;
 const env = { ...process.env, VITE_MINI_RELEASE_ID: releaseId };
 

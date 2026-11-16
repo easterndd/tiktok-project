@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import type { FastifyInstance } from 'fastify';
-import { assertV006PlacementPair, invalidateAdPlacementPolicyCache, resolveAdPlacementPolicy } from './ad-placement-policy';
+import { assertV006PlacementPair, invalidateAdPlacementPolicyCache, resolveAdPlacementPolicy, v007InterstitialPrimary } from './ad-placement-policy';
 
 const primary = 'ad7690961683200739334';
 const backup = 'ad7698686827641587732';
@@ -88,4 +88,33 @@ it('authorizes the new client-managed pair without a database switch and preserv
   assert.deepEqual((await resolveAdPlacementPolicy(wrongAppId, {
     releaseId: 'heartreel-v006-dual-test', adType: 'REWARDED', primaryPlacementId: primary, platform: 'android'
   })).placementIds, [primary]);
+});
+
+it('authorizes v0.0.7 client-managed placements for each of the six apps and keeps legacy releases single-placement', async () => {
+  const cases = [
+    ['zenclip', '7695973362471929908', 'ad7695690471826311220', 'ad7706462142492575762', 'ad7706939601122904085'],
+    ['storyworld', '7688988654946158599', 'ad7690424980064389121', 'ad7706898624479889428', 'ad7706875180212226069'],
+    ['dailyreel', '7688950749593913351', 'ad7690436762560169990', 'ad7706885627602585620', 'ad7707670435895445524'],
+    ['elitedrama', '7694143310880966677', 'ad7691072182843131925', 'ad7706873514356705301', 'ad7708210893989087252'],
+    ['sonicreel', '7698254187724883989', 'ad7696851608764467252', 'ad7706882804299401237', 'ad7698651598784448564'],
+    ['orbitplay', '7695972730596050962', 'ad7695711655645317121', 'ad7701602721589561345', 'ad7698648496551315457']
+  ] as const;
+  for (const [appKey, appId, primary, backup, interstitial] of cases) {
+    const app = {
+      config: { MINI_APP_KEY: appKey, TIKTOK_APP_ID: appId },
+      prisma: { adPlacementPair: { findUnique: () => { throw new Error('v007 must not query the placement pair table'); } } }
+    } as unknown as FastifyInstance;
+    const releaseId = `${appKey}-v007-dual-test`;
+    for (const platform of ['android', 'ios', 'unknown'] as const) {
+      const policy = await resolveAdPlacementPolicy(app, { releaseId, adType: 'REWARDED', primaryPlacementId: primary, platform });
+      assert.deepEqual(policy.placementIds, [primary, backup]);
+      assert.equal(policy.strategyVariant, platform === 'android' ? 'ANDROID_DUAL_CLIENT' : platform === 'ios' ? 'IOS_SINGLE_CLIENT' : 'SINGLE_CLIENT');
+    }
+    assert.equal(v007InterstitialPrimary(appKey, releaseId, appId), interstitial);
+    assert.equal(v007InterstitialPrimary(appKey, `${appKey}-attr1-test`, appId), null);
+    assert.deepEqual((await resolveAdPlacementPolicy(app, { releaseId: `${appKey}-attr1-test`, adType: 'REWARDED', primaryPlacementId: primary, platform: 'android' })).placementIds, [primary]);
+    assert.deepEqual((await resolveAdPlacementPolicy(app, { releaseId, adType: 'REWARDED', primaryPlacementId: backup, platform: 'android' })).placementIds, [backup]);
+    const wrongAppId = { ...app, config: { MINI_APP_KEY: appKey, TIKTOK_APP_ID: 'wrong' } } as FastifyInstance;
+    assert.deepEqual((await resolveAdPlacementPolicy(wrongAppId, { releaseId, adType: 'REWARDED', primaryPlacementId: primary, platform: 'android' })).placementIds, [primary]);
+  }
 });

@@ -9,7 +9,7 @@ import { LoadingState } from '../components/LoadingState';
 import { useEntryAdReady } from '../components/EntryAdGate';
 import { prepareRewardedUnlockSession, unlockEpisodeByRewardedAd } from '../features/ads/rewarded-ad';
 import { startEpisodeInterstitialPolicy } from '../features/ads/app-entry-ad';
-import { getAdPlatform, getMiniReleaseId, isV006Release } from '../features/ads/ad-platform';
+import { getAdPlatform, getMiniReleaseId, isEnhancedAdRelease, isV006Release } from '../features/ads/ad-platform';
 import { configureEpisodeInterstitial, prepareEpisodeInterstitial, showEpisodeTransitionInterstitial, startEpisodeInterstitialSchedule } from '../features/ads/episode-interstitial';
 import { ApiError, apiClient } from '../lib/api-client';
 import { reportDiagnostic, reportPerformance } from '../lib/diagnostics';
@@ -74,7 +74,7 @@ export function WatchPage() {
   }, [interstitialConfig.data, v005App]);
   useEffect(() => { prepareEpisodeInterstitial(interstitialPlacementId); }, [interstitialPlacementId]);
   useEffect(() => {
-    if (isV006Release(releaseId) || !entryAdReady || (v005App && !playbackActive) || !interstitialPlacementId || !interstitialConfig.data?.enabled) return;
+    if (isEnhancedAdRelease(releaseId) || !entryAdReady || (v005App && !playbackActive) || !interstitialPlacementId || !interstitialConfig.data?.enabled) return;
     return startEpisodeInterstitialSchedule(interstitialPlacementId, () => mounted.current && document.visibilityState !== 'hidden');
   }, [entryAdReady, playbackActive, v005App, releaseId, interstitialConfig.data?.enabled, interstitialPlacementId]);
   useEffect(() => {
@@ -190,9 +190,9 @@ export function WatchPage() {
       setEpisodePickerOpen(false);
       if (naturalTransition && interstitialPlacementId) {
         transitionPending.current = true;
-        if (isV006Release(releaseId)) setTransitionAdPending(true);
+        if (isEnhancedAdRelease(releaseId)) setTransitionAdPending(true);
         void new Promise<void>((resolve) => {
-          if (!isV006Release(releaseId) || document.visibilityState === 'hidden') { resolve(); return; }
+          if (!isEnhancedAdRelease(releaseId) || document.visibilityState === 'hidden') { resolve(); return; }
           const fallback = window.setTimeout(resolve, 100);
           requestAnimationFrame(() => { window.clearTimeout(fallback); resolve(); });
         }).then(() => showEpisodeTransitionInterstitial(interstitialPlacementId)).catch(() => undefined).then((closedAt) => {
@@ -256,7 +256,7 @@ export function WatchPage() {
       requestStartedAt={observePlayback ? playRequest.current.startedAt : undefined}
       onPlaybackActiveChange={observePlayback ? setPlaybackActive : undefined}
       adTransitionPending={transitionAdPending}
-      rewardedAdPending={isV006Release(releaseId) && (unlock.isPending || retentionUnlock.isPending)}
+      rewardedAdPending={isEnhancedAdRelease(releaseId) && (unlock.isPending || retentionUnlock.isPending)}
       observePlayback={observePlayback}
       playlist={playerPlaylist}
       onEpisodeEnded={() => requestEpisode(nextEpisode, true)}

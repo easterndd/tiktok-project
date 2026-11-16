@@ -8,7 +8,7 @@ const hooks = registerHooks({
       return { url: `data:text/javascript,${encodeURIComponent('export const storagePrefix = "entry-ad-test";')}`, shortCircuit: true };
     }
     if (context.parentURL?.endsWith('/features/ads/entry-ad-placements.ts') && specifier === './ad-platform') {
-      return { url: `data:text/javascript,${encodeURIComponent('export const isV006Release = (release) => release.includes("-v006-"); export const getMiniReleaseId = () => "default";')}`, shortCircuit: true };
+      return { url: `data:text/javascript,${encodeURIComponent('export const isEnhancedAdRelease = (release) => /-v006-|-v007-dual-/.test(release); export const getMiniReleaseId = () => "default";')}`, shortCircuit: true };
     }
     return next(specifier, context);
   }

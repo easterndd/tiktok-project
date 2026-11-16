@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { parseArgs } from 'node:util';
 import { loadEnv } from '../config/env';
 import { configuredMiniAppKeys, miniAppEnvironment, type MiniAppKey } from '../config/mini-apps';
-import { supportsV006DualApp } from '../modules/ads/ad-placement-policy';
+import { supportsClientDualApp } from '../modules/ads/ad-placement-policy';
 
 async function prune(client: PrismaClient, cutoff: Date) {
   let sessions = 0;
@@ -35,7 +35,7 @@ async function main() {
   const days = Number(values.days);
   if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error('--days must be an integer from 1 to 90.');
   const keys = (values.expect ?? '').split(',').map((key) => key.trim()).filter(Boolean);
-  if (!keys.length || keys.some((key) => !supportsV006DualApp(key)) || new Set(keys).size !== keys.length) {
+  if (!keys.length || keys.some((key) => !supportsClientDualApp(key)) || new Set(keys).size !== keys.length) {
     throw new Error('Pass --expect=dramaflicks,heartreel,sweetreel,luxereel (or an explicit subset).');
   }
   const env = loadEnv();

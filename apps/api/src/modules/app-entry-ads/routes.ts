@@ -8,7 +8,7 @@ import { serialByKey, singleFlight } from '../../lib/single-flight';
 import { exemptIpForReviewRelease, isEntryAdIpExempt, queueSharedIpVisit } from '../../services/shared-ip.service';
 import { classifyLaunchAttribution } from '../../services/launch-attribution.service';
 import { requestCountry } from '../../lib/content-visibility';
-import { isV006DualRelease, isV006Release, resolveAdPlacementPolicy, sessionAllowedPlacementIds, supportsV006DualApp, type AdClientPlatform } from '../ads/ad-placement-policy';
+import { isClientDualRelease, isEnhancedAdRelease, resolveAdPlacementPolicy, sessionAllowedPlacementIds, supportsClientDualApp, v007InterstitialPrimary, type AdClientPlatform } from '../ads/ad-placement-policy';
 import { supportsLaunchAttribution } from './launch-attribution-policy';
 
 const policyId = 'default';
@@ -54,7 +54,7 @@ function disabledPolicy(app: FastifyInstance, releaseId = 'default') {
     enabled: false,
     exitRetentionEnabled: false,
     exitRetentionAdCount: 1,
-    episodeInterstitialEnabled: !isV006Release(releaseId),
+    episodeInterstitialEnabled: !isEnhancedAdRelease(releaseId),
     episodeInterstitialInitialDelaySeconds: 30,
     episodeInterstitialIntervalSeconds: v005 ? 40 : 60,
     episodeInterstitialMinIntervalSeconds: v005 ? 40 : 180,
@@ -179,7 +179,8 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
   app.get('/episode-interstitial/config', { preHandler: requireUser }, async (request) => {
     const { releaseId, platform } = z.object({ releaseId: releaseIdSchema, platform: z.enum(['ios', 'android', 'unknown']).default('unknown') }).parse(request.query);
     const policy = await measureDatabase(request, () => readAppEntryAdPolicy(app, releaseId));
-    const placementId = miniAppAdConfig(app.config).episodeInterstitialPlacementId;
+    const placementId = v007InterstitialPrimary(app.config.MINI_APP_KEY, releaseId, app.config.TIKTOK_APP_ID)
+      ?? miniAppAdConfig(app.config).episodeInterstitialPlacementId;
     const placementPolicy = await resolveAdPlacementPolicy(app, { releaseId, adType: 'INTERSTITIAL', primaryPlacementId: placementId, platform });
     return {
       enabled: policy.episodeInterstitialEnabled && Boolean(placementId),
@@ -209,7 +210,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     }, (error) => request.log.warn({ err: error }, 'Shared IP visit could not be recorded'));
     return singleFlight(app, `entry-session:${request.user.sub}:${request.ip}:${releaseId}:${launchId}:${JSON.stringify([adId, launchRef, launchAttributionVersion, entryFlowVersion, platform])}`, async () => {
     const attributionRelease = supportsLaunchAttribution(app.config.MINI_APP_KEY, releaseId);
-    const usesLaunchAttribution = attributionRelease && (!isV006DualRelease(releaseId) || launchAttributionVersion === 1 || Boolean(launchRef));
+    const usesLaunchAttribution = attributionRelease && (!isClientDualRelease(releaseId) || launchAttributionVersion === 1 || Boolean(launchRef));
     let launchRecord: Awaited<ReturnType<typeof app.prisma.miniAppLaunch.findUnique>> | null = null;
     let decision: { id: string; decision: string; reason: string } | null = attributionRelease && launchRef
       ? await app.prisma.miniAppEntryAdDecision.findUnique({ where: { launchRef } }) : null;
@@ -292,7 +293,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
       const saved = await saveDecision({ attributionStatus: launchRecord?.localAttributionStatus ?? 'UNKNOWN', decision: 'SUPPRESS', reason: 'POLICY_DISABLED', policyVersion: policy.version });
       return { required: false as const, ...(saved ? { decisionId: saved.id, decision: 'SUPPRESS' as const, decisionReason: saved.reason, launchRef } : {}) };
     }
-    responseFlowVersion = entryFlowVersion === 2 && supportsV006DualApp(app.config.MINI_APP_KEY) && isV006DualRelease(releaseId) && policy.mode === 'REWARDED_GATED' ? 2 : undefined;
+    responseFlowVersion = entryFlowVersion === 2 && supportsClientDualApp(app.config.MINI_APP_KEY) && isClientDualRelease(releaseId) && policy.mode === 'REWARDED_GATED' ? 2 : undefined;
     const placementPolicy = await resolveAdPlacementPolicy(app, {
       releaseId,
       adType: policy.mode === 'INTERSTITIAL' ? 'INTERSTITIAL' : 'REWARDED',
@@ -368,7 +369,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     const { sessionId } = sessionParams.parse(request.params);
     const { observations } = observationsInput.parse(request.body);
     const session = await app.prisma.appEntryAdSession.findUnique({ where: { id: sessionId } });
-    if (!session || session.userId !== request.user.sub || !supportsV006DualApp(app.config.MINI_APP_KEY) || !isV006DualRelease(session.releaseId) || session.mode !== 'REWARDED_GATED') {
+    if (!session || session.userId !== request.user.sub || !supportsClientDualApp(app.config.MINI_APP_KEY) || !isClientDualRelease(session.releaseId) || session.mode !== 'REWARDED_GATED') {
       return reply.code(409).send({ error: { code: 'ENTRY_SESSION_UNAVAILABLE', message: 'Entry ad session is unavailable.', requestId: request.id } });
     }
     const allowed = sessionAllowedPlacementIds(session);
@@ -518,7 +519,7 @@ export async function registerAppEntryAdRoutes(app: FastifyInstance) {
     if (placementId && !allowedPlacementIds.includes(placementId)) {
       return reply.code(409).send({ error: { code: 'PLACEMENT_NOT_ALLOWED', message: 'This placement is not allowed for the entry-ad session.', requestId: request.id } });
     }
-    if (isV006Release(session.releaseId) && session.allowedPlacementIds.length > 0) {
+    if (isEnhancedAdRelease(session.releaseId) && session.allowedPlacementIds.length > 0) {
       if (!placementId) return reply.code(400).send({ error: { code: 'PLACEMENT_REQUIRED', message: 'A placement ID is required for this release.', requestId: request.id } });
       const event = await measureDatabase(request, () => app.prisma.adEvent.findUnique({ where: { userId_clientEventId: { userId: request.user.sub, clientEventId } } }));
       if (!event || event.eventType !== 'SHOWN' || event.scope !== 'APP_ENTRY' || event.appEntrySessionId !== sessionId

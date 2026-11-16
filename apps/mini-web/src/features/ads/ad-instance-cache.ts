@@ -1,4 +1,4 @@
-import { getAdPlatform, isV006DualRelease, isV006Release, type AdLoadMode } from './ad-platform';
+import { getAdPlatform, isClientDualRelease, isEnhancedAdRelease, type AdLoadMode } from './ad-platform';
 import { captureClientTrace } from '../../lib/client-trace';
 
 type SdkCallbackSnapshot = { name: string; payload: unknown; capturedAt: string };
@@ -162,7 +162,7 @@ function prepare<T extends NativeAd>(ad: T, host: NonNullable<Window['TTMinis']>
         finish(error);
       }
     });
-    if (isV006Release() && getAdPlatform() === 'android') {
+    if (isEnhancedAdRelease() && getAdPlatform() === 'android') {
       const previous = androidLoadGates.get(adUnitId) ?? Promise.resolve();
       ready = previous.then(() => {
         if (disposedAds.has(ad)) throw new Error('AD_INSTANCE_RELEASED');
@@ -208,7 +208,7 @@ function addPrepared<T extends NativeAd>(
   });
   if (pool.length) map.set(adUnitId, pool);
   else map.delete(adUnitId);
-  const limit = isV006DualRelease() && getAdPlatform() === 'android' ? maxDualPreparedAds : maxPreparedAds;
+  const limit = isClientDualRelease() && getAdPlatform() === 'android' ? maxDualPreparedAds : maxPreparedAds;
   while (pool.length < Math.min(limit, count) && preparedCount() < limit) {
     try {
       const ad = create();
@@ -231,7 +231,7 @@ export function prewarmRewardedAd(adUnitId: string, count = 1, loadMode: AdLoadM
 }
 
 export function prewarmRewardedPlacements(adUnitIds: string[], loadMode: AdLoadMode = 'EXPLICIT_LOAD') {
-  const ids = isV006Release() && getAdPlatform() !== 'android' ? adUnitIds.slice(0, 1) : adUnitIds;
+  const ids = isEnhancedAdRelease() && getAdPlatform() !== 'android' ? adUnitIds.slice(0, 1) : adUnitIds;
   for (const id of ids) prewarmRewardedAd(id, 1, loadMode);
 }
 
@@ -245,14 +245,14 @@ export function primeEntryRewardedPool(adUnitIds: string[], loadMode: AdLoadMode
   const primaryId = adUnitIds[0];
   if (!primaryId || loadMode === 'DIRECT_SHOW') return;
   prewarmRewardedAd(primaryId, 1, loadMode);
-  if (!isV006DualRelease() || getAdPlatform() !== 'android' || adUnitIds.length < 2) return;
+  if (!isClientDualRelease() || getAdPlatform() !== 'android' || adUnitIds.length < 2) return;
   prewarmRewardedAd(adUnitIds[1], 1, loadMode);
   const firstReady = adUnitIds.slice(0, 2).map((id) => rewardedAds.get(id)?.[0]?.ready).filter((ready): ready is Promise<void> => Boolean(ready));
   if (firstReady.length) void Promise.any(firstReady).then(() => refillEntryRewardedPool(adUnitIds, loadMode), () => undefined);
 }
 
 export function refillEntryRewardedPool(adUnitIds: string[], loadMode: AdLoadMode = 'EXPLICIT_LOAD') {
-  if (loadMode === 'DIRECT_SHOW' || !isV006DualRelease() || getAdPlatform() !== 'android') return;
+  if (loadMode === 'DIRECT_SHOW' || !isClientDualRelease() || getAdPlatform() !== 'android') return;
   for (const id of adUnitIds.slice(0, 2)) prewarmRewardedAd(id, 3, loadMode);
 }
 
@@ -262,7 +262,7 @@ export function getRewardedAd(adUnitId: string, prewarmNext = true, loadMode: Ad
   const pool = loadMode === 'DIRECT_SHOW' ? undefined : rewardedAds.get(adUnitId);
   const prepared = pool?.find((item) => item.host === host && item.loadMode === loadMode && item.state === 'ready')
     ?? pool?.find((item) => item.host === host && item.loadMode === loadMode);
-  const refillNow = prewarmNext && !(isV006Release() && getAdPlatform() === 'android');
+  const refillNow = prewarmNext && !(isEnhancedAdRelease() && getAdPlatform() === 'android');
   if (prepared) pool?.splice(pool.indexOf(prepared), 1);
   if (pool && pool.length === 0) rewardedAds.delete(adUnitId);
   if (prepared && prepared.host === host) {
@@ -315,7 +315,7 @@ export function prewarmInterstitialAd(adUnitId: string, count = 1, loadMode: AdL
 }
 
 export function prewarmInterstitialPlacements(adUnitIds: string[], loadMode: AdLoadMode = 'EXPLICIT_LOAD') {
-  const ids = isV006Release() && getAdPlatform() !== 'android' ? adUnitIds.slice(0, 1) : adUnitIds;
+  const ids = isEnhancedAdRelease() && getAdPlatform() !== 'android' ? adUnitIds.slice(0, 1) : adUnitIds;
   for (const id of ids) prewarmInterstitialAd(id, 1, loadMode);
 }
 
@@ -324,7 +324,7 @@ export function getInterstitialAd(adUnitId: string, prewarmNext = true, loadMode
   if (!host) throw new Error('TIKTOK_MINIS_UNAVAILABLE');
   const pool = loadMode === 'DIRECT_SHOW' ? undefined : interstitialAds.get(adUnitId);
   const prepared = pool?.find((item) => item.host === host && item.loadMode === loadMode);
-  const refillNow = prewarmNext && !(isV006Release() && getAdPlatform() === 'android');
+  const refillNow = prewarmNext && !(isEnhancedAdRelease() && getAdPlatform() === 'android');
   if (prepared) pool?.splice(pool.indexOf(prepared), 1);
   if (pool && pool.length === 0) interstitialAds.delete(adUnitId);
   if (prepared && prepared.host === host) {

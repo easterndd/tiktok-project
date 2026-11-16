@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 const hooks = registerHooks({
   resolve(specifier, context, next) {
     if (context.parentURL?.endsWith('/features/ads/entry-ad-flow.ts') && specifier === './ad-platform') {
-      return { url: 'data:text/javascript,export const getAdPlatform = () => globalThis.__entryFlowPlatform ?? "unknown"; export const isV006Release = () => globalThis.__entryFlowV006 ?? false;', shortCircuit: true };
+      return { url: 'data:text/javascript,export const getAdPlatform = () => globalThis.__entryFlowPlatform ?? "unknown"; export const isEnhancedAdRelease = () => globalThis.__entryFlowV006 ?? false;', shortCircuit: true };
     }
     if (context.parentURL?.includes('/features/ads/') && specifier.startsWith('./') && !/\.(?:ts|tsx|js)$/.test(specifier)) return next(`${specifier}.ts`, context);
     return next(specifier, context);

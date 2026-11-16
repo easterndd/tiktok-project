@@ -1,4 +1,4 @@
-import { supportsV006DualApp } from '../ads/ad-placement-policy';
+import { supportsV006DualApp, supportsV007DualApp } from '../ads/ad-placement-policy';
 
 const attributionPilotApps = new Set(['zenclip', 'storyworld', 'dailyreel', 'elitedrama', 'sonicreel', 'orbitplay']);
 
@@ -8,5 +8,6 @@ export function isAttributionPilotRelease(appKey: string, releaseId: string) {
 
 export function supportsLaunchAttribution(appKey: string, releaseId: string) {
   return (supportsV006DualApp(appKey) && releaseId.startsWith(`${appKey}-v006-dual-`))
+    || (supportsV007DualApp(appKey) && releaseId.startsWith(`${appKey}-v007-dual-`))
     || isAttributionPilotRelease(appKey, releaseId);
 }

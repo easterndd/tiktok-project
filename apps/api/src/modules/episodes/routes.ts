@@ -11,7 +11,7 @@ import { readExitRetentionConfig } from '../app-entry-ads/routes';
 import { isEpisodeFree, readMiniAppAccessConfig } from '../../lib/content-access';
 import { defaultLocale, publicLocaleSchema } from '../../lib/locales';
 import { isAlbumVisibleInCountry, publicAlbumWhere, requestCountry } from '../../lib/content-visibility';
-import { isV006Release, resolveAdPlacementPolicy, sessionAllowedPlacementIds, type AdClientPlatform } from '../ads/ad-placement-policy';
+import { isEnhancedAdRelease, resolveAdPlacementPolicy, sessionAllowedPlacementIds, type AdClientPlatform } from '../ads/ad-placement-policy';
 
 const params = z.object({ episodeId: z.string().min(1).max(128) });
 const sessionParams = params.extend({ sessionId: z.string().min(1).max(128) });
@@ -65,7 +65,7 @@ async function createOrResumeRewardSession(app: FastifyInstance, userId: string,
   const placementId = retention?.enabled ? retention.placementId : accessConfig.rewardedPlacementId;
   const requiredCount = retention?.enabled ? retention.requiredCount : accessConfig.rewardedAdCount;
   // Ordinary episode unlocks remain shared across builds; retention offers are per build.
-  const sessionReleaseId = purpose === 'EXIT_RETENTION' || isV006Release(releaseId) ? releaseId : 'default';
+  const sessionReleaseId = purpose === 'EXIT_RETENTION' || isEnhancedAdRelease(releaseId) ? releaseId : 'default';
   const placementPolicy = await resolveAdPlacementPolicy(app, {
     releaseId: sessionReleaseId,
     adType: 'REWARDED',

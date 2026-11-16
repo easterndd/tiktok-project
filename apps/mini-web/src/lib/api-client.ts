@@ -6,7 +6,7 @@ import { recordDebugRequest } from './analytics';
 import { boundedDebugValue, debugHeaders, debugQueryParams, debugResponseDetails } from './debug-network';
 import { debugPanelActive, debugRecordCaptureEnabled } from './debug-panel';
 import { captureClientTrace } from './client-trace';
-import { isV006DualRelease } from '../features/ads/ad-platform';
+import { isClientDualRelease } from '../features/ads/ad-platform';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
   ?? (import.meta.env.VITE_APP_KEY && import.meta.env.VITE_APP_KEY !== 'main' ? `http://localhost:3000/api/${import.meta.env.VITE_APP_KEY}/v1` : 'http://localhost:3000/api/v1');
@@ -15,7 +15,7 @@ const enableMockFallback = import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
 const debugEnabled = debugPanelActive;
 
 function shouldTraceRequest(path: string) {
-  return isV006DualRelease() && (debugEnabled() || /^\/(?:auth|app-entry-ad-sessions|ad-events|analytics|episodes|exit-retention|episode-interstitial)/.test(path));
+  return isClientDualRelease() && (debugEnabled() || /^\/(?:auth|app-entry-ad-sessions|ad-events|analytics|episodes|exit-retention|episode-interstitial)/.test(path));
 }
 
 function shouldCaptureDebugRequest(path: string) {

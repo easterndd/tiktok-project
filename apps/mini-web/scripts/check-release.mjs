@@ -2,11 +2,14 @@ import { access, readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { v006Placements, validateV006Placements } from './v006-placements.mjs';
+import { v007Placements, validateV007Placements } from './v007-placements.mjs';
 
 const root = join(process.cwd(), 'dist');
 const appKey = basename(process.cwd());
 validateV006Placements();
+validateV007Placements(v006Placements);
 const v006Placement = v006Placements[appKey];
+const v007Placement = v007Placements[appKey];
 const envFile = existsSync('.env.production') ? '.env.production' : '.env';
 if (existsSync(envFile) && typeof process.loadEnvFile === 'function') process.loadEnvFile(envFile);
 const failures = [];
@@ -65,6 +68,20 @@ if (v006Placement) {
     if (otherApp === appKey) continue;
     for (const placementId of [...otherPlacement.rewarded, ...otherPlacement.interstitial]) {
       if (builtSources.includes(placementId)) failures.push('built Mini output contains another app placement ' + placementId);
+    }
+  }
+}
+if (v007Placement) {
+  if (config.appId !== v007Placement.appId) failures.push('Mini App ID does not match the v0.0.7 placement manifest');
+  const releaseId = process.env.VITE_MINI_RELEASE_ID ?? '';
+  if (!releaseId.startsWith(appKey + '-v007-dual-') || !builtSources.includes(releaseId)) failures.push('built Mini output does not contain the expected v0.0.7 release ID');
+  for (const placementId of [...v007Placement.rewarded, ...v007Placement.interstitial]) {
+    if (!builtSources.includes(placementId)) failures.push(`built Mini output is missing its configured placement ${placementId}`);
+  }
+  for (const [otherApp, otherPlacement] of Object.entries({ ...v006Placements, ...v007Placements })) {
+    if (otherApp === appKey) continue;
+    for (const placementId of [...otherPlacement.rewarded, ...otherPlacement.interstitial]) {
+      if (builtSources.includes(placementId)) failures.push(`built Mini output contains another app placement ${placementId}`);
     }
   }
 }

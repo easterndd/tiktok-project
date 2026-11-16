@@ -8,7 +8,7 @@ globalThis.sessionStorage = { getItem: (key) => values.get(key) ?? null, setItem
 const hooks = registerHooks({
   resolve(specifier, context, next) {
     if (context.parentURL?.endsWith('/lib/debug-panel.ts') && specifier === '../features/ads/ad-platform') {
-      return { url: 'data:text/javascript,export const isV006Release = () => true; export const isV006DualRelease = () => globalThis.__debugTestDual;', shortCircuit: true };
+      return { url: 'data:text/javascript,export const isEnhancedAdRelease = () => true; export const isClientDualRelease = () => globalThis.__debugTestDual;', shortCircuit: true };
     }
     return next(specifier, context);
   }

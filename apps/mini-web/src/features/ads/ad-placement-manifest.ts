@@ -1,5 +1,5 @@
 import { appKey } from '../../lib/app-brand';
-import { getAdPlatform, isV006Release } from './ad-platform';
+import { getAdPlatform, isEnhancedAdRelease } from './ad-platform';
 
 export type AdPlacementType = 'REWARDED' | 'INTERSTITIAL';
 
@@ -11,7 +11,7 @@ function parseIds(value: unknown) {
 }
 
 export function getPublicAdPlacementIds(type: AdPlacementType) {
-  if (isV006Release()) {
+  if (isEnhancedAdRelease()) {
     return parseIds(type === 'REWARDED'
       ? import.meta.env.VITE_REWARDED_AD_UNIT_IDS
       : import.meta.env.VITE_INTERSTITIAL_AD_UNIT_IDS);
@@ -25,9 +25,9 @@ export function getPublicAdPlacementIds(type: AdPlacementType) {
 
 export function restrictToPublicManifest(type: AdPlacementType, serverAllowedIds: string[]) {
   const publicIds = getPublicAdPlacementIds(type);
-  if (!publicIds.length) return isV006Release() ? [] : [...new Set(serverAllowedIds)];
+  if (!publicIds.length) return isEnhancedAdRelease() ? [] : [...new Set(serverAllowedIds)];
   const allowed = serverAllowedIds.filter((id) => publicIds.includes(id));
-  return isV006Release() && getAdPlatform() !== 'android' ? allowed.filter((id) => id === publicIds[0]) : allowed;
+  return isEnhancedAdRelease() && getAdPlatform() !== 'android' ? allowed.filter((id) => id === publicIds[0]) : allowed;
 }
 
 export function validatePublicManifestIds(value: unknown) {

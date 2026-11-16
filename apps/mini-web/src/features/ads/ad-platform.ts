@@ -41,8 +41,20 @@ export function isV006DualRelease(releaseId = releaseIdFromEnv()) {
   return /(?:^|-)v006-dual(?:-|$)/i.test(releaseId);
 }
 
+export function isV007DualRelease(releaseId = releaseIdFromEnv()) {
+  return /(?:^|-)v007-dual(?:-|$)/i.test(releaseId);
+}
+
+export function isClientDualRelease(releaseId = releaseIdFromEnv()) {
+  return isV006DualRelease(releaseId) || isV007DualRelease(releaseId);
+}
+
+export function isEnhancedAdRelease(releaseId = releaseIdFromEnv()) {
+  return isV006Release(releaseId) || isV007DualRelease(releaseId);
+}
+
 export function isLaunchAttributionRelease(releaseId = releaseIdFromEnv()) {
-  return isV006DualRelease(releaseId) || /(?:^|-)attr1(?:-|$)/i.test(releaseId);
+  return isClientDualRelease(releaseId) || /(?:^|-)attr1(?:-|$)/i.test(releaseId);
 }
 
 export function getDefaultAdLoadMode(_platform = getAdPlatform(), _releaseId = releaseIdFromEnv()): AdLoadMode {

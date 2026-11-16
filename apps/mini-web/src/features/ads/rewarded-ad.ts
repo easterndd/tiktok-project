@@ -5,7 +5,7 @@ import { adTimeout, adErrorMessage } from './ad-timeout';
 import { adLoadCallback, adLoadDurationMs, adLoadSupported, getRewardedAd, prewarmRewardedAd, prewarmRewardedPlacements, releaseRewardedAd, waitForAdReady } from './ad-instance-cache';
 import { claimNativeAd, markRewardedAdClosed } from './ad-activity';
 import { captureSdkCallback, newAdOperationId, nextAdSequence, recordAdClose, recordAdLoad, recordAdLoadResult, recordAdShow } from '../../lib/analytics';
-import { getAdPlatform, getDefaultAdLoadMode, getMiniReleaseId, isV006Release } from './ad-platform';
+import { getAdPlatform, getDefaultAdLoadMode, getMiniReleaseId, isEnhancedAdRelease } from './ad-platform';
 import { classifyAdFailure, normalizeErrorOrigin, taggedAdFailure, type AdErrorOrigin } from './ad-error-policy';
 import { restrictToPublicManifest } from './ad-placement-manifest';
 import { selectAdPlacement } from './ad-placement-selection';
@@ -191,7 +191,7 @@ async function showOneRewardedAd(input: { adUnitId: string; placementIds: string
       timeout.shown();
       shownAt = performance.now();
       recordAdShow({ adSeq, adType: 'REWARDED', placementId: adUnitId, result: 'success', durationMs: performance.now() - showStartedAt, callback: captureSdkCallback('show.resolve'), operationId, attemptNo, adPhase: 'SHOW', strategyVariant, placementRole });
-      if (getAdPlatform() === 'android' && isV006Release() && adIndex < (input.requiredCount ?? adIndex)) {
+      if (getAdPlatform() === 'android' && isEnhancedAdRelease() && adIndex < (input.requiredCount ?? adIndex)) {
         const nextId = selectAdPlacement(placementIds[0], placementIds, adIndex + 1, 'android', true);
         if (nextId !== adUnitId) prewarmRewardedAd(nextId, 1, adLoadMode);
       }
@@ -240,7 +240,7 @@ export async function unlockEpisodeByRewardedAd(episodeId: string, options: Rewa
   if (!allowedPlacementIds.includes(session.placementId)) throw new Error('AD_PLACEMENT_CONFIGURATION_MISMATCH');
   const adLoadMode = session.adLoadMode ?? getDefaultAdLoadMode();
   const strategyVariant = session.strategyVariant ?? 'CONTROL';
-  const canTryBackup = isV006Release(releaseId) && getAdPlatform() === 'android' && allowedPlacementIds.length > 1;
+  const canTryBackup = isEnhancedAdRelease(releaseId) && getAdPlatform() === 'android' && allowedPlacementIds.length > 1;
   let adIndex = (session.completedCount ?? 0) + 1;
   prewarmRewardedPlacements(allowedPlacementIds, adLoadMode);
 
@@ -249,7 +249,7 @@ export async function unlockEpisodeByRewardedAd(episodeId: string, options: Rewa
   while (shouldContinue) {
     let eventId = clientEventId();
     let closedAt: number;
-    const selectedId = selectAdPlacement(session.placementId, allowedPlacementIds, adIndex, getAdPlatform(), isV006Release(releaseId));
+    const selectedId = selectAdPlacement(session.placementId, allowedPlacementIds, adIndex, getAdPlatform(), isEnhancedAdRelease(releaseId));
     try {
       closedAt = await showOneRewardedAd({ adUnitId: selectedId, placementIds: allowedPlacementIds, requiredCount: session.requiredCount, adLoadMode, strategyVariant, episodeId, sessionId: session.sessionId, adIndex, rewardEventId: eventId, scope: options.purpose ?? 'EPISODE_UNLOCK', previousClosedAt });
     } catch (error) {

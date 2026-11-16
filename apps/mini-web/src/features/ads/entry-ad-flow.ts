@@ -1,5 +1,5 @@
 import type { AppEntryAdSession } from './app-entry-ad';
-import { getAdPlatform, isV006Release } from './ad-platform';
+import { getAdPlatform, isEnhancedAdRelease } from './ad-platform';
 import { selectAdPlacement } from './ad-placement-selection';
 
 type Playback = { clientEventId: string; isEnded: boolean; placementId?: string; adType?: 'REWARDED' | 'INTERSTITIAL' };
@@ -84,7 +84,7 @@ async function runEntryAdFlowInternal(session: AppEntryAdSession, actions: Entry
       const adIndex = completed + 1;
       playback = await actions.show({
         mode,
-        placementId: selectAdPlacement(placementId, placementIds, adIndex, getAdPlatform(), isV006Release()),
+        placementId: selectAdPlacement(placementId, placementIds, adIndex, getAdPlatform(), isEnhancedAdRelease()),
         placementIds,
         adLoadMode,
         strategyVariant,

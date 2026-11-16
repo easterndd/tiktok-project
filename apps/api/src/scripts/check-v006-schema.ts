@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { parseArgs } from 'node:util';
 import { configuredMiniAppKeys, miniAppEnvironment, miniAppKeys, type MiniAppKey } from '../config/mini-apps';
 import { loadEnv } from '../config/env';
-import { supportsV006DualApp } from '../modules/ads/ad-placement-policy';
+import { supportsClientDualApp } from '../modules/ads/ad-placement-policy';
 
 export const requiredV006Migrations = [
   '20261106090000_client_analytics_event',
@@ -151,7 +151,7 @@ async function main() {
     if (!appEnv) throw new Error(`Missing database configuration for ${key}.`);
     const expectedSchema = new URL(appEnv.DATABASE_URL).searchParams.get('schema') ?? 'public';
     try {
-      const issues = validateV006Schema(await inspectDatabase(appEnv.DATABASE_URL), expectedSchema, supportsV006DualApp(key) && expected.includes(key));
+      const issues = validateV006Schema(await inspectDatabase(appEnv.DATABASE_URL), expectedSchema, supportsClientDualApp(key) && expected.includes(key));
       if (issues.length) {
         failed = true;
         console.error(`${key}: FAIL (${issues.join('; ')})`);

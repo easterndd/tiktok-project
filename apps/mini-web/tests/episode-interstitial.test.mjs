@@ -12,7 +12,7 @@ const hooks = registerHooks({
     }
     if (context.parentURL?.includes('/features/ads/')) {
       if (specifier === '../../lib/client-trace') return { url: 'data:text/javascript,export const captureClientTrace = () => {};', shortCircuit: true };
-      if (specifier === './ad-platform') return { url: 'data:text/javascript,export const getAdPlatform = () => "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const isV006Release = () => false; export const isV006DualRelease = () => false; export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;', shortCircuit: true };
+      if (specifier === './ad-platform') return { url: 'data:text/javascript,export const getAdPlatform = () => "unknown"; export const getDefaultAdLoadMode = () => "EXPLICIT_LOAD"; export const isEnhancedAdRelease = () => false; export const isClientDualRelease = () => false; export const isMiniPageVisible = () => true; export const waitForMiniForeground = async () => true;', shortCircuit: true };
       if (specifier.startsWith('./') && !/\.(?:ts|tsx|js)$/.test(specifier)) return next(`${specifier}.ts`, context);
     }
     return next(specifier, context);

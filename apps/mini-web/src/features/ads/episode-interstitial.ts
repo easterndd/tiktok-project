@@ -3,7 +3,7 @@ import { claimNativeAd, nativeAdActive, rewardedEndedRecently } from './ad-activ
 import { adErrorMessage } from './ad-timeout';
 import { reportDiagnostic, reportPerformance } from '../../lib/diagnostics';
 import { captureSdkCallback, newAdOperationId, nextAdSequence, recordAdClose, recordAdLoad, recordAdLoadResult, recordAdShow } from '../../lib/analytics';
-import { getAdPlatform, getDefaultAdLoadMode, isMiniPageVisible, isV006Release, type AdLoadMode } from './ad-platform';
+import { getAdPlatform, getDefaultAdLoadMode, isEnhancedAdRelease, isMiniPageVisible, type AdLoadMode } from './ad-platform';
 import { classifyAdFailure, normalizeErrorOrigin, taggedAdFailure, type AdErrorOrigin } from './ad-error-policy';
 import { selectAdPlacement } from './ad-placement-selection';
 
@@ -135,7 +135,7 @@ export async function showEpisodeTransitionInterstitial(placementId: string | nu
 
 async function showInterstitial(placementId: string): Promise<number | undefined> {
   prewarmInterstitialPlacements(activePlacementPolicy.placementIds.length ? activePlacementPolicy.placementIds : [placementId], activePlacementPolicy.adLoadMode);
-  const selectedId = selectAdPlacement(placementId, activePlacementPolicy.placementIds, shownCount + 1, getAdPlatform(), isV006Release());
+  const selectedId = selectAdPlacement(placementId, activePlacementPolicy.placementIds, shownCount + 1, getAdPlatform(), isEnhancedAdRelease());
   try {
     return await showInterstitialOnce(selectedId);
   } catch (error) {
@@ -223,7 +223,7 @@ async function showInterstitialOnce(placementId: string, attemptNo = 1): Promise
         recordAdShow({ adSeq, adType: 'INTERSTITIAL', placementId, result: 'success', durationMs: performance.now() - showStartedAt, callback: captureSdkCallback('show.resolve'), operationId, attemptNo, adPhase: 'SHOW', strategyVariant: activePlacementPolicy.strategyVariant, placementRole });
         reportPerformance('EPISODE_INTERSTITIAL_SHOW_ACCEPTED', '/native-ads/interstitial', performance.now() - showStartedAt);
         shownCount += 1;
-        if (getAdPlatform() === 'android' && isV006Release() && shownCount < activePolicy.maxPerSession) {
+        if (getAdPlatform() === 'android' && isEnhancedAdRelease() && shownCount < activePolicy.maxPerSession) {
           const nextId = selectAdPlacement(activePlacementPolicy.placementIds[0] ?? placementId, activePlacementPolicy.placementIds, shownCount + 1, 'android', true);
           if (nextId !== placementId) prewarmInterstitialAd(nextId, 1, activePlacementPolicy.adLoadMode);
         }

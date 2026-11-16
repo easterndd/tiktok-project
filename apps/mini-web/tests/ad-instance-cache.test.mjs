@@ -8,7 +8,7 @@ const hooks = registerHooks({
       return { url: 'data:text/javascript,export const captureClientTrace = () => {};', shortCircuit: true };
     }
     if (context.parentURL?.endsWith('/features/ads/ad-instance-cache.ts') && specifier === './ad-platform') {
-      return { url: 'data:text/javascript,export const getAdPlatform = () => globalThis.__cacheTestPlatform ?? "unknown"; export const isV006Release = () => globalThis.__cacheTestV006 ?? false; export const isV006DualRelease = () => globalThis.__cacheTestDual ?? false;', shortCircuit: true };
+      return { url: 'data:text/javascript,export const getAdPlatform = () => globalThis.__cacheTestPlatform ?? "unknown"; export const isEnhancedAdRelease = () => globalThis.__cacheTestV006 ?? false; export const isClientDualRelease = () => globalThis.__cacheTestDual ?? false;', shortCircuit: true };
     }
     return next(specifier, context);
   }

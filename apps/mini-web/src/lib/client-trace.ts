@@ -1,6 +1,6 @@
 import { appKey, storagePrefix } from './app-brand';
 import { getSessionToken } from './storage';
-import { isV006DualRelease, getAdPlatform } from '../features/ads/ad-platform';
+import { isClientDualRelease, getAdPlatform } from '../features/ads/ad-platform';
 import { boundedDebugValue, debugHeaders, debugRequestTarget, debugResponseDetails } from './debug-network';
 import { debugRecordCaptureEnabled } from './debug-panel';
 
@@ -143,7 +143,7 @@ function schedule(delayMs: number) {
 }
 
 export function getClientTraceStatus() {
-  return { enabled: isV006DualRelease(), localOnly,
+  return { enabled: isClientDualRelease(), localOnly,
     traceId: traceId(), pending: pending.length, dropped };
 }
 
@@ -158,7 +158,7 @@ export function setClientTraceDebugRecorder(recorder: (data: Record<string, unkn
 export function captureClientTrace(kind: TraceKind, phase: string, value: unknown, context: {
   operationId?: string; sessionId?: string; requestId?: string; placementId?: string;
 } = {}) {
-  if (!isV006DualRelease()) return;
+  if (!isClientDualRelease()) return;
   const safe = snapshot(value);
   pending.push({
     traceId: traceId(), releaseId, platform: getAdPlatform(), startedAt,

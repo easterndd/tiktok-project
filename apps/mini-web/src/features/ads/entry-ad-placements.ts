@@ -1,5 +1,5 @@
 import { storagePrefix } from '../../lib/app-brand';
-import { getMiniReleaseId, isV006Release } from './ad-platform';
+import { getMiniReleaseId, isEnhancedAdRelease } from './ad-platform';
 
 export type EntryAdPlacementSelection = {
   placementIds: string[];
@@ -19,7 +19,7 @@ export function parseEntryAdPlacementIds(value: unknown) {
 }
 
 export function selectLocalEntryAdPlacementIds(value: unknown, releaseId: string) {
-  if (isV006Release(releaseId)) return [];
+  if (isEnhancedAdRelease(releaseId)) return [];
   return parseEntryAdPlacementIds(value);
 }
 

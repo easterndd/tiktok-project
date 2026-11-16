@@ -38,7 +38,7 @@ import { assertDisplayMetadataOwner, carryBaseTextChanges, displayMetadataInput,
 import { invalidateReviewReleaseStatusCache, listEntryAdIpExemptions, listSharedIpVisits, listSharedIps, listViewerIdsForIp, normalizeIp, recentViewerIps, removeEntryAdIpExemption, setEntryAdIpExemption, setEntryAdIpExemptions } from '../../services/shared-ip.service';
 import { campaignEntryApps, normalizeCampaignEntryBase } from '../../lib/campaign-entry';
 import { TikTokShortDramaApiService } from '../../services/tiktok-short-drama-api.service';
-import { assertV006PlacementPair, invalidateAdPlacementPolicyCache, isV006Release, supportsV006DualApp } from '../ads/ad-placement-policy';
+import { assertV006PlacementPair, invalidateAdPlacementPolicyCache, isClientDualRelease, isEnhancedAdRelease, supportsClientDualApp } from '../ads/ad-placement-policy';
 import { readV006AdDiagnostics, readV006PlayerDiagnostics } from './v006-diagnostics';
 import { readClientTraceRecords, readClientTraceSessions } from './client-traces';
 import { assertRejectedEpisodeReplacement, readRejectedEpisodeReplacements } from '../../services/rejected-episode-replacement.service';
@@ -252,8 +252,8 @@ const adPlacementPairInput = z.object({
   androidLoadMode: z.enum(['DIRECT_SHOW', 'EXPLICIT_LOAD']).default('EXPLICIT_LOAD'),
   iosExperimentPercent: z.number().int().min(0).max(100).default(0)
 }).refine((value) => value.backupPlacementId !== value.primaryPlacementId, { path: ['backupPlacementId'], message: '主广告位和备用广告位不能相同。' })
-  .refine((value) => value.releaseId === '*' || isV006Release(value.releaseId), { path: ['releaseId'], message: '广告位配对只能用于 v0.0.6 release 或通用备用模板。' })
-  .refine((value) => !/(?:^|-)v006-dual(?:-|$)/i.test(value.releaseId), { path: ['releaseId'], message: 'v0.0.6 双广告位新包由前端清单选择广告位，不使用后台配对开关。' })
+  .refine((value) => value.releaseId === '*' || isEnhancedAdRelease(value.releaseId), { path: ['releaseId'], message: '广告位配对只能用于 v0.0.6/v0.0.7 release 或通用备用模板。' })
+  .refine((value) => !isClientDualRelease(value.releaseId), { path: ['releaseId'], message: '双广告位新包由前端清单选择广告位，不使用后台配对开关。' })
   .refine((value) => value.iosExperimentPercent === 0 || value.iosLoadMode === 'DIRECT_SHOW', { path: ['iosExperimentPercent'], message: 'iOS 对照实验需要启用 DIRECT_SHOW 实验组。' });
 const codeReleaseParams = z.object({ releaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/) });
 const codeReleaseInput = z.object({
@@ -2226,7 +2226,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   if (clientAnalyticsMiniApps.has(app.config.MINI_APP_KEY)) {
     app.get('/admin/analytics/ad-diagnostics', { preHandler: requirePermission('analytics.read') }, (request) => readV006AdDiagnostics(app, request.query));
     app.get('/admin/analytics/player-diagnostics', { preHandler: requirePermission('analytics.read') }, (request) => readV006PlayerDiagnostics(app, request.query));
-    if (supportsV006DualApp(app.config.MINI_APP_KEY)) {
+    if (supportsClientDualApp(app.config.MINI_APP_KEY)) {
       app.get('/admin/client-traces', { preHandler: requirePermission('analytics.read') }, (request) => readClientTraceSessions(app, request.query));
       app.get('/admin/client-traces/:traceId/records', { preHandler: requirePermission('analytics.read') }, (request) => readClientTraceRecords(app, request.params, request.query));
     }

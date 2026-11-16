@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { requireUser } from '../../plugins/auth';
-import { isV006DualRelease, supportsV006DualApp } from '../ads/ad-placement-policy';
+import { isClientDualRelease, supportsClientDualApp } from '../ads/ad-placement-policy';
 
 export const diagnosticInput = z.object({
   kind: z.enum(['STARTUP', 'API', 'SCRIPT', 'AD', 'PLAYBACK']),
@@ -116,7 +116,8 @@ export async function registerDiagnosticRoutes(app: FastifyInstance) {
     config: { rateLimit: { max: 60, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: (request) => request.user.sub } }
   }, async (request, reply) => {
     const body = traceBatchInput.parse(request.body);
-    if (!supportsV006DualApp(app.config.MINI_APP_KEY) || !isV006DualRelease(body.releaseId) || !body.releaseId.startsWith(`${app.config.MINI_APP_KEY}-v006-dual-`)) {
+    if (!supportsClientDualApp(app.config.MINI_APP_KEY) || !isClientDualRelease(body.releaseId)
+      || !new RegExp(`^${app.config.MINI_APP_KEY}-v00[67]-dual-`).test(body.releaseId)) {
       return reply.code(400).send({ error: { code: 'TRACE_RELEASE_MISMATCH', message: 'Trace release does not match this mini app.', requestId: request.id } });
     }
     const belongsToRequester = (session: { userId: string | null; releaseId: string } | null) =>

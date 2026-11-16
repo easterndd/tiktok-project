@@ -9,7 +9,7 @@ import { createShownAcknowledgement } from './shown-acknowledgement';
 import { adLoadCallback, adLoadDurationMs, adLoadSupported, getInterstitialAd, getRewardedAd, prewarmInterstitialAd, prewarmInterstitialPlacements, prewarmRewardedAd, prewarmRewardedPlacements, primeEntryRewardedPool, readyRewardedPlacement, refillEntryRewardedPool, releaseInterstitialAd, releaseRewardedAd, returnRewardedAd, waitForAdReady } from './ad-instance-cache';
 import { claimNativeAd, markRewardedAdClosed } from './ad-activity';
 import { captureSdkCallback, newAdOperationId, nextAdSequence, recordAdClose, recordAdConfig, recordAdLoad, recordAdLoadResult, recordAdShow, recordEntryAdDecision } from '../../lib/analytics';
-import { getAdPlatform, getDefaultAdLoadMode, getMiniReleaseId, isLaunchAttributionRelease, isV006DualRelease, isV006Release } from './ad-platform';
+import { getAdPlatform, getDefaultAdLoadMode, getMiniReleaseId, isClientDualRelease, isEnhancedAdRelease, isLaunchAttributionRelease } from './ad-platform';
 import { classifyAdFailure, normalizeErrorOrigin, taggedAdFailure, type AdErrorOrigin } from './ad-error-policy';
 import { restrictToPublicManifest, type AdPlacementType } from './ad-placement-manifest';
 import { selectAdPlacement } from './ad-placement-selection';
@@ -98,9 +98,9 @@ async function startAppEntryAdSessionInternal(launchRef?: string): Promise<AppEn
       ...(isLaunchAttributionRelease() ? { launchRef: launchRef ?? getMiniLaunchRef() } : { adId: getMiniLaunchAdId() }),
       platform: getAdPlatform(),
       ...(isLaunchAttributionRelease() ? { launchAttributionVersion: 1 } : {}),
-      ...(isV006DualRelease() ? { entryFlowVersion: 2 } : {})
+      ...(isClientDualRelease() ? { entryFlowVersion: 2 } : {})
     });
-    if (isV006DualRelease() && import.meta.env?.VITE_ENTRY_COMPAT_MODE === 'true'
+    if (isClientDualRelease() && import.meta.env?.VITE_ENTRY_COMPAT_MODE === 'true'
       && session.required && session.mode === 'REWARDED_GATED') {
       session.entryFlowVersion = 2;
       session.legacyObservationProtocol = true;
@@ -319,7 +319,7 @@ async function showAppEntryAdInternal(input: AppEntryAdShowInput): Promise<{ cli
       recordAdShow({ adSeq, adType, placementId, result: 'success', durationMs: performance.now() - showStartedAt, callback: captureSdkCallback('show.resolve', null, { operationId, sessionId, placementId }), operationId, attemptNo, adPhase: 'SHOW', strategyVariant, placementRole });
       if (input.fastHandoff && mode === 'REWARDED_GATED') {
         refillEntryRewardedPool(placementIds, loadMode);
-      } else if (getAdPlatform() === 'android' && isV006Release() && adIndex < (requiredCount ?? adIndex)) {
+      } else if (getAdPlatform() === 'android' && isEnhancedAdRelease() && adIndex < (requiredCount ?? adIndex)) {
         const nextId = selectAdPlacement(placementIds[0], placementIds, adIndex + 1, 'android', true);
         if (nextId !== placementId) {
           if (mode === 'INTERSTITIAL') prewarmInterstitialAd(nextId, 1, loadMode);
@@ -362,7 +362,7 @@ async function showAppEntryAdWithFallback(input: AppEntryAdShowInput) {
 }
 
 export function showAppEntryAd(input: AppEntryAdShowInput) {
-  const preferred = selectAdPlacement(input.placementIds?.[0] ?? input.placementId, input.placementIds ?? [input.placementId], input.adIndex, getAdPlatform(), isV006Release(getMiniReleaseId()));
+  const preferred = selectAdPlacement(input.placementIds?.[0] ?? input.placementId, input.placementIds ?? [input.placementId], input.adIndex, getAdPlatform(), isEnhancedAdRelease(getMiniReleaseId()));
   const placementId = input.fastHandoff && input.mode === 'REWARDED_GATED' && getAdPlatform() === 'android'
     ? readyRewardedPlacement(input.placementIds ?? [preferred], preferred, input.adLoadMode) : preferred;
   const selected = { ...input, placementId };

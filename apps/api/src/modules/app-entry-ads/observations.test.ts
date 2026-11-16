@@ -4,13 +4,17 @@ import Fastify from 'fastify';
 import jwt from '@fastify/jwt';
 import { registerAppEntryAdRoutes } from './routes';
 
-it('stores v2 observations idempotently and advances only consecutive completed ads', async () => {
+for (const [appKey, releaseId] of [
+  ['heartreel', 'heartreel-v006-dual-test'],
+  ['zenclip', 'zenclip-v007-dual-test']
+] as const) {
+it(`stores ${appKey} v2 observations idempotently and advances only consecutive completed ads`, async () => {
   const app = Fastify();
-  app.decorate('config', { MINI_APP_KEY: 'heartreel' } as never);
+  app.decorate('config', { MINI_APP_KEY: appKey } as never);
   await app.register(jwt, { secret: 'test-secret-at-least-32-characters-long' });
   const stored: Array<{ clientEventId: string; adIndex: number; placementId: string; eventType: string }> = [];
   const session = {
-    id: 'entry-test', userId: 'viewer-test', releaseId: 'heartreel-v006-dual-test', mode: 'REWARDED_GATED',
+    id: 'entry-test', userId: 'viewer-test', releaseId, mode: 'REWARDED_GATED',
     placementId: 'primary', allowedPlacementIds: ['primary', 'backup'], countMode: 'COMPLETED', requiredCount: 2,
     completedCount: 0, clientReportedShownCount: 0, clientReportedCompletedCount: 0, status: 'ACTIVE'
   };
@@ -38,9 +42,9 @@ it('stores v2 observations idempotently and advances only consecutive completed 
       findMany: async () => stored
     }
   } as never);
-  await app.register(registerAppEntryAdRoutes, { prefix: '/api/heartreel/v1' });
-  const token = app.jwt.sign({ sub: 'viewer-test', kind: 'user', appKey: 'heartreel' });
-  const path = '/api/heartreel/v1/app-entry-ad-sessions/entry-test/observations';
+  await app.register(registerAppEntryAdRoutes, { prefix: `/api/${appKey}/v1` });
+  const token = app.jwt.sign({ sub: 'viewer-test', kind: 'user', appKey });
+  const path = `/api/${appKey}/v1/app-entry-ad-sessions/entry-test/observations`;
   const event1 = '11111111-1111-4111-8111-111111111111';
   const event2 = '22222222-2222-4222-8222-222222222222';
   const observation = (eventId: string, adIndex: number, placementId: string, eventType: string) => ({
@@ -66,3 +70,4 @@ it('stores v2 observations idempotently and advances only consecutive completed 
   assert.equal(stored.length, 4);
   await app.close();
 });
+}
