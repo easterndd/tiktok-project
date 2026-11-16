@@ -22,6 +22,7 @@ import './styles.css';
 
 const miniAppNames = { main: 'CobaltClip', quartzplay: 'QuartzPlay', taletv: 'TaleTV', cinereels: 'CineReels', talereels: 'TaleReels', storyland: 'StoryLand', dramacloud: 'DramaCloud', dailyreel: 'DailyReel', dramaone: 'DramaOne', dramaup: 'DramaUp', dramavault: 'DramaVault', talehub: 'TaleHub', talebox: 'TaleBox', storyworld: 'StoryWorld', storyhub: 'StoryHub', dramaroom: 'DramaRoom', dramazone: 'DramaZone', taleflick: 'TaleFlick', dramashort: 'DramaShort', storyshort: 'StoryShort', storyflicks: 'StoryFlicks', dramaflicks: 'DramaFlicks', crownrush: 'CrownRush', sugarreel: 'SugarReel', crimsonshorts: 'CrimsonShorts', sweetreel: 'SweetReel', dramablaze: 'DramaBlaze', heartreel: 'HeartReel', dramahit: 'DramaHit', crownreel: 'CrownReel', luxereel: 'LuxeReel', elitedrama: 'EliteDrama', lucidreel: 'LucidReel', astraclip: 'AstraClip', lumoreel: 'LumoReel', orbitplay: 'OrbitPlay', zenclip: 'ZenClip', auraclip: 'AuraClip', fluxplay: 'FluxPlay', driftreel: 'DriftReel', novaclip: 'NovaClip', lumishort: 'LumiShort', sonicreel: 'SonicReel', harborplay: 'HarborPlay', dazzleshort: 'DazzleShort', fableclip: 'FableClip', emberreel: 'EmberReel', bloomreel: 'BloomReel', quillshort: 'QuillShort', amberplay: 'AmberPlay', nimbusclip: 'NimbusClip', runereel: 'RuneReel', riftsaga: 'RiftSaga', haloflicks: 'HaloFlicks', threadtale: 'ThreadTale', fablevibe: 'FableVibe', wispreel: 'WispReel', yalareels: 'YalaReels' } as const;
 const v006DiagnosticApps = new Set<MiniApp>(['dramaflicks', 'heartreel', 'sweetreel', 'luxereel']);
+const entryAdTestApps = new Set<MiniApp>(['dramaflicks', 'heartreel', 'sweetreel', 'luxereel', 'zenclip', 'storyworld', 'dailyreel', 'elitedrama', 'sonicreel', 'orbitplay']);
 type MiniApp = keyof typeof miniAppNames;
 const miniAppOrganizations = [
   { id: 'quickreels', label: 'CobaltClip 组织', apps: ['main', 'quartzplay'] },
@@ -1488,7 +1489,7 @@ function AdminApp() {
       </Panel>}
       {tab === 'audience' && !audience && !resourceStatus.audience?.error && <p className="load-placeholder">正在加载观众数据...</p>}
       {tab === 'links' && <MiniEntryLinks api={api} miniAppKey={activeApp} miniAppName={miniAppNames[activeApp]} />}
-      {tab === 'ads' && currentAdmin?.role === 'OWNER' && <EntryAdTestAccounts api={api} miniApps={organizationApps} currentMiniApp={activeApp} />}
+      {tab === 'ads' && currentAdmin?.role === 'OWNER' && entryAdTestApps.has(activeApp) && <EntryAdTestAccounts api={api} miniApps={organizationApps.filter((app) => entryAdTestApps.has(app.key))} currentMiniApp={activeApp} />}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <ViewerAdControls api={api} canEdit miniApps={organizationApps} currentMiniApp={activeApp} />}
       {tab === 'ads' && currentAdmin?.role === 'OWNER' && <SharedIpControls api={api} canEdit miniApps={Object.entries(miniAppNames).map(([key, name]) => ({ key, name }))} />}
       {tab === 'ads' && v006DiagnosticApps.has(activeApp) && <V006AdDiagnostics api={api} releaseId={entryAdReleaseId} />}
