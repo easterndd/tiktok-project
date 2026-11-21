@@ -346,7 +346,6 @@ export async function flushAnalytics() {
     preflightRequired: debugEndpoint.origin !== window.location.origin,
     requestHeaders: boundedDebugValue(debugHeaders(headers)), requestBody: boundedDebugValue(payload)
   } : {};
-  captureClientTrace('HTTP_REQUEST', 'POST /analytics/events', { ...requestSnapshot, eventCount: batch.length });
   const controller = new AbortController();
   let timedOut = false;
   const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 5_000);
@@ -365,11 +364,11 @@ export async function flushAnalytics() {
       const rawBody = await response.text().catch(() => '');
       try { responseBody = JSON.parse(rawBody); } catch { responseBody = rawBody; }
     }
-    captureClientTrace('HTTP_RESPONSE', 'POST /analytics/events', {
-      statusCode: response.status, responseBody, responseHeaders: Object.fromEntries(response.headers.entries()), durationMs: Date.now() - startedAt
-    }, { requestId: response.headers.get('x-request-id') ?? undefined });
-    tracedResponse = true;
     if (!response.ok) {
+      captureClientTrace('HTTP_RESPONSE', 'POST /analytics/events', {
+        statusCode: response.status, responseBody, responseHeaders: Object.fromEntries(response.headers.entries()), durationMs: Date.now() - startedAt
+      }, { requestId: response.headers.get('x-request-id') ?? undefined });
+      tracedResponse = true;
       if (response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500) {
         const retryAfter = Number(response.headers.get('Retry-After'));
         if (Number.isFinite(retryAfter) && retryAfter > 0) retryDelayMs = Math.min(60_000, retryAfter * 1_000);
