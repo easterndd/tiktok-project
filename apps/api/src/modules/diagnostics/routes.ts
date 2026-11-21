@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
+import { createHash } from 'node:crypto';
 import { requireUser } from '../../plugins/auth';
 import { isClientDualRelease, supportsClientDualApp } from '../ads/ad-placement-policy';
 
@@ -109,6 +110,17 @@ function shouldPersistDiagnostic(app: FastifyInstance, body: z.infer<typeof diag
   return true;
 }
 
+// Default to retaining all records until sampling is explicitly configured.
+export function traceSamplingDecision(traceId: string, percent: number): boolean {
+  const rate = Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 100;
+  return createHash('sha256').update(traceId).digest().readUInt32BE(0) / 0x100000000 < rate / 100;
+}
+
+export function retainTraceRecord(record: { kind: string; phase: string; payload: unknown }, sampled: boolean): boolean {
+  return sampled || record.kind === 'RUNTIME_ERROR' || /error|fail|reject|timeout/i.test(record.phase)
+    || Boolean(traceErrorCodes(record.payload).errorCode || traceErrorCodes(record.payload).subErrorCode);
+}
+
 export async function registerDiagnosticRoutes(app: FastifyInstance) {
   app.post('/client-traces/batches', {
     preHandler: requireUser,
@@ -139,7 +151,11 @@ export async function registerDiagnosticRoutes(app: FastifyInstance) {
       }
     }
     if (existing) await app.prisma.clientTraceSession.update({ where: { id: body.traceId }, data: { lastEventAt: new Date() } });
-    const saved = await app.prisma.clientTraceRecord.createMany({ data: body.records.map((item) => {
+    const configuredRate = process.env.CLIENT_TRACE_SAMPLE_PERCENT;
+    const samplePercent = configuredRate === undefined || configuredRate.trim() === '' ? 100 : Number(configuredRate);
+    const sampled = traceSamplingDecision(body.traceId, samplePercent);
+    const retained = body.records.filter((item) => retainTraceRecord(item, sampled));
+    const saved = retained.length ? await app.prisma.clientTraceRecord.createMany({ data: retained.map((item) => {
       const payload = sanitizeTracePayload(item.payload);
       const codes = traceErrorCodes(payload);
       return {
@@ -149,8 +165,8 @@ export async function registerDiagnosticRoutes(app: FastifyInstance) {
         ...codes,
         payload: payload === null ? Prisma.JsonNull : payload as Prisma.InputJsonValue, truncated: item.truncated
       };
-    }), skipDuplicates: true });
-    return reply.code(202).send({ accepted: saved.count, received: body.records.length });
+    }), skipDuplicates: true }) : { count: 0 };
+    return reply.code(202).send({ accepted: saved.count, received: body.records.length, sampled, sampledOut: body.records.length - retained.length });
   });
 
   // Startup failures must be reportable before an anonymous session exists.

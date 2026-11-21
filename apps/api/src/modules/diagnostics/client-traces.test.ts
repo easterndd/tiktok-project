@@ -41,7 +41,7 @@ it('accepts authenticated dual-release callback traces, redacts secrets, and ded
         path: '/episodes?token=hidden', error_msg: 'Bearer secret-value https://example.test/path?token=hidden' } },
       { recordId: 'empty-callback', seq: 2, kind: 'SDK_CALLBACK', phase: 'show.resolve', eventAt: new Date().toISOString(), payload: null }]
   };
-  const post = (body: typeof payload, authorization = `Bearer ${token}`) => app.inject({ method: 'POST', url: path, headers: { authorization }, payload: body });
+  const post = (body: Record<string, unknown>, authorization = `Bearer ${token}`) => app.inject({ method: 'POST', url: path, headers: { authorization }, payload: body });
   const first = await post(payload);
   assert.equal(first.statusCode, 202);
   assert.equal(first.json().accepted, 2);
@@ -63,5 +63,21 @@ it('accepts authenticated dual-release callback traces, redacts secrets, and ded
   assert.equal(otherRelease.statusCode, 400);
   const unauthenticated = await app.inject({ method: 'POST', url: path, payload });
   assert.equal(unauthenticated.statusCode, 401);
+  const previousRate = process.env.CLIENT_TRACE_SAMPLE_PERCENT;
+  try {
+    process.env.CLIENT_TRACE_SAMPLE_PERCENT = '0';
+    const sampled = await post({ ...payload, records: [
+      { recordId: 'sampled-out', seq: 3, kind: 'SDK_CALLBACK', phase: 'show.resolve', eventAt: new Date().toISOString(), payload: null },
+      { recordId: 'error-retained', seq: 4, kind: 'SDK_CALLBACK', phase: 'onError', eventAt: new Date().toISOString(), payload: { error_code: 11006 } }
+    ] });
+    assert.equal(sampled.statusCode, 202);
+    assert.equal(sampled.json().accepted, 1);
+    assert.equal(sampled.json().sampledOut, 1);
+    assert.equal(records.has('trace-test:sampled-out'), false);
+    assert.equal(records.has('trace-test:error-retained'), true);
+  } finally {
+    if (previousRate === undefined) delete process.env.CLIENT_TRACE_SAMPLE_PERCENT;
+    else process.env.CLIENT_TRACE_SAMPLE_PERCENT = previousRate;
+  }
   await app.close();
 });
