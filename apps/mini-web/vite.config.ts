@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, relative, resolve } from 'node:path';
 
 const localMediaDirectory = resolve(__dirname, 'local-test-media');
@@ -48,17 +48,8 @@ function localPlaybackMedia() {
   };
 }
 
-// 登录请求的 clientVersion 上报：优先取构建时注入的 VITE_APP_VERSION，
-// 未注入时回退 package.json 版本号，保证 rc_users.last_client_version 有值
-// （此前 VITE_APP_VERSION 从未定义，版本字段一直是空的）。
-const appVersion =
-  process.env.VITE_APP_VERSION ||
-  (JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as { version?: string }).version ||
-  '0.0.0';
-
 export default defineConfig({
   plugins: [react(), localPlaybackMedia()],
-  define: { 'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion) },
   server: { port: 5173 },
   // Production source maps stay private unless a CI error-monitoring upload explicitly enables them.
   build: { sourcemap: process.env.VITE_SOURCEMAP === 'true' }
