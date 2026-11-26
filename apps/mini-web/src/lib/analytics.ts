@@ -292,6 +292,10 @@ export function recordDebugConsole(level: string, args: unknown[]) {
 
 type AdAnalyticsContext = Pick<AnalyticsEvent, 'adType' | 'operationId' | 'attemptNo' | 'adPhase' | 'errorOrigin' | 'strategyVariant' | 'placementRole'>;
 
+function isHighVolumeAdEvent(eventKey: AnalyticsEventKey) {
+  return eventKey === 'ad_load' || eventKey === 'ad_show' || eventKey === 'ad_config' || eventKey === 'ad_close';
+}
+
 export function recordAdLoadResult(input: { adSeq?: number; placementId: string; supported: boolean; durationMs: number; callback?: SdkCallbackSnapshot; loadMode?: string } & AdAnalyticsContext) {
   recordAdLoad({ ...input, result: input.supported ? 'success' : 'unsupported' });
 }
@@ -313,9 +317,19 @@ export function recordAnalyticsEvent(input: Omit<AnalyticsEvent, 'eventId' | 're
   };
   addDebugRecord('event', event as unknown as Record<string, unknown>);
   const sdkCallback = event.metadata?.sdkCallback;
-  captureClientTrace('ENTRY_STATE', event.eventKey, event, {
-    operationId: event.operationId, placementId: event.placementId, requestId: event.requestId
-  });
+  // 瘦身：成功的高频广告事件，SDK 回调 payload 对成功场景没有诊断价值（170~384B/条 × ~190 万条/天），
+  // 只保留回调名与时间；失败事件保留完整快照供诊断面板排查。
+  if (isHighVolumeAdEvent(event.eventKey) && event.result === 'success' && event.metadata?.sdkCallback) {
+    const callbackSnapshot = event.metadata.sdkCallback as SdkCallbackSnapshot;
+    event.metadata = { ...event.metadata, sdkCallback: { name: callbackSnapshot.name, capturedAt: callbackSnapshot.capturedAt, payload: undefined } };
+  }
+  // 瘦身：成功的高频广告事件不再写 ENTRY_STATE 追踪行——事件本体已持久化在 ClientAnalyticsEvent，
+  // 双份存储曾让 ClientTraceRecord 日增 ~150 万行；失败/超时/不支持仍全量追踪。
+  if (!isHighVolumeAdEvent(event.eventKey) || event.result !== 'success') {
+    captureClientTrace('ENTRY_STATE', event.eventKey, event, {
+      operationId: event.operationId, placementId: event.placementId, requestId: event.requestId
+    });
+  }
   if (sdkCallback) {
     addDebugRecord('runtime', { phase: 'SDK_CALLBACK', eventKey: event.eventKey, sdkCallback });
     if (debugEnabled()) console.debug('[TikTok Minis SDK callback]', event.eventKey, sdkCallback);

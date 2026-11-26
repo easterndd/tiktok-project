@@ -77,8 +77,10 @@ class ApiClient {
     if (options.body) headers.set('Content-Type', 'application/json');
     if (authenticate && token) headers.set('Authorization', `Bearer ${token}`);
     new Headers(options.headers).forEach((value, key) => headers.set(key, value));
-    if (shouldTraceRequest(path) && !path.includes('/client-traces/')) captureClientTrace('HTTP_REQUEST', `${method} ${path.split('?', 1)[0]}`, {
-      method, path, requestHeaders: Object.fromEntries(headers.entries()), requestBody: parsedBody
+    // 瘦身：GET/HEAD 无请求体，响应行的 phase 已含路径，不再重复记录（~80 万行/天）；
+    // 请求头含 Authorization 等敏感信息，一律不入库。POST/PUT/PATCH 保留 requestBody 便于复现问题。
+    if (shouldTraceRequest(path) && !path.includes('/client-traces/') && method !== 'GET' && method !== 'HEAD') captureClientTrace('HTTP_REQUEST', `${method} ${path.split('?', 1)[0]}`, {
+      method, path, requestBody: parsedBody
     });
     const preflightRequired = crossOrigin === true && (headers.has('authorization') || Boolean(options.body) || !['GET', 'HEAD', 'POST'].includes(method.toUpperCase()));
     const requestSnapshot = requestUrl ? {
@@ -132,9 +134,9 @@ class ApiClient {
         );
       }
       const data = response.status === 204 ? undefined as T : await response.json() as T;
+      // 瘦身：成功响应只记录状态码与耗时（~880B/行 → ~120B/行），失败路径在 catch 分支仍全量记录。
       if (shouldTraceRequest(path)) captureClientTrace('HTTP_RESPONSE', `${method} ${path.split('?', 1)[0]}`, {
-        statusCode: response.status, responseHeaders: Object.fromEntries(response.headers.entries()), responseBody: data,
-        durationMs: Date.now() - startedAt
+        statusCode: response.status, durationMs: Date.now() - startedAt
       }, { requestId: response.headers.get('x-request-id') ?? undefined });
       if (captureDebug) recordDebugRequest({
         method, path: path.split('?', 1)[0], statusCode: response.status, durationMs: Date.now() - startedAt,
